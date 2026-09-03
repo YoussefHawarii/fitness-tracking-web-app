@@ -1,0 +1,23 @@
+# Deploys only the Backend/ subfolder of this monorepo — see
+# docs/technical-decisions.md's monorepo deployment note.
+services:
+  - type: web
+    name: calorie-weight-tracking-api
+    runtime: node
+    plan: free
+    rootDir: Backend
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npm run start:prod
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: USDA_API_KEY
+        sync: false
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false

@@ -1,0 +1,11 @@
+# Deploys only the Frontend/ subfolder of this monorepo — see
+# docs/technical-decisions.md's monorepo deployment note.
+[build]
+  base = "Frontend"
+  command = "npm run build"
+  publish = "Frontend/dist"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

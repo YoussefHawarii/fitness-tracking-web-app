@@ -1,0 +1,196 @@
+// Prisma schema for the Calorie & Weight Tracking Web App
+// See /specs/001-calorie-weight-tracking/data-model.md for the logical model this maps to.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Sex {
+  MALE
+  FEMALE
+}
+
+enum ActivityLevel {
+  SEDENTARY
+  LIGHT
+}
+
+enum FoodSourceType {
+  OPEN_FOOD_FACTS
+  USDA
+  LOCAL
+}
+
+enum MealCategory {
+  BREAKFAST
+  LUNCH
+  DINNER
+  SNACKS
+}
+
+enum OtpPurpose {
+  SIGNUP_VERIFICATION
+}
+
+enum SportType {
+  FOOTBALL
+  SWIMMING
+  PADEL
+  BASKETBALL
+  GYM_WEIGHTS
+  RUNNING
+  TENNIS
+  OTHER
+}
+
+enum Units {
+  KG
+  LB
+}
+
+enum Appearance {
+  LIGHT
+  DARK
+}
+
+model User {
+  id                    String      @id @default(uuid())
+  username              String?     @unique
+  email                 String      @unique
+  emailVerified         Boolean     @default(false)
+  passwordHash          String?
+  googleSubjectId       String?     @unique
+  timezone              String
+  createdAt             DateTime    @default(now())
+
+  // Account/Settings (specs/008-sidebar-profile-account)
+  displayName           String?
+  avatarUrl             String?
+  avatarPublicId        String?
+  unitsPreference       Units       @default(KG)
+  languagePreference    String      @default("en")
+  appearancePreference  Appearance?
+
+  baseline         UserBaseline?
+  localFoodItems   LocalFoodItem[]
+  foodLogEntries   FoodLogEntry[]
+  exerciseLogs     ExerciseLogEntry[]
+  weighIns         WeighIn[]
+  refreshTokens    RefreshToken[]
+  otpCodes         OtpCode[]
+
+  @@map("users")
+}
+
+model OtpCode {
+  id            String     @id @default(uuid())
+  userId        String
+  user          User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash      String
+  purpose       OtpPurpose
+  expiresAt     DateTime
+  attemptCount  Int        @default(0)
+  lastSentAt    DateTime   @default(now())
+  createdAt     DateTime   @default(now())
+
+  @@unique([userId, purpose])
+  @@index([expiresAt])
+  @@map("otp_codes")
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+model UserBaseline {
+  userId           String        @id
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  age              Int
+  sex              Sex
+  heightCm         Decimal
+  currentWeightKg  Decimal
+  goalWeightKg     Decimal
+  activityLevel    ActivityLevel
+  bmr              Decimal
+  tdee             Decimal
+  updatedAt        DateTime      @updatedAt
+
+  @@map("user_baselines")
+}
+
+model LocalFoodItem {
+  id               String   @id @default(uuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name             String
+  caloriesPer100g  Decimal
+  proteinPer100g   Decimal?
+  carbsPer100g     Decimal?
+  fatPer100g       Decimal?
+  createdAt        DateTime @default(now())
+
+  foodLogEntries   FoodLogEntry[]
+
+  @@map("local_food_items")
+}
+
+model FoodLogEntry {
+  id                String         @id @default(uuid())
+  userId            String
+  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceType        FoodSourceType
+  sourceRef         String
+  name              String         @default("")
+  localFoodItemId   String?
+  localFoodItem     LocalFoodItem? @relation(fields: [localFoodItemId], references: [id], onDelete: SetNull)
+  grams             Decimal
+  caloriesComputed  Decimal
+  proteinComputed   Decimal?
+  carbsComputed     Decimal?
+  fatComputed       Decimal?
+  mealCategory      MealCategory
+  loggedAtUtc       DateTime
+
+  @@index([userId, loggedAtUtc])
+  @@map("food_log_entries")
+}
+
+model ExerciseLogEntry {
+  id               String    @id @default(uuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sportType        SportType
+  customSportName  String?
+  durationMinutes  Int
+  caloriesBurned   Decimal
+  loggedForDate    DateTime  @db.Date
+  createdAt        DateTime  @default(now())
+
+  @@index([userId, loggedForDate])
+  @@map("exercise_log_entries")
+}
+
+model WeighIn {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  weightKg       Decimal
+  loggedForDate  DateTime @db.Date
+
+  @@index([userId, loggedForDate])
+  @@map("weigh_ins")
+}
