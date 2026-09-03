@@ -74,7 +74,7 @@ All unknowns from the Technical Context are resolved below.
 
 **Rationale**: Keeps this feature's real engineering effort on the parts with actual product behavior (theme, password, avatar, preferences) rather than content authoring, while still satisfying FR-023's "working links" requirement literally.
 
-**Alternatives considered**: Fetching version from a backend `/health`-style endpoint — rejected as unnecessary indirection; the Frontend and Backend deploy somewhat independently (Netlify vs Railway) so the Frontend's own build version is the more meaningful "app version" a user-facing settings page should show anyway.
+**Alternatives considered**: Fetching version from a backend `/health`-style endpoint — rejected as unnecessary indirection; the Frontend and Backend deploy somewhat independently (Vercel vs Railway) so the Frontend's own build version is the more meaningful "app version" a user-facing settings page should show anyway.
 
 ## 9. Removing the "profile" naming collision from the Goals page
 

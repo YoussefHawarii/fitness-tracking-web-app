@@ -20,7 +20,7 @@ Replace the current sign-up flow — which asks for email + password and grants 
 
 **Testing**: Backend — Jest unit tests (`*.spec.ts`, CI-enforced) and Jest e2e tests (`*.e2e-spec.ts`, run locally for behavior changes per project convention). Frontend has no test runner configured — verify manually via the dev server per project convention.
 
-**Target Platform**: Web — Backend deployed on Railway, Frontend on Netlify.
+**Target Platform**: Web — Backend deployed on Railway, Frontend on Vercel.
 
 **Project Type**: Web application (existing `Frontend/` + `Backend/` split).
 

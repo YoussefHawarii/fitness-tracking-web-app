@@ -18,7 +18,7 @@ Two related UX fixes to the existing calorie-tracking flow: (1) make the dashboa
 
 **Testing**: Backend — Jest unit tests (`*.spec.ts`, run in CI) plus Jest e2e tests (`*.e2e-spec.ts`, run locally for any backend behavior change, per project convention). Frontend — no automated test runner is configured in this repo (`Frontend/package.json` has no `test` script); verification is manual via the dev server/browser plus `npm run build`/`npm run lint`.
 
-**Target Platform**: Web browser (Frontend deployed to Netlify, Backend to Railway)
+**Target Platform**: Web browser (Frontend deployed to Vercel, Backend to Railway)
 
 **Project Type**: Web application — existing `Frontend/` + `Backend/` split, both already scaffolded; no new projects created.
 

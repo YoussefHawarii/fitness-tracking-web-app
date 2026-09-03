@@ -83,7 +83,7 @@ Foreign keys tie all logs back to `users`, enforcing the data-integrity requirem
 | Web Speech API | Voice → text | Browser-native, client-side only, not a backend integration |
 
 ### 6. Deployment Topology (targeting $0/month)
-- **Frontend:** Netlify free tier (static SPA hosting).
+- **Frontend:** Vercel free (Hobby) tier (static SPA hosting).
 - **Backend:** Railway (usage-based free tier — $5 free credit for the first 30 days, then $1/month recurring credit; no card required to start). Unlike a classic free-tier host, the instance does not sleep on idle by default, so there's no idle-sleep cold start on the backend layer itself — the real constraint is staying within the monthly usage credit.
 - **Database:** Neon (free tier Postgres).
   - Neon's free tier includes a built-in PgBouncer connection pooler <cite index="1-1">accepting up to 10,000 client connections, well above what Prisma's default pool needs</cite> — the connection-cap concern that applies to some other providers isn't a real issue here.

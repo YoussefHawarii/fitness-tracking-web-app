@@ -9,7 +9,7 @@ A calorie, macro, exercise, and weight tracking web app. Users log meals (via ba
 - **External APIs** — Open Food Facts (barcode lookup), USDA FoodData Central (food name lookup), Web Speech API (client-side voice input), Cloudinary (avatar uploads)
 
 This is a monorepo, but Frontend and Backend deploy independently:
-- **Frontend** → Netlify (`netlify.toml`, builds only `Frontend/`)
+- **Frontend** → Vercel (root directory set to `Frontend/` in the Vercel dashboard; framework auto-detected, no committed manifest)
 - **Backend** → Railway (root directory set to `Backend/` in the Railway dashboard; build/deploy config is managed there, not via a committed manifest)
 - **Database** → Neon (Postgres)
 
@@ -62,7 +62,6 @@ Backend/            NestJS API — see Backend/README.md
 Frontend/           React SPA — see Frontend/README.md
 docs/                Architecture, business logic, and requirements docs
 specs/               Per-feature specs (spec-kit workflow: spec.md → plan.md → tasks.md)
-netlify.toml         Frontend deploy config (Netlify)
 ```
 
 ## Environment variables

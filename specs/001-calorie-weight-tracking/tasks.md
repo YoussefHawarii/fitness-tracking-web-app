@@ -179,7 +179,7 @@ description: "Task list template for feature implementation"
 
 - [ ] T064 [P] Run all `quickstart.md` validation scenarios end-to-end and record results — **partially done**: frontend routing/auth-guard/console-clean smoke-tested in-browser; backend now confirmed live against a real Neon DB (signup wrote and was read back from the real `users` table, JWT guard verified). Still blocked on a Google OAuth client and a USDA API key for the remaining scenarios (voice logging, USDA search, Google sign-in)
 - [X] T065 [P] Add consistent loading/error states across `Frontend/src/pages/*`
-- [X] T066 Configure Netlify and Railway to build/deploy only their respective subfolder (`Frontend/`, `Backend/`) — `netlify.toml` and Railway's dashboard root-directory setting — test deploy completed: both are live (Netlify site + Railway service)
+- [X] T066 Configure Vercel and Railway to build/deploy only their respective subfolder (`Frontend/`, `Backend/`) via each platform's dashboard root-directory setting — test deploy completed: both are live (Vercel site + Railway service)
 - [X] T067 [P] Review CORS and security headers on the backend in `Backend/src/main.ts`
 - [ ] T068 Confirm the deployed stack incurs no recurring cost at single-user demo scale (SC-007) — requires an actual deployment to verify; not performed in this sandbox
 

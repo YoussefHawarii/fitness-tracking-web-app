@@ -28,11 +28,11 @@
 
 ### Repository Structure
 - **Monorepo** with `/client` and `/server` folders.
-- **Deployment note:** Netlify and Railway both need to be configured to build/deploy only their respective subfolder rather than the whole repo — a common first-time monorepo misconfiguration. Do a test deploy early to confirm this works before building the rest of the app on top of it.
+- **Deployment note:** Vercel and Railway both need to be configured to build/deploy only their respective subfolder rather than the whole repo — a common first-time monorepo misconfiguration. Do a test deploy early to confirm this works before building the rest of the app on top of it.
 
 ### Hosting (all free tier, targeting $0/month total)
 | Layer | Service |
 |---|---|
-| Frontend | Netlify |
+| Frontend | Vercel |
 | Backend | Railway |
 | Database | Neon |
