@@ -16,7 +16,7 @@ All technology and architecture decisions for this feature were already settled 
 
 - **Rationale**: Enforces foreign-key/referential integrity at the database level (a stated non-functional requirement); Neon's free tier includes a pooler (PgBouncer) supporting far more connections than Prisma's default pool needs, at $0/month.
 - **Alternatives considered**: None recorded — this was a settled prior decision, not re-evaluated here.
-- **Known trade-off accepted**: Neon compute scales to zero after 5 minutes idle, compounding with Render's own idle-sleep on the backend — first request after inactivity can be slow. Accepted per `docs/architecture.md` §6; not something this plan attempts to engineer around.
+- **Known trade-off accepted**: Neon compute scales to zero after 5 minutes idle — the Railway backend itself does not idle-sleep, so this cold-start risk is isolated to the database layer; first request after inactivity can still be slow. Accepted per `docs/architecture.md` §6; not something this plan attempts to engineer around.
 
 ## Decision: Frontend framework — React, styling — Tailwind CSS
 
@@ -43,11 +43,11 @@ All technology and architecture decisions for this feature were already settled 
 - **Rationale**: The highest-value, highest-risk code is the pure-function business logic (BMR/TDEE, balance, prediction) — a silent formula error there (like the double-counting risk already caught in `docs/business-logic.md` §2) is the failure mode most worth guarding against. Broader integration/E2E suites are explicitly deferred past v1.
 - **Alternatives considered**: Full integration/E2E coverage (rejected for v1 — scope/time trade-off for a portfolio project).
 
-## Decision: Hosting — Netlify (frontend) + Render (backend) + Neon (database), monorepo with `/Backend` and `/Frontend`
+## Decision: Hosting — Netlify (frontend) + Railway (backend) + Neon (database), monorepo with `/Backend` and `/Frontend`
 
 - **Rationale**: All three have workable free tiers, hitting the $0/month requirement.
 - **Alternatives considered**: None recorded as seriously evaluated; this was a settled prior decision.
-- **Deployment note carried forward**: Netlify and Render must each be configured to build/deploy only their respective subfolder, not the whole monorepo — flagged in `docs/technical-decisions.md` as a common first-time misconfiguration to test early.
+- **Deployment note carried forward**: Netlify and Railway must each be configured to build/deploy only their respective subfolder, not the whole monorepo — flagged in `docs/technical-decisions.md` as a common first-time misconfiguration to test early.
 
 ## Decision: Source-tree organization — standard framework conventions (revised decision)
 

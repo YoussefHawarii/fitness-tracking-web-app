@@ -84,10 +84,10 @@ Foreign keys tie all logs back to `users`, enforcing the data-integrity requirem
 
 ### 6. Deployment Topology (targeting $0/month)
 - **Frontend:** Netlify free tier (static SPA hosting).
-- **Backend:** Render free tier. Known trade-off already flagged in requirements §5: free-tier instances sleep when idle, causing a slow first request after inactivity.
+- **Backend:** Railway (usage-based free tier — $5 free credit for the first 30 days, then $1/month recurring credit; no card required to start). Unlike a classic free-tier host, the instance does not sleep on idle by default, so there's no idle-sleep cold start on the backend layer itself — the real constraint is staying within the monthly usage credit.
 - **Database:** Neon (free tier Postgres).
   - Neon's free tier includes a built-in PgBouncer connection pooler <cite index="1-1">accepting up to 10,000 client connections, well above what Prisma's default pool needs</cite> — the connection-cap concern that applies to some other providers isn't a real issue here.
-  - **New consideration to flag instead:** Neon's compute <cite index="1-1">scales to zero after 5 minutes of inactivity</cite>, same idle-sleep behavior as Render's free backend tier. That means a cold request can hit *both* layers waking up from sleep at once (backend spinning up + database spinning up), so the "slow first request after inactivity" trade-off already noted for Render is compounded, not just present once. Worth testing what that combined cold-start delay actually feels like before assuming it's negligible.
+  - **New consideration to flag instead:** Neon's compute <cite index="1-1">scales to zero after 5 minutes of inactivity</cite>. Since the Railway backend no longer sleeps, this idle-sleep is now isolated to the database layer only — a cold request can still hit a sleeping database spinning back up, causing a slow first query after inactivity, but it's a single-layer cold start rather than the compounded backend+database case a sleeping backend host would produce.
 
 ### 7. Key Architectural Decisions Carried From Prior Docs
 - Business logic (formulas, routing rules, day-boundary math) lives entirely in the backend — the client is a thin presentation layer, not a second implementation of the rules.

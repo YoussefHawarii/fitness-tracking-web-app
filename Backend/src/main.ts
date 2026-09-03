@@ -6,7 +6,7 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  // Frontend runs on a separate origin (Netlify) from the API (Render),
+  // Frontend runs on a separate origin (Netlify) from the API (Railway),
   // so CORS must be enabled explicitly rather than left to same-origin defaults.
   app.enableCors({
     origin: process.env.FRONTEND_ORIGIN ?? 'http://localhost:5173',

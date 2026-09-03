@@ -18,12 +18,12 @@ No `NEEDS CLARIFICATION` markers remain in the Technical Context — the stack, 
 1. **Read-time**: every verify/resend check filters on `expiresAt > now()` — an expired row is never treated as valid even if not yet physically deleted.
 2. **Delete-time**: expired rows are deleted (a) opportunistically whenever that user's OTP row is touched (verify attempt, resend, new signup) and is found expired, and (b) via a scheduled sweep (`@nestjs/schedule` `@Cron` every minute) that deletes any `OtpCode` where `expiresAt < now()`, guaranteeing FR-016 holds even if the user never comes back to interact with it.
 
-**Rationale**: Satisfies FR-016 ("no stale codes remain queryable") without requiring a durable job queue — `@nestjs/schedule` is a lightweight, already-idiomatic-for-NestJS in-process cron that needs no new infrastructure (no Redis, no external scheduler), matching this project's minimal-ops footprint (Render + Neon, no worker infra). The opportunistic delete keeps the common case (user verifies well within 5 minutes) free of any dependency on the cron actually having run yet.
+**Rationale**: Satisfies FR-016 ("no stale codes remain queryable") without requiring a durable job queue — `@nestjs/schedule` is a lightweight, already-idiomatic-for-NestJS in-process cron that needs no new infrastructure (no Redis, no external scheduler), matching this project's minimal-ops footprint (Railway + Neon, no worker infra). The opportunistic delete keeps the common case (user verifies well within 5 minutes) free of any dependency on the cron actually having run yet.
 
 **Alternatives considered**:
 - Postgres `expiresAt` + relying solely on filtered reads, never physically deleting — rejected because the spec explicitly says "got deleted from DB", not just logically expired.
 - Native Postgres `TTL`/row expiry (not a stable feature) or a `pg_cron` extension — rejected as unavailable/unconfirmed on the Neon free tier and adds a DB-side dependency outside Prisma's `db push` workflow.
-- Storing the OTP in-memory (e.g. a Map keyed by userId) instead of the DB — rejected: doesn't survive a server restart/redeploy (Render redeploys are common), and the spec explicitly frames this as a DB-resident, DB-deleted record.
+- Storing the OTP in-memory (e.g. a Map keyed by userId) instead of the DB — rejected: doesn't survive a server restart/redeploy (Railway redeploys are common), and the spec explicitly frames this as a DB-resident, DB-deleted record.
 
 ## 3. Hashing the OTP at rest
 

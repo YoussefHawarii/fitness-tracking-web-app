@@ -10,7 +10,7 @@ A calorie, macro, exercise, and weight tracking web app. Users log meals (via ba
 
 This is a monorepo, but Frontend and Backend deploy independently:
 - **Frontend** → Netlify (`netlify.toml`, builds only `Frontend/`)
-- **Backend** → Render (`Backend/render.yaml`, builds only `Backend/`)
+- **Backend** → Railway (root directory set to `Backend/` in the Railway dashboard; build/deploy config is managed there, not via a committed manifest)
 - **Database** → Neon (Postgres)
 
 See `docs/architecture.md` for the full system design and `docs/business-logic.md` for the calorie/TDEE/prediction formulas.
@@ -63,7 +63,6 @@ Frontend/           React SPA — see Frontend/README.md
 docs/                Architecture, business logic, and requirements docs
 specs/               Per-feature specs (spec-kit workflow: spec.md → plan.md → tasks.md)
 netlify.toml         Frontend deploy config (Netlify)
-Backend/render.yaml  Backend deploy config (Render)
 ```
 
 ## Environment variables

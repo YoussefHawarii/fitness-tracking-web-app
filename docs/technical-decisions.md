@@ -16,7 +16,7 @@
 
 ### Database
 - **Engine:** PostgreSQL.
-- **Host:** Neon (free tier). Built-in PgBouncer pooler handles connection limits; known trade-off is compute scale-to-zero after 5 minutes idle, compounding with Render's own idle-sleep behavior on cold requests (see architecture.md §6).
+- **Host:** Neon (free tier). Built-in PgBouncer pooler handles connection limits; known trade-off is compute scale-to-zero after 5 minutes idle — the Railway backend does not sleep on idle, so this cold-start risk is isolated to the database layer (see architecture.md §6).
 
 ### Testing
 - **Framework:** Jest.
@@ -28,11 +28,11 @@
 
 ### Repository Structure
 - **Monorepo** with `/client` and `/server` folders.
-- **Deployment note:** Netlify and Render both need to be configured to build/deploy only their respective subfolder rather than the whole repo — a common first-time monorepo misconfiguration. Do a test deploy early to confirm this works before building the rest of the app on top of it.
+- **Deployment note:** Netlify and Railway both need to be configured to build/deploy only their respective subfolder rather than the whole repo — a common first-time monorepo misconfiguration. Do a test deploy early to confirm this works before building the rest of the app on top of it.
 
 ### Hosting (all free tier, targeting $0/month total)
 | Layer | Service |
 |---|---|
 | Frontend | Netlify |
-| Backend | Render |
+| Backend | Railway |
 | Database | Neon |

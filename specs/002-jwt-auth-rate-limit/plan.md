@@ -32,7 +32,7 @@ decisions this is built on.
 **Testing**: Jest (unit specs) + Supertest (`test/*.e2e-spec.ts`) — existing
 harness, no new tooling
 
-**Target Platform**: Linux server (Render), single instance (`render.yaml`)
+**Target Platform**: Linux server (Railway), single instance (dashboard-managed config)
 
 **Project Type**: Web service (backend-only change; no frontend work in this
 feature's scope beyond consuming the new response shape, which is
@@ -49,7 +49,7 @@ cost)
 Assumptions); rate limit exactly 50 requests / rolling 5 minutes, keyed per
 authenticated user or per IP when unauthenticated (FR-007, FR-010, FR-011)
 
-**Scale/Scope**: Existing single-Render-instance deployment; in-memory rate
+**Scale/Scope**: Existing single-Railway-instance deployment; in-memory rate
 limiter storage is correct at this scale (documented scaling note in
 [research.md](research.md) Decision 4 if the deployment ever becomes
 multi-instance)

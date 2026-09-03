@@ -20,7 +20,7 @@ A three-tier web app (React SPA → NestJS REST API → PostgreSQL/Prisma) that 
 
 **Testing**: Jest — unit tests scoped to the business-logic layer (BMR/TDEE, daily-balance, weight-prediction pure functions) per `docs/technical-decisions.md`; broader integration/E2E testing is out of scope for v1
 
-**Target Platform**: Web — frontend on Netlify (static SPA), backend on Render (free-tier Node service, sleeps when idle)
+**Target Platform**: Web — frontend on Netlify (static SPA), backend on Railway (usage-based free tier, does not sleep when idle)
 
 **Project Type**: Web application (frontend + backend monorepo)
 

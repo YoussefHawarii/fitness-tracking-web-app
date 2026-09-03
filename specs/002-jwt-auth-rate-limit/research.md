@@ -112,8 +112,8 @@ you be able to send requests again" requirement without custom plumbing.
   needs.
 
 **Deployment note (documented, not a blocker)**: `@nestjs/throttler`'s
-default storage is in-memory per-process. The current Render deployment
-(`render.yaml`) runs a single instance, so this is correct as-is. If the
+default storage is in-memory per-process. The current Railway deployment
+(dashboard-managed, single instance) runs a single instance, so this is correct as-is. If the
 service is ever scaled to multiple instances, the storage should move to a
 shared store (e.g. `@nestjs/throttler`'s Redis adapter) so the 50/5min limit
 is enforced across instances rather than per-instance — flagged here as a

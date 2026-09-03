@@ -18,7 +18,7 @@ Add a pinned avatar+name profile block to the bottom of the existing sidebar (an
 
 **Testing**: Backend — Jest unit tests (`*.spec.ts`, CI) and Jest e2e tests (`*.e2e-spec.ts`, run locally for this behavior change, per `CLAUDE.md`). Frontend — no automated test runner configured (`Frontend/package.json` has no `test` script); verification is manual against `quickstart.md` plus `npm run build`/`npm run lint`.
 
-**Target Platform**: Web browser (Frontend on Netlify, Backend on Render).
+**Target Platform**: Web browser (Frontend on Netlify, Backend on Railway).
 
 **Project Type**: Web application — existing `Frontend/` + `Backend/` split; no new projects.
 

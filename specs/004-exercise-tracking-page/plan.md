@@ -18,7 +18,7 @@ Replace the dashboard's free-text "calories burned" quick-entry form with a dedi
 
 **Testing**: Jest for Backend unit tests (`*.spec.ts`) and e2e tests (`*.e2e-spec.ts`, run locally per CLAUDE.md); no Frontend test runner is configured in this repo — Frontend verification is manual/browser-based (per CLAUDE.md's UI verification guidance) plus `tsc -b` and `eslint`
 
-**Target Platform**: Web — Frontend on Netlify, Backend on Render
+**Target Platform**: Web — Frontend on Netlify, Backend on Railway
 
 **Project Type**: Web application (existing `Frontend/` + `Backend/` split)
 
