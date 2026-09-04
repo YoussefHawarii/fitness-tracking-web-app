@@ -79,7 +79,7 @@ export function Goals() {
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
       <h1 className="text-display">Your baseline</h1>
 
-      <Card holo className="bg-accent p-6 text-bg">
+      <Card holo className="!bg-accent p-6 text-bg">
         <p className="text-label text-bg/70">Daily target</p>
         <p className="text-readout text-[36px]">{baseline.dailyCalorieTarget.toFixed(0)} kcal</p>
         <p className="text-body text-bg/80">
