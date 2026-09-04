@@ -29,6 +29,6 @@ export class UpdateProfileDto {
   goalWeightKg?: number;
 
   @IsOptional()
-  @IsIn(['SEDENTARY', 'LIGHT'])
-  activityLevel?: 'SEDENTARY' | 'LIGHT';
+  @IsIn(['LIGHTLY_ACTIVE', 'MODERATELY_ACTIVE', 'VERY_ACTIVE'])
+  activityLevel?: 'LIGHTLY_ACTIVE' | 'MODERATELY_ACTIVE' | 'VERY_ACTIVE';
 }

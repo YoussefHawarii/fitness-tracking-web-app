@@ -4,6 +4,7 @@ import { submitOnboarding, type ActivityLevel, type Sex } from '../services/user
 import { Card, SegmentedControl } from '../components/ui/Card';
 import { Input, FieldLabel } from '../components/ui/Input';
 import { PrimaryButton } from '../components/ui/Button';
+import { getGoalDirection, GOAL_DIRECTION_LABEL } from '../utils/goalDirection';
 
 export function Onboarding() {
   const [age, setAge] = useState('');
@@ -11,7 +12,7 @@ export function Onboarding() {
   const [heightCm, setHeightCm] = useState('');
   const [currentWeightKg, setCurrentWeightKg] = useState('');
   const [goalWeightKg, setGoalWeightKg] = useState('');
-  const [activityLevel, setActivityLevel] = useState<ActivityLevel>('SEDENTARY');
+  const [activityLevel, setActivityLevel] = useState<ActivityLevel>('LIGHTLY_ACTIVE');
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const navigate = useNavigate();
@@ -95,14 +96,24 @@ export function Onboarding() {
             </FieldLabel>
           </div>
 
+          {currentWeightKg && goalWeightKg && (
+            <p className="text-body text-text-muted">
+              Looks like you want to:{' '}
+              <span className="text-text">
+                {GOAL_DIRECTION_LABEL[getGoalDirection(Number(currentWeightKg), Number(goalWeightKg))]}
+              </span>
+            </p>
+          )}
+
           <div>
             <p className="mb-2 text-body text-text">Activity level (non-exercise baseline)</p>
             <SegmentedControl
               value={activityLevel}
               onChange={setActivityLevel}
               options={[
-                { value: 'SEDENTARY', label: 'Sedentary' },
-                { value: 'LIGHT', label: 'Light' },
+                { value: 'LIGHTLY_ACTIVE', label: 'Lightly active' },
+                { value: 'MODERATELY_ACTIVE', label: 'Moderately active' },
+                { value: 'VERY_ACTIVE', label: 'Very active' },
               ]}
             />
           </div>

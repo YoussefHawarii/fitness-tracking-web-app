@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { getGoals, updateGoals, type ActivityLevel, type Baseline } from '../services/userService';
-import { Card, SegmentedControl } from '../components/ui/Card';
+import { Card, SegmentedControl, StatusChip } from '../components/ui/Card';
 import { Input, FieldLabel } from '../components/ui/Input';
 import { PrimaryButton } from '../components/ui/Button';
 import { useAccountContext } from '../context/AccountContext';
 import { formatWeight } from '../utils/units';
+import { getGoalDirection, GOAL_DIRECTION_LABEL } from '../utils/goalDirection';
 
 function BarRow({ label, value, fraction }: { label: string; value: string; fraction: number }) {
   return (
@@ -29,7 +30,7 @@ export function Goals() {
   const [baseline, setBaseline] = useState<Baseline | null>(null);
   const [weightInput, setWeightInput] = useState('');
   const [goalInput, setGoalInput] = useState('');
-  const [activity, setActivity] = useState<ActivityLevel>('SEDENTARY');
+  const [activity, setActivity] = useState<ActivityLevel>('LIGHTLY_ACTIVE');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -72,6 +73,7 @@ export function Goals() {
   const currentWeight = Number(weightInput || baseline.currentWeightKg);
   const goalWeight = Number(goalInput || baseline.goalWeightKg);
   const spanMax = Math.max(currentWeight, goalWeight, 1) * 1.15;
+  const goalDirection = getGoalDirection(currentWeight, goalWeight);
 
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 p-6">
@@ -79,7 +81,7 @@ export function Goals() {
 
       <Card holo className="bg-accent p-6 text-bg">
         <p className="text-label text-bg/70">Daily target</p>
-        <p className="text-readout text-[36px]">{Number(baseline.tdee).toFixed(0)} kcal</p>
+        <p className="text-readout text-[36px]">{baseline.dailyCalorieTarget.toFixed(0)} kcal</p>
         <p className="text-body text-bg/80">
           Estimated maintenance {Number(baseline.tdee).toFixed(0)} · BMR {Number(baseline.bmr).toFixed(0)} kcal
         </p>
@@ -91,8 +93,9 @@ export function Goals() {
           value={activity}
           onChange={setActivity}
           options={[
-            { value: 'SEDENTARY', label: 'Sedentary' },
-            { value: 'LIGHT', label: 'Light' },
+            { value: 'LIGHTLY_ACTIVE', label: 'Lightly active' },
+            { value: 'MODERATELY_ACTIVE', label: 'Moderately active' },
+            { value: 'VERY_ACTIVE', label: 'Very active' },
           ]}
         />
       </div>
@@ -108,6 +111,7 @@ export function Goals() {
           value={formatWeight(goalWeight, unitsPreference)}
           fraction={goalWeight / spanMax}
         />
+        <StatusChip className="self-start">{GOAL_DIRECTION_LABEL[goalDirection]}</StatusChip>
 
         <div className="grid grid-cols-2 gap-4">
           <FieldLabel>

@@ -145,7 +145,7 @@ export function Dashboard() {
   }, [refreshBalance, refreshFood, refreshExercise]);
 
   const remaining = balance
-    ? Math.max(balance.caloriesExpended - balance.caloriesConsumed, 0)
+    ? Math.max(balance.dailyCalorieTarget - balance.caloriesConsumed, 0)
     : 0;
   const isToday = selectedDate === todayDate;
 
@@ -344,13 +344,13 @@ export function Dashboard() {
           >
             <ProgressRing
               value={remaining}
-              max={balance.caloriesExpended}
+              max={balance.dailyCalorieTarget}
               label={remaining.toFixed(0)}
               sublabel="kcal remaining"
             />
             <p className="text-label text-text-muted">
               {balance.caloriesConsumed.toFixed(0)} of{' '}
-              {balance.caloriesExpended.toFixed(0)}
+              {balance.dailyCalorieTarget.toFixed(0)}
             </p>
           </Card>
         )}

@@ -11,7 +11,7 @@ describe('baseline-calculator', () => {
         weightKg: 80,
         heightCm: 180,
         age: 30,
-        activityLevel: 'SEDENTARY',
+        activityLevel: 'LIGHTLY_ACTIVE',
       });
       // 10*80 + 6.25*180 - 5*30 + 5 = 800 + 1125 - 150 + 5 = 1780
       expect(bmr).toBeCloseTo(1780);
@@ -23,7 +23,7 @@ describe('baseline-calculator', () => {
         weightKg: 65,
         heightCm: 165,
         age: 28,
-        activityLevel: 'SEDENTARY',
+        activityLevel: 'LIGHTLY_ACTIVE',
       });
       // 10*65 + 6.25*165 - 5*28 - 161 = 650 + 1031.25 - 140 - 161 = 1380.25
       expect(bmr).toBeCloseTo(1380.25);
@@ -31,37 +31,38 @@ describe('baseline-calculator', () => {
   });
 
   describe('calculateBaseline', () => {
-    it('applies the sedentary multiplier (1.2), not an exercise-inclusive one', () => {
+    it('applies the Lightly active multiplier (1.2)', () => {
       const { bmr, tdee } = calculateBaseline({
         sex: 'MALE',
         weightKg: 80,
         heightCm: 180,
         age: 30,
-        activityLevel: 'SEDENTARY',
+        activityLevel: 'LIGHTLY_ACTIVE',
       });
       expect(tdee).toBeCloseTo(bmr * 1.2);
     });
 
-    it('applies the light multiplier (1.375) for LIGHT activity level', () => {
+    it('applies the Moderately active multiplier (1.375)', () => {
       const { bmr, tdee } = calculateBaseline({
         sex: 'FEMALE',
         weightKg: 65,
         heightCm: 165,
         age: 28,
-        activityLevel: 'LIGHT',
+        activityLevel: 'MODERATELY_ACTIVE',
       });
       expect(tdee).toBeCloseTo(bmr * 1.375);
     });
 
-    it('never applies a multiplier above the sedentary-to-light range (avoids double-counting exercise burn)', () => {
+    it('applies the Very active multiplier (1.55), a modest step rather than an exercise-inclusive one', () => {
       const { bmr, tdee } = calculateBaseline({
         sex: 'MALE',
         weightKg: 80,
         heightCm: 180,
         age: 30,
-        activityLevel: 'LIGHT',
+        activityLevel: 'VERY_ACTIVE',
       });
-      expect(tdee / bmr).toBeLessThanOrEqual(1.375);
+      expect(tdee).toBeCloseTo(bmr * 1.55);
+      expect(tdee / bmr).toBeLessThanOrEqual(1.55);
     });
   });
 });

@@ -8,6 +8,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { getDayBoundaryUtc } from './day-boundary.util';
 import { calculateDailyBalance } from './balance-calculator';
 import { calculateExerciseCalories } from './exercise-calorie-calculator';
+import { calculateGoalDirection } from '../users/goal-direction';
 import { SPORT_CATALOG } from './exercise-met-table';
 import { CreateExerciseLogDto } from './dto/create-exercise-log.dto';
 import { UpdateExerciseLogDto } from './dto/update-exercise-log.dto';
@@ -133,10 +134,18 @@ export class CalorieBalanceService {
       0,
     );
 
+    const goalDirection = baseline
+      ? calculateGoalDirection(
+          Number(baseline.currentWeightKg),
+          Number(baseline.goalWeightKg),
+        )
+      : 'MAINTAIN';
+
     return calculateDailyBalance({
       caloriesConsumed,
       tdee: baseline ? Number(baseline.tdee) : 0,
       caloriesBurnedExercise,
+      goalDirection,
     });
   }
 }

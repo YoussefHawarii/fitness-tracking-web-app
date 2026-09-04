@@ -8,6 +8,10 @@ import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthService } from '../auth/auth.service';
 import { calculateBaseline } from './baseline-calculator';
+import {
+  calculateGoalDirection,
+  calculateDailyCalorieTarget,
+} from './goal-direction';
 import { OnboardingDto } from './dto/onboarding.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { UpdatePreferencesDto } from './dto/update-preferences.dto';
@@ -27,6 +31,30 @@ export class UsersService {
     private readonly authService: AuthService,
   ) {}
 
+  // Goal direction and Daily calorie target are derived, never stored
+  // (CONTEXT.md "Goal direction" / "Daily calorie target") — computed fresh
+  // on every response rather than persisted alongside the baseline.
+  private withGoalDirection<
+    T extends {
+      currentWeightKg: unknown;
+      goalWeightKg: unknown;
+      tdee: unknown;
+    },
+  >(baseline: T) {
+    const goalDirection = calculateGoalDirection(
+      Number(baseline.currentWeightKg),
+      Number(baseline.goalWeightKg),
+    );
+    return {
+      ...baseline,
+      goalDirection,
+      dailyCalorieTarget: calculateDailyCalorieTarget(
+        Number(baseline.tdee),
+        goalDirection,
+      ),
+    };
+  }
+
   async createBaseline(userId: string, dto: OnboardingDto) {
     const { bmr, tdee } = calculateBaseline({
       sex: dto.sex,
@@ -41,7 +69,7 @@ export class UsersService {
       data: { timezone: dto.timezone },
     });
 
-    return this.prisma.userBaseline.upsert({
+    const baseline = await this.prisma.userBaseline.upsert({
       where: { userId },
       create: {
         userId,
@@ -65,6 +93,8 @@ export class UsersService {
         tdee,
       },
     });
+
+    return this.withGoalDirection(baseline);
   }
 
   // Composed view for the Account/Settings page (specs/008-sidebar-profile-account)
@@ -237,7 +267,7 @@ export class UsersService {
       );
     }
     const { user, ...rest } = baseline;
-    return { ...rest, timezone: user.timezone };
+    return this.withGoalDirection({ ...rest, timezone: user.timezone });
   }
 
   // Recalculates BMR/TDEE whenever age/height/weight/activity change (FR-006) —
@@ -262,9 +292,11 @@ export class UsersService {
       activityLevel: merged.activityLevel,
     });
 
-    return this.prisma.userBaseline.update({
+    const updated = await this.prisma.userBaseline.update({
       where: { userId },
       data: { ...merged, bmr, tdee },
     });
+
+    return this.withGoalDirection(updated);
   }
 }

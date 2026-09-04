@@ -1,7 +1,11 @@
 import { apiClient } from './apiClient';
 
 export type Sex = 'MALE' | 'FEMALE';
-export type ActivityLevel = 'SEDENTARY' | 'LIGHT';
+export type ActivityLevel =
+  | 'LIGHTLY_ACTIVE'
+  | 'MODERATELY_ACTIVE'
+  | 'VERY_ACTIVE';
+export type GoalDirection = 'LOSE' | 'MAINTAIN' | 'GAIN';
 
 export interface OnboardingInput {
   age: number;
@@ -32,6 +36,8 @@ export interface Baseline {
   bmr: string;
   tdee: string;
   timezone: string;
+  goalDirection: GoalDirection;
+  dailyCalorieTarget: number;
 }
 
 export async function submitOnboarding(input: OnboardingInput) {

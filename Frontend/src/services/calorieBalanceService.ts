@@ -5,6 +5,7 @@ export interface DailyBalance {
   caloriesExpended: number;
   caloriesBurnedExercise: number;
   balance: number;
+  dailyCalorieTarget: number;
 }
 
 export type SportType =

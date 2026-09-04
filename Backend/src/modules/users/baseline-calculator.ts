@@ -1,5 +1,6 @@
 export type Sex = 'MALE' | 'FEMALE';
-export type ActivityLevel = 'SEDENTARY' | 'LIGHT';
+export type ActivityLevel =
+  'LIGHTLY_ACTIVE' | 'MODERATELY_ACTIVE' | 'VERY_ACTIVE';
 
 export interface BaselineInput {
   sex: Sex;
@@ -16,10 +17,15 @@ export interface BaselineResult {
 
 // Non-exercise activity multipliers only (docs/business-logic.md §1). Exercise
 // burn is logged separately (calorie-balance module) — using a
-// higher, exercise-inclusive multiplier here would double-count it.
+// higher, exercise-inclusive multiplier here would double-count it. The
+// labels shown to the user ("Lightly/Moderately/Very active") are a loose,
+// familiar proxy for everyday activity, not a literal exercise-frequency
+// input — the top tier deliberately stays a modest step (1.55) rather than
+// the 1.725/1.9 a true exercise-inclusive scale would use.
 const ACTIVITY_MULTIPLIERS: Record<ActivityLevel, number> = {
-  SEDENTARY: 1.2,
-  LIGHT: 1.375,
+  LIGHTLY_ACTIVE: 1.2,
+  MODERATELY_ACTIVE: 1.375,
+  VERY_ACTIVE: 1.55,
 };
 
 // Mifflin-St Jeor equation.

@@ -67,7 +67,7 @@ describe('Exercise logs (e2e)', () => {
         heightCm: 180,
         currentWeightKg: 80,
         goalWeightKg: 75,
-        activityLevel: 'SEDENTARY',
+        activityLevel: 'LIGHTLY_ACTIVE',
         timezone: 'UTC',
       })
       .expect(201);

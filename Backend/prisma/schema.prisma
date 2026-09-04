@@ -16,8 +16,9 @@ enum Sex {
 }
 
 enum ActivityLevel {
-  SEDENTARY
-  LIGHT
+  LIGHTLY_ACTIVE
+  MODERATELY_ACTIVE
+  VERY_ACTIVE
 }
 
 enum FoodSourceType {

@@ -6,8 +6,11 @@
   - Men: `BMR = 10×weight(kg) + 6.25×height(cm) − 5×age(years) + 5`
   - Women: `BMR = 10×weight(kg) + 6.25×height(cm) − 5×age(years) − 161`
 - **TDEE = BMR × activity multiplier.**
-  - **Design decision (flagging, not previously discussed explicitly):** the activity multiplier used here should reflect the user's *non-exercise* baseline activity (i.e. sedentary-to-light, ~1.2–1.375), NOT a "trains 4–5x/week" multiplier. This still holds even though exercise is no longer added into `Calories expended` (see §2) — the multiplier is meant to represent everyday non-exercise activity, not to double as an exercise-inclusive estimate.
+  - **Design decision (flagging, not previously discussed explicitly):** the activity multiplier used here should reflect the user's *non-exercise* baseline activity, NOT a "trains 4–5x/week" multiplier. This still holds even though exercise is no longer added into `Calories expended` (see §2) — the multiplier is meant to represent everyday non-exercise activity, not to double as an exercise-inclusive estimate.
+  - **Activity level has 3 tiers** (`Backend/src/modules/users/baseline-calculator.ts`): "Lightly active" (`1.2`), "Moderately active" (`1.375`), "Very active" (`1.55`). The labels are a loose, familiar proxy for everyday activity — not a literal exercise-frequency input — so the top tier deliberately stays a modest step up rather than the 1.725/1.9 a true exercise-inclusive scale would use, to avoid double-counting with logged exercise.
 - Baseline is recalculated whenever the user updates their profile (weight, height, age), not just at signup.
+- **Goal direction** (`Backend/src/modules/users/goal-direction.ts`): a derived label — `LOSE` / `MAINTAIN` / `GAIN` — computed by comparing Goal weight to current weight, with a ±0.5 kg tolerance counting as `MAINTAIN`. It's never stored; it's recomputed on every response.
+- **Daily calorie target** = TDEE − 500 kcal (`LOSE`) / TDEE (`MAINTAIN`) / TDEE + 500 kcal (`GAIN`). Deliberately kept separate from TDEE — see `docs/adr/0001-separate-daily-calorie-target-from-tdee.md` — because TDEE must stay unadjusted to keep the weight-trend prediction (§3) physiologically accurate. Daily calorie target only drives the Dashboard's "remaining calories" figure and the Goals page's "Daily target" display.
 
 ### 2. Daily Calorie Balance
 - `Calories consumed` = sum of all food log entries for the day (see §4).
@@ -17,6 +20,7 @@
   - **Added 2026-08-30 (specs/004-exercise-tracking-page)**: exercise sessions are logged by selecting a sport and a duration rather than typing a calorie number directly. `Calories burned (exercise) = MET(sport) × body weight (kg) × duration (hours)`, using the user's current baseline weight and a fixed MET value per sport (Football, Swimming, Padel, Basketball, Gym/Weight Training, Running, Tennis, or a general "Other" default for a typed activity). This only changes how the exercise figure is calculated and made editable — it remains excluded from `Calories expended`/balance as described above.
 - `Daily balance = Calories consumed − Calories expended.`
   - Negative = deficit (weight loss direction). Positive = surplus (weight gain direction).
+  - **Added (Daily calorie target)**: the Dashboard's "remaining calories" figure is `Daily calorie target − Calories consumed` (see §1), not `Calories expended − Calories consumed`. `Calories expended`/`Daily balance` here are unaffected and keep using raw TDEE — only the user-facing "remaining calories" ring reflects the goal-adjusted target.
 
 ### 3. Weight Trend Prediction
 - `Cumulative balance` = sum of daily balances over the prediction window (1–2 weeks, per spec).
