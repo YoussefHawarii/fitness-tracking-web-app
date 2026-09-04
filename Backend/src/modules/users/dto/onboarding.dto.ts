@@ -19,11 +19,11 @@ export class OnboardingDto {
   @IsPositive()
   heightCm: number;
 
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   currentWeightKg: number;
 
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   goalWeightKg: number;
 

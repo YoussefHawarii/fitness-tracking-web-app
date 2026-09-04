@@ -116,11 +116,11 @@ export function Goals() {
         <div className="grid grid-cols-2 gap-4">
           <FieldLabel>
             Current weight (kg)
-            <Input type="number" value={weightInput} onChange={(e) => setWeightInput(e.target.value)} />
+            <Input type="number" min={1} step={0.01} value={weightInput} onChange={(e) => setWeightInput(e.target.value)} />
           </FieldLabel>
           <FieldLabel>
             Goal weight (kg)
-            <Input type="number" value={goalInput} onChange={(e) => setGoalInput(e.target.value)} />
+            <Input type="number" min={1} step={0.01} value={goalInput} onChange={(e) => setGoalInput(e.target.value)} />
           </FieldLabel>
         </div>
 

@@ -152,7 +152,7 @@ export function WeightTrend() {
       <Card className="flex items-end gap-3 p-6">
         <FieldLabel className="flex-1">
           Log today&apos;s weight (kg)
-          <Input type="number" value={weightInput} onChange={(e) => setWeightInput(e.target.value)} />
+          <Input type="number" min={1} step={0.01} value={weightInput} onChange={(e) => setWeightInput(e.target.value)} />
         </FieldLabel>
         <PrimaryButton onClick={handleLogWeighIn}>Save</PrimaryButton>
       </Card>

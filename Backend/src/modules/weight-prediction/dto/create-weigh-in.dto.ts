@@ -1,7 +1,7 @@
 import { IsDateString, IsNumber, IsPositive } from 'class-validator';
 
 export class CreateWeighInDto {
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   weightKg: number;
 

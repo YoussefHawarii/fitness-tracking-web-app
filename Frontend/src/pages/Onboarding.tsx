@@ -80,6 +80,7 @@ export function Onboarding() {
                 type="number"
                 required
                 min={1}
+                step={0.01}
                 value={currentWeightKg}
                 onChange={(e) => setCurrentWeightKg(e.target.value)}
               />
@@ -90,6 +91,7 @@ export function Onboarding() {
                 type="number"
                 required
                 min={1}
+                step={0.01}
                 value={goalWeightKg}
                 onChange={(e) => setGoalWeightKg(e.target.value)}
               />

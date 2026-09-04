@@ -19,12 +19,12 @@ export class UpdateProfileDto {
   heightCm?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   currentWeightKg?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
   goalWeightKg?: number;
 
