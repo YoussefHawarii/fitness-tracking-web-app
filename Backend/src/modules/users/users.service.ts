@@ -183,6 +183,11 @@ export class UsersService {
       where: { id: userId },
       data: { passwordHash },
     });
+    // A stolen refresh token must not survive a password change.
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
   }
 
   async setPassword(userId: string, dto: SetPasswordDto) {

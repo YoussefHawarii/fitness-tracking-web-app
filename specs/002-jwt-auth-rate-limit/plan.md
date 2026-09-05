@@ -6,6 +6,12 @@
 
 **Note**: This template is filled in by the `/speckit-plan` command; its definition describes the execution workflow.
 
+**Superseded**: this plan's RS256 + JWKS design (below) was not what shipped. The
+implemented auth (see root `CLAUDE.md`) uses HS256 with two symmetric secrets,
+`ACCESS_TOKEN` and `REFRESH_TOKEN` — no keypair, no JWKS endpoint. Refresh-token
+rotation/revocation and the 50-req/5-min rate limit described below did ship as
+specified. Treat every RS256/JWKS/JWK reference below as historical, not current.
+
 ## Summary
 
 Replace the backend's current single 7-day HS256 access token with a

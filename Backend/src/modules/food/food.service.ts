@@ -55,8 +55,7 @@ export class FoodService {
       };
     }
     if (sourceType === 'USDA') {
-      const matches = await this.usda.searchByTerm(sourceRef);
-      const match = matches.find((m) => m.fdcId === sourceRef);
+      const match = await this.usda.getById(sourceRef);
       if (!match) throw new NotFoundException('USDA food item not found.');
       return {
         nutrients: match,

@@ -2,6 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
 
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 @Injectable()
 export class MailService {
   private readonly logger = new Logger(MailService.name);
@@ -58,7 +67,7 @@ export class MailService {
         replyTo: fromUserEmail,
         subject: `[Feedback] ${subject}`,
         text: `From: ${fromUserEmail}\n\n${message}`,
-        html: `<p>From: ${fromUserEmail}</p><p>${message}</p>`,
+        html: `<p>From: ${escapeHtml(fromUserEmail)}</p><p>${escapeHtml(message)}</p>`,
       });
       return true;
     } catch (error) {

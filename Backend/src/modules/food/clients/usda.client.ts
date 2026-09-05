@@ -10,6 +10,12 @@ interface UsdaSearchResponse {
   }>;
 }
 
+interface UsdaFoodDetailsResponse {
+  fdcId: number;
+  description: string;
+  foodNutrients: Array<{ nutrient: { name: string }; amount: number }>;
+}
+
 export interface UsdaFoodMatch extends NutrientsPer100g {
   fdcId: string;
   name: string;
@@ -52,5 +58,34 @@ export class UsdaClient {
       ),
       fatPer100g: extractNutrient(food.foodNutrients, 'Total lipid (fat)'),
     }));
+  }
+
+  // Fetches one food by its own fdcId — used when re-resolving an already
+  // logged USDA food (e.g. on edit/resave), where searchByTerm would only
+  // find it again by luck (it's a free-text search, not a lookup by id).
+  async getById(fdcId: string): Promise<UsdaFoodMatch | null> {
+    const apiKey = this.configService.get<string>('USDA_API_KEY');
+    const url = `${this.baseUrl}/food/${encodeURIComponent(fdcId)}?api_key=${apiKey}`;
+    const response = await fetch(url);
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new ServiceUnavailableException(
+        'USDA food lookup is temporarily unavailable.',
+      );
+    }
+    const body = (await response.json()) as UsdaFoodDetailsResponse;
+    const nutrients = body.foodNutrients.map((n) => ({
+      nutrientName: n.nutrient.name,
+      value: n.amount,
+    }));
+
+    return {
+      fdcId: String(body.fdcId),
+      name: body.description,
+      caloriesPer100g: extractNutrient(nutrients, 'Energy') ?? 0,
+      proteinPer100g: extractNutrient(nutrients, 'Protein'),
+      carbsPer100g: extractNutrient(nutrients, 'Carbohydrate, by difference'),
+      fatPer100g: extractNutrient(nutrients, 'Total lipid (fat)'),
+    };
   }
 }

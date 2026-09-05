@@ -31,7 +31,11 @@ describe('FoodService — name capture on createFoodLog', () => {
       lookupByBarcode: jest.fn(),
       ...overrides.openFoodFacts,
     };
-    const usda = { searchByTerm: jest.fn(), ...overrides.usda };
+    const usda = {
+      searchByTerm: jest.fn(),
+      getById: jest.fn(),
+      ...overrides.usda,
+    };
 
     const service = new FoodService(
       prisma as never,
@@ -44,11 +48,11 @@ describe('FoodService — name capture on createFoodLog', () => {
   it('captures the USDA match name', async () => {
     const { service, created } = buildService({
       usda: {
-        searchByTerm: jest
-          .fn()
-          .mockResolvedValue([
-            { fdcId: '123', name: 'Banana, raw', caloriesPer100g: 89 },
-          ]),
+        getById: jest.fn().mockResolvedValue({
+          fdcId: '123',
+          name: 'Banana, raw',
+          caloriesPer100g: 89,
+        }),
       },
     });
 

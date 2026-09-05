@@ -6,6 +6,7 @@ import {
 } from '../../common/decorators/current-user.decorator';
 import { WeightPredictionService } from './weight-prediction.service';
 import { CreateWeighInDto } from './dto/create-weigh-in.dto';
+import { EndDateQueryDto } from './dto/end-date-query.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller()
@@ -30,8 +31,11 @@ export class WeightPredictionController {
   @Get('prediction')
   getPrediction(
     @CurrentUser() user: AuthenticatedUser,
-    @Query('endDate') endDate: string,
+    @Query() query: EndDateQueryDto,
   ) {
-    return this.weightPredictionService.getPrediction(user.userId, endDate);
+    return this.weightPredictionService.getPrediction(
+      user.userId,
+      query.endDate,
+    );
   }
 }

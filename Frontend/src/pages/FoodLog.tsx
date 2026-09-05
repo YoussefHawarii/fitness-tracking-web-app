@@ -25,6 +25,7 @@ import {
   ScanIcon,
   TrashIcon,
 } from '../components/ui/icons';
+import { useAccountTimezone } from '../hooks/useAccountTimezone';
 
 type InputMode = 'barcode' | 'voice' | 'manual';
 type PendingItem =
@@ -43,11 +44,6 @@ interface FoodLogEntry {
 
 const MEAL_ORDER: MealCategory[] = ['BREAKFAST', 'LUNCH', 'DINNER', 'SNACKS'];
 
-function todayLocalDate(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-}
-
 function isInputMode(value: unknown): value is InputMode {
   return value === 'barcode' || value === 'voice' || value === 'manual';
 }
@@ -55,7 +51,8 @@ function isInputMode(value: unknown): value is InputMode {
 export function FoodLog() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const date = searchParams.get('date') || todayLocalDate();
+  const { todayInAccountTimezone } = useAccountTimezone();
+  const date = searchParams.get('date') || todayInAccountTimezone();
   const requestedMode = (location.state as { mode?: unknown } | null)?.mode;
   const [mode, setMode] = useState<InputMode>(isInputMode(requestedMode) ? requestedMode : 'barcode');
   const [pendingItem, setPendingItem] = useState<PendingItem | null>(null);

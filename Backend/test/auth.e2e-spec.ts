@@ -98,20 +98,6 @@ describe('Auth (e2e)', () => {
       .expect(401);
   });
 
-  it('publishes both the access and refresh RS256 public keys as a JWKS', async () => {
-    const res = await request(app.getHttpServer())
-      .get('/auth/.well-known/jwks.json')
-      .expect(200);
-
-    const body = res.body as { keys: Array<{ kty: string; kid: string }> };
-    // Two distinct keypairs — access and refresh — so either can be
-    // rotated independently. See src/modules/auth/keys.ts.
-    expect(body.keys).toHaveLength(2);
-    expect(body.keys.every((k) => k.kty === 'RSA')).toBe(true);
-    const kids = body.keys.map((k) => k.kid);
-    expect(new Set(kids).size).toBe(2);
-  });
-
   it('rate-limits a single user to 50 requests per rolling 5-minute window', async () => {
     const email = `e2e-throttle-${Date.now()}@example.com`;
     const { accessToken } = await signupAndVerify(email);
@@ -119,14 +105,14 @@ describe('Auth (e2e)', () => {
     let lastStatus = 0;
     for (let i = 0; i < 50; i++) {
       const res = await request(app.getHttpServer())
-        .get('/auth/.well-known/jwks.json')
+        .get('/profile/account')
         .set('Authorization', `Bearer ${accessToken}`);
       lastStatus = res.status;
     }
     expect(lastStatus).not.toBe(429);
 
     const res = await request(app.getHttpServer())
-      .get('/auth/.well-known/jwks.json')
+      .get('/profile/account')
       .set('Authorization', `Bearer ${accessToken}`);
     expect(res.status).toBe(429);
     expect(res.headers['retry-after']).toBeDefined();

@@ -2,6 +2,16 @@ import { useRef, useState } from 'react';
 import { searchUsda, type UsdaFoodMatch } from '../../services/foodService';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import { FieldLabel, Textarea } from '../../components/ui/Input';
+import { useAccountContext } from '../../context/AccountContext';
+
+// Maps the app's language-preference codes (Account page) to BCP-47 tags
+// the Web Speech API expects. Falls back to English for any unmapped code.
+const SPEECH_RECOGNITION_LOCALES: Record<string, string> = {
+  en: 'en-US',
+  es: 'es-ES',
+  fr: 'fr-FR',
+  de: 'de-DE',
+};
 
 interface SpeechRecognitionResultLike {
   results: { [index: number]: { [index: number]: { transcript: string } } };
@@ -33,6 +43,7 @@ interface Props {
 // §5, the transcript is always shown for edit/confirmation before it is used
 // to search — and candidate matches are presented rather than auto-selected.
 export function VoiceLogger({ onMatchSelected }: Props) {
+  const { account } = useAccountContext();
   const [transcript, setTranscript] = useState('');
   const [recording, setRecording] = useState(false);
   const [matches, setMatches] = useState<UsdaFoodMatch[] | null>(null);
@@ -46,7 +57,9 @@ export function VoiceLogger({ onMatchSelected }: Props) {
       return;
     }
     const recognition = new SpeechRecognitionCtor();
-    recognition.lang = 'ar-EG';
+    recognition.lang =
+      SPEECH_RECOGNITION_LOCALES[account?.languagePreference ?? 'en'] ??
+      'en-US';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.onresult = (event) => {

@@ -23,6 +23,9 @@ function buildService(
       findUnique: jest.fn(overrides.findUniqueUser ?? (() => null)),
       update: overrides.updateUser ?? jest.fn((args: unknown) => args),
     },
+    refreshToken: {
+      updateMany: jest.fn(() => Promise.resolve({ count: 0 })),
+    },
   };
   const cloudinaryService = {
     createUploadSignature: jest.fn(() => ({
