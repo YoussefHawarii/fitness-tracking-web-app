@@ -1,10 +1,33 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { isAxiosError } from 'axios';
 import { submitOnboarding, type ActivityLevel, type Sex } from '../services/userService';
 import { Card, SegmentedControl } from '../components/ui/Card';
 import { Input, FieldLabel } from '../components/ui/Input';
 import { PrimaryButton } from '../components/ui/Button';
 import { getGoalDirection, GOAL_DIRECTION_LABEL } from '../utils/goalDirection';
+
+// Backend wraps validation failures as { message: { message: string | string[] } }
+// (see HttpExceptionFilter) — surface that instead of a one-size-fits-all
+// message, since a 400 (bad values), 401 (expired session) and network
+// failure all need different guidance and were previously indistinguishable.
+function getOnboardingErrorMessage(err: unknown): string {
+  if (isAxiosError(err)) {
+    if (!err.response) {
+      return "Could not reach the server. Check your connection and try again.";
+    }
+    if (err.response.status === 401) {
+      return 'Your session expired. Please log in again.';
+    }
+    if (err.response.status === 400) {
+      const body = err.response.data?.message;
+      const detail = typeof body === 'string' ? body : body?.message;
+      const text = Array.isArray(detail) ? detail.join(' ') : detail;
+      if (text) return text;
+    }
+  }
+  return 'Could not save your details. Please check the values and try again.';
+}
 
 export function Onboarding() {
   const [age, setAge] = useState('');
@@ -33,8 +56,8 @@ export function Onboarding() {
         timezone,
       });
       navigate('/dashboard');
-    } catch {
-      setError('Could not save your details. Please check the values and try again.');
+    } catch (err) {
+      setError(getOnboardingErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
