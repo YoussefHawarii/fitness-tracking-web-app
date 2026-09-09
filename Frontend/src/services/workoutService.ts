@@ -37,6 +37,13 @@ export async function getWorkoutExerciseCatalog(): Promise<WorkoutExerciseCatalo
   return data;
 }
 
+export function exerciseLabel(
+  exerciseType: string,
+  catalog: WorkoutExerciseCatalogEntry[],
+): string {
+  return catalog.find((entry) => entry.exerciseType === exerciseType)?.label ?? exerciseType;
+}
+
 export interface WorkoutSet {
   id: string;
   reps: number;
@@ -77,4 +84,31 @@ export async function createWorkoutSession(
 ): Promise<WorkoutSession> {
   const { data } = await apiClient.post('/workout-sessions', input);
   return data;
+}
+
+export async function listWorkoutSessions(muscleGroup?: MuscleGroup): Promise<WorkoutSession[]> {
+  const { data } = await apiClient.get('/workout-sessions', {
+    params: muscleGroup ? { muscleGroup } : undefined,
+  });
+  return data;
+}
+
+// Always the full, unfiltered session — use this (never a session object
+// from a muscleGroup-filtered listWorkoutSessions call) to reopen the Log
+// form for editing, so a hidden, filtered-out exercise is never dropped.
+export async function getWorkoutSession(id: string): Promise<WorkoutSession> {
+  const { data } = await apiClient.get(`/workout-sessions/${id}`);
+  return data;
+}
+
+export async function updateWorkoutSession(
+  id: string,
+  input: CreateWorkoutSessionInput,
+): Promise<WorkoutSession> {
+  const { data } = await apiClient.patch(`/workout-sessions/${id}`, input);
+  return data;
+}
+
+export async function deleteWorkoutSession(id: string): Promise<void> {
+  await apiClient.delete(`/workout-sessions/${id}`);
 }

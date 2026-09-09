@@ -6,8 +6,9 @@ import { AppModule } from '../src/app.module';
 import { MailService } from '../src/modules/mail/mail.service';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
 
-// Covers specs/009-workout-tracking (issue #4) tickets #5 and #6:
-// GET /workout-exercises and POST /workout-sessions.
+// Covers specs/009-workout-tracking (issue #4) tickets #5, #6, and #7:
+// GET /workout-exercises, and the full POST/GET/PATCH/DELETE
+// /workout-sessions CRUD.
 describe('Workouts (e2e)', () => {
   let app: INestApplication<App>;
   const sentOtpEmails: { to: string; code: string }[] = [];
@@ -61,6 +62,31 @@ describe('Workouts (e2e)', () => {
     const email = `workout-${tag}-${Date.now()}${Math.floor(Math.random() * 1000)}@example.com`;
     const { accessToken } = await signupAndVerify(email);
     return accessToken;
+  }
+
+  interface SessionOverrides {
+    date?: string;
+    muscleGroups?: string[];
+    exercises?: { exerciseType: string; sets: { reps: number; weightKg?: number }[] }[];
+  }
+
+  async function createSession(accessToken: string, overrides: SessionOverrides = {}) {
+    const res = await request(app.getHttpServer())
+      .post('/workout-sessions')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        date: '2026-01-15',
+        muscleGroups: ['CHEST'],
+        exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] }],
+        ...overrides,
+      })
+      .expect(201);
+    return res.body as {
+      id: string;
+      muscleGroups: string[];
+      loggedForDate: string;
+      exercises: { id: string; exerciseType: string; sets: unknown[] }[];
+    };
   }
 
   describe('GET /workout-exercises', () => {
@@ -267,6 +293,218 @@ describe('Workouts (e2e)', () => {
           exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
         })
         .expect(400);
+    });
+  });
+
+  describe('GET /workout-sessions', () => {
+    it('rejects an unauthenticated request', async () => {
+      await request(app.getHttpServer()).get('/workout-sessions').expect(401);
+    });
+
+    it('lists only the requesting user’s sessions, most recent loggedForDate first', async () => {
+      const accessToken = await newVerifiedUser('list');
+      const older = await createSession(accessToken, { date: '2026-01-10' });
+      const newer = await createSession(accessToken, { date: '2026-01-20' });
+
+      const strangerToken = await newVerifiedUser('list-stranger');
+      await createSession(strangerToken, { date: '2026-01-25' });
+
+      const res = await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      const ids = (res.body as { id: string }[]).map((s) => s.id);
+      expect(ids).toEqual([newer.id, older.id]);
+    });
+
+    it('filters by muscle group, pre-filtering each session’s exercises to only that group', async () => {
+      const accessToken = await newVerifiedUser('filter');
+
+      const mixed = await createSession(accessToken, {
+        date: '2026-01-11',
+        muscleGroups: ['CHEST', 'TRICEPS'],
+        exercises: [
+          { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] },
+          { exerciseType: 'CABLE_TRICEPS_PUSHDOWN', sets: [{ reps: 12, weightKg: 20 }] },
+        ],
+      });
+      await createSession(accessToken, {
+        date: '2026-01-12',
+        muscleGroups: ['LEGS'],
+        exercises: [{ exerciseType: 'BARBELL_SQUAT', sets: [{ reps: 5, weightKg: 100 }] }],
+      });
+
+      const chestRes = await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .query({ muscleGroup: 'CHEST' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      const chestSessions = chestRes.body as { id: string; exercises: { exerciseType: string }[] }[];
+      expect(chestSessions).toHaveLength(1);
+      expect(chestSessions[0].id).toBe(mixed.id);
+      // Pre-filtered: only the Chest exercise, the Triceps one is hidden.
+      expect(chestSessions[0].exercises).toHaveLength(1);
+      expect(chestSessions[0].exercises[0].exerciseType).toBe('BARBELL_BENCH_PRESS');
+
+      const backRes = await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .query({ muscleGroup: 'BACK' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(backRes.body).toEqual([]);
+
+      const unfilteredRes = await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      const unfilteredMixed = (
+        unfilteredRes.body as { id: string; exercises: unknown[] }[]
+      ).find((s) => s.id === mixed.id);
+      // Unfiltered: the full session, both exercises.
+      expect(unfilteredMixed?.exercises).toHaveLength(2);
+    });
+  });
+
+  describe('GET /workout-sessions/:id', () => {
+    it('rejects an unauthenticated request', async () => {
+      const accessToken = await newVerifiedUser('get-one-setup');
+      const created = await createSession(accessToken);
+
+      await request(app.getHttpServer())
+        .get(`/workout-sessions/${created.id}`)
+        .expect(401);
+    });
+
+    it('always returns every exercise, never a muscleGroup-filtered subset', async () => {
+      const accessToken = await newVerifiedUser('get-one');
+
+      const mixed = await createSession(accessToken, {
+        muscleGroups: ['CHEST', 'TRICEPS'],
+        exercises: [
+          { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] },
+          { exerciseType: 'CABLE_TRICEPS_PUSHDOWN', sets: [{ reps: 12, weightKg: 20 }] },
+        ],
+      });
+
+      // Even after fetching this same session through a muscleGroup-filtered
+      // list (which pre-filters exercises), the single-session lookup used
+      // to reopen the edit form must return the full, unfiltered session.
+      await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .query({ muscleGroup: 'CHEST' })
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      const res = await request(app.getHttpServer())
+        .get(`/workout-sessions/${mixed.id}`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      const exerciseTypes = (res.body.exercises as { exerciseType: string }[]).map(
+        (e) => e.exerciseType,
+      );
+      expect(exerciseTypes).toEqual(['BARBELL_BENCH_PRESS', 'CABLE_TRICEPS_PUSHDOWN']);
+    });
+
+    it('returns 404 for another user’s session', async () => {
+      const ownerToken = await newVerifiedUser('get-one-owner');
+      const strangerToken = await newVerifiedUser('get-one-stranger');
+      const created = await createSession(ownerToken);
+
+      await request(app.getHttpServer())
+        .get(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${strangerToken}`)
+        .expect(404);
+    });
+  });
+
+  describe('PATCH /workout-sessions/:id', () => {
+    it('fully replaces a session’s nested content', async () => {
+      const accessToken = await newVerifiedUser('edit');
+      const created = await createSession(accessToken, {
+        muscleGroups: ['CHEST'],
+        exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] }],
+      });
+
+      const res = await request(app.getHttpServer())
+        .patch(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          date: '2026-01-16',
+          muscleGroups: ['BACK', 'BICEPS'],
+          exercises: [
+            { exerciseType: 'LAT_PULLDOWN', sets: [{ reps: 12, weightKg: 45 }] },
+            { exerciseType: 'BARBELL_CURL', sets: [{ reps: 10 }, { reps: 8 }] },
+          ],
+        })
+        .expect(200);
+
+      expect(res.body.id).toBe(created.id);
+      expect(res.body.muscleGroups).toEqual(['BACK', 'BICEPS']);
+      const exerciseTypes = (res.body.exercises as { exerciseType: string }[]).map(
+        (e) => e.exerciseType,
+      );
+      expect(exerciseTypes).toEqual(['LAT_PULLDOWN', 'BARBELL_CURL']);
+    });
+
+    it('rejects a future date', async () => {
+      const accessToken = await newVerifiedUser('edit-future');
+      const created = await createSession(accessToken);
+
+      const tomorrow = new Date();
+      tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+
+      await request(app.getHttpServer())
+        .patch(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          date: tomorrow.toISOString().slice(0, 10),
+          muscleGroups: ['CHEST'],
+          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+        })
+        .expect(400);
+    });
+
+    it('returns 404 for another user’s session', async () => {
+      const ownerToken = await newVerifiedUser('edit-owner');
+      const strangerToken = await newVerifiedUser('edit-stranger');
+      const created = await createSession(ownerToken);
+
+      await request(app.getHttpServer())
+        .patch(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${strangerToken}`)
+        .send({
+          date: '2026-01-15',
+          muscleGroups: ['CHEST'],
+          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+        })
+        .expect(404);
+    });
+  });
+
+  describe('DELETE /workout-sessions/:id', () => {
+    it('removes the session (cascading its exercises/sets); another user cannot delete it', async () => {
+      const accessToken = await newVerifiedUser('delete');
+      const created = await createSession(accessToken);
+
+      const strangerToken = await newVerifiedUser('delete-stranger');
+      await request(app.getHttpServer())
+        .delete(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${strangerToken}`)
+        .expect(404);
+
+      await request(app.getHttpServer())
+        .delete(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(204);
+
+      const list = await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      expect(list.body).toEqual([]);
     });
   });
 });
