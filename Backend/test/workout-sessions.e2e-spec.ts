@@ -6,9 +6,9 @@ import { AppModule } from '../src/app.module';
 import { MailService } from '../src/modules/mail/mail.service';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
 
-// Covers specs/009-workout-tracking (issue #4) tickets #5, #6, and #7:
-// GET /workout-exercises, and the full POST/GET/PATCH/DELETE
-// /workout-sessions CRUD.
+// Covers specs/009-workout-tracking (issue #4) tickets #5, #6, #7, and #8:
+// GET /workout-exercises, the full POST/GET/PATCH/DELETE /workout-sessions
+// CRUD, and GET /workout-exercises/:exerciseType/last.
 describe('Workouts (e2e)', () => {
   let app: INestApplication<App>;
   const sentOtpEmails: { to: string; code: string }[] = [];
@@ -67,17 +67,28 @@ describe('Workouts (e2e)', () => {
   interface SessionOverrides {
     date?: string;
     muscleGroups?: string[];
-    exercises?: { exerciseType: string; sets: { reps: number; weightKg?: number }[] }[];
+    exercises?: {
+      exerciseType: string;
+      sets: { reps: number; weightKg?: number }[];
+    }[];
   }
 
-  async function createSession(accessToken: string, overrides: SessionOverrides = {}) {
+  async function createSession(
+    accessToken: string,
+    overrides: SessionOverrides = {},
+  ) {
     const res = await request(app.getHttpServer())
       .post('/workout-sessions')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         date: '2026-01-15',
         muscleGroups: ['CHEST'],
-        exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] }],
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 60 }],
+          },
+        ],
         ...overrides,
       })
       .expect(201);
@@ -112,13 +123,29 @@ describe('Workouts (e2e)', () => {
 
       const muscleGroups = new Set(entries.map((e) => e.muscleGroup));
       expect(muscleGroups).toEqual(
-        new Set(['CHEST', 'BACK', 'SHOULDERS', 'BICEPS', 'TRICEPS', 'LEGS', 'CORE']),
+        new Set([
+          'CHEST',
+          'BACK',
+          'SHOULDERS',
+          'BICEPS',
+          'TRICEPS',
+          'LEGS',
+          'CORE',
+        ]),
       );
 
       expect(entries).toEqual(
         expect.arrayContaining([
-          { exerciseType: 'LAT_PULLDOWN', label: 'Lat Pulldown', muscleGroup: 'BACK' },
-          { exerciseType: 'SEATED_CABLE_ROW', label: 'Seated Cable Row', muscleGroup: 'BACK' },
+          {
+            exerciseType: 'LAT_PULLDOWN',
+            label: 'Lat Pulldown',
+            muscleGroup: 'BACK',
+          },
+          {
+            exerciseType: 'SEATED_CABLE_ROW',
+            label: 'Seated Cable Row',
+            muscleGroup: 'BACK',
+          },
           {
             exerciseType: 'INCLINE_MACHINE_CHEST_PRESS',
             label: 'Incline Chest Press (Machine)',
@@ -133,6 +160,96 @@ describe('Workouts (e2e)', () => {
     });
   });
 
+  describe('GET /workout-exercises/:exerciseType/last', () => {
+    it('rejects an unauthenticated request', async () => {
+      await request(app.getHttpServer())
+        .get('/workout-exercises/BARBELL_BENCH_PRESS/last')
+        .expect(401);
+    });
+
+    it('rejects an unknown exercise type', async () => {
+      const accessToken = await newVerifiedUser('last-bad-enum');
+
+      await request(app.getHttpServer())
+        .get('/workout-exercises/NOT_AN_EXERCISE/last')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(400);
+    });
+
+    it('returns null when the user has never logged that exercise before', async () => {
+      const accessToken = await newVerifiedUser('last-null');
+      await createSession(accessToken, {
+        exercises: [
+          { exerciseType: 'LAT_PULLDOWN', sets: [{ reps: 10, weightKg: 40 }] },
+        ],
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/workout-exercises/BARBELL_BENCH_PRESS/last')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      // Nest sends a null controller return value as an empty body (rather
+      // than the literal JSON token `null`), which supertest/superagent
+      // surfaces as `{}` — assert on that observable shape.
+      expect(res.body).toEqual({});
+    });
+
+    it('returns the most recent prior session’s sets for that exercise, scoped to the requesting user', async () => {
+      const accessToken = await newVerifiedUser('last-hit');
+
+      await createSession(accessToken, {
+        date: '2026-01-01',
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 55 }],
+          },
+        ],
+      });
+      await createSession(accessToken, {
+        date: '2026-01-15',
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [
+              { reps: 8, weightKg: 62.5 },
+              { reps: 6, weightKg: 65 },
+            ],
+          },
+        ],
+      });
+
+      const strangerToken = await newVerifiedUser('last-stranger');
+      await createSession(strangerToken, {
+        date: '2026-01-20',
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 20, weightKg: 100 }],
+          },
+        ],
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/workout-exercises/BARBELL_BENCH_PRESS/last')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+
+      const body = res.body as {
+        loggedForDate: string;
+        sets: { reps: number; weightKg: string | null }[];
+      };
+      expect(body.loggedForDate.slice(0, 10)).toBe('2026-01-15');
+      const sets = body.sets;
+      expect(sets).toHaveLength(2);
+      expect(sets[0]).toMatchObject({ reps: 8 });
+      expect(Number(sets[0].weightKg)).toBe(62.5);
+      expect(sets[1]).toMatchObject({ reps: 6 });
+      expect(Number(sets[1].weightKg)).toBe(65);
+    });
+  });
+
   describe('POST /workout-sessions', () => {
     it('rejects an unauthenticated request', async () => {
       await request(app.getHttpServer())
@@ -140,7 +257,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: ['CHEST'],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
         })
         .expect(401);
     });
@@ -200,7 +319,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: [],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
         })
         .expect(400);
     });
@@ -228,7 +349,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: ['CHEST'],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 0 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 0 }] },
+          ],
         })
         .expect(400);
     });
@@ -243,7 +366,10 @@ describe('Workouts (e2e)', () => {
           date: '2026-01-15',
           muscleGroups: ['CHEST'],
           exercises: [
-            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60.123 }] },
+            {
+              exerciseType: 'BARBELL_BENCH_PRESS',
+              sets: [{ reps: 10, weightKg: 60.123 }],
+            },
           ],
         })
         .expect(400);
@@ -258,7 +384,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: ['CHEST'],
-          exercises: [{ exerciseType: 'PUSH_UPS', sets: [{ reps: 20, weightKg: 0 }] }],
+          exercises: [
+            { exerciseType: 'PUSH_UPS', sets: [{ reps: 20, weightKg: 0 }] },
+          ],
         })
         .expect(400);
     });
@@ -276,7 +404,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: futureDate,
           muscleGroups: ['CHEST'],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
         })
         .expect(400);
     });
@@ -290,7 +420,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: ['NOT_A_MUSCLE_GROUP'],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
         })
         .expect(400);
     });
@@ -325,14 +457,22 @@ describe('Workouts (e2e)', () => {
         date: '2026-01-11',
         muscleGroups: ['CHEST', 'TRICEPS'],
         exercises: [
-          { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] },
-          { exerciseType: 'CABLE_TRICEPS_PUSHDOWN', sets: [{ reps: 12, weightKg: 20 }] },
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 60 }],
+          },
+          {
+            exerciseType: 'CABLE_TRICEPS_PUSHDOWN',
+            sets: [{ reps: 12, weightKg: 20 }],
+          },
         ],
       });
       await createSession(accessToken, {
         date: '2026-01-12',
         muscleGroups: ['LEGS'],
-        exercises: [{ exerciseType: 'BARBELL_SQUAT', sets: [{ reps: 5, weightKg: 100 }] }],
+        exercises: [
+          { exerciseType: 'BARBELL_SQUAT', sets: [{ reps: 5, weightKg: 100 }] },
+        ],
       });
 
       const chestRes = await request(app.getHttpServer())
@@ -341,12 +481,17 @@ describe('Workouts (e2e)', () => {
         .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
 
-      const chestSessions = chestRes.body as { id: string; exercises: { exerciseType: string }[] }[];
+      const chestSessions = chestRes.body as {
+        id: string;
+        exercises: { exerciseType: string }[];
+      }[];
       expect(chestSessions).toHaveLength(1);
       expect(chestSessions[0].id).toBe(mixed.id);
       // Pre-filtered: only the Chest exercise, the Triceps one is hidden.
       expect(chestSessions[0].exercises).toHaveLength(1);
-      expect(chestSessions[0].exercises[0].exerciseType).toBe('BARBELL_BENCH_PRESS');
+      expect(chestSessions[0].exercises[0].exerciseType).toBe(
+        'BARBELL_BENCH_PRESS',
+      );
 
       const backRes = await request(app.getHttpServer())
         .get('/workout-sessions')
@@ -383,8 +528,14 @@ describe('Workouts (e2e)', () => {
       const mixed = await createSession(accessToken, {
         muscleGroups: ['CHEST', 'TRICEPS'],
         exercises: [
-          { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] },
-          { exerciseType: 'CABLE_TRICEPS_PUSHDOWN', sets: [{ reps: 12, weightKg: 20 }] },
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 60 }],
+          },
+          {
+            exerciseType: 'CABLE_TRICEPS_PUSHDOWN',
+            sets: [{ reps: 12, weightKg: 20 }],
+          },
         ],
       });
 
@@ -402,10 +553,13 @@ describe('Workouts (e2e)', () => {
         .set('Authorization', `Bearer ${accessToken}`)
         .expect(200);
 
-      const exerciseTypes = (res.body.exercises as { exerciseType: string }[]).map(
-        (e) => e.exerciseType,
-      );
-      expect(exerciseTypes).toEqual(['BARBELL_BENCH_PRESS', 'CABLE_TRICEPS_PUSHDOWN']);
+      const exerciseTypes = (
+        res.body.exercises as { exerciseType: string }[]
+      ).map((e) => e.exerciseType);
+      expect(exerciseTypes).toEqual([
+        'BARBELL_BENCH_PRESS',
+        'CABLE_TRICEPS_PUSHDOWN',
+      ]);
     });
 
     it('returns 404 for another user’s session', async () => {
@@ -425,7 +579,12 @@ describe('Workouts (e2e)', () => {
       const accessToken = await newVerifiedUser('edit');
       const created = await createSession(accessToken, {
         muscleGroups: ['CHEST'],
-        exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10, weightKg: 60 }] }],
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 60 }],
+          },
+        ],
       });
 
       const res = await request(app.getHttpServer())
@@ -435,7 +594,10 @@ describe('Workouts (e2e)', () => {
           date: '2026-01-16',
           muscleGroups: ['BACK', 'BICEPS'],
           exercises: [
-            { exerciseType: 'LAT_PULLDOWN', sets: [{ reps: 12, weightKg: 45 }] },
+            {
+              exerciseType: 'LAT_PULLDOWN',
+              sets: [{ reps: 12, weightKg: 45 }],
+            },
             { exerciseType: 'BARBELL_CURL', sets: [{ reps: 10 }, { reps: 8 }] },
           ],
         })
@@ -443,9 +605,9 @@ describe('Workouts (e2e)', () => {
 
       expect(res.body.id).toBe(created.id);
       expect(res.body.muscleGroups).toEqual(['BACK', 'BICEPS']);
-      const exerciseTypes = (res.body.exercises as { exerciseType: string }[]).map(
-        (e) => e.exerciseType,
-      );
+      const exerciseTypes = (
+        res.body.exercises as { exerciseType: string }[]
+      ).map((e) => e.exerciseType);
       expect(exerciseTypes).toEqual(['LAT_PULLDOWN', 'BARBELL_CURL']);
     });
 
@@ -462,7 +624,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: tomorrow.toISOString().slice(0, 10),
           muscleGroups: ['CHEST'],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
         })
         .expect(400);
     });
@@ -478,7 +642,9 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: ['CHEST'],
-          exercises: [{ exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] }],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
         })
         .expect(404);
     });

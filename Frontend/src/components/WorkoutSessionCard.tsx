@@ -10,6 +10,7 @@ import {
 import { WorkoutSessionForm } from './WorkoutSessionForm';
 import { Card } from './ui/Card';
 import { SecondaryButton } from './ui/Button';
+import { formatLocalDate } from '../utils/dates';
 
 interface Props {
   session: WorkoutSession;
@@ -17,14 +18,11 @@ interface Props {
   onChanged: () => void;
 }
 
-function formatSessionDate(loggedForDate: string): string {
-  const [year, month, day] = loggedForDate.slice(0, 10).split('-').map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-}
+const SESSION_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+};
 
 function formatSet(set: { reps: number; weightKg: string | null }): string {
   return set.weightKg != null ? `${set.reps} × ${set.weightKg} kg` : `${set.reps} reps (bodyweight)`;
@@ -82,7 +80,9 @@ export function WorkoutSessionCard({ session, catalog, onChanged }: Props) {
   return (
     <Card className="flex flex-col gap-3 p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-body text-text">{formatSessionDate(session.loggedForDate)}</span>
+        <span className="text-body text-text">
+          {formatLocalDate(session.loggedForDate, SESSION_DATE_FORMAT)}
+        </span>
         <div className="flex flex-wrap gap-1.5">
           {session.muscleGroups.map((group) => (
             <span

@@ -6,11 +6,13 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseEnumPipe,
   Patch,
   Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
+import { WorkoutExerciseType } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import {
   CurrentUser,
@@ -28,6 +30,18 @@ export class WorkoutsController {
   @Get('workout-exercises')
   getExerciseCatalog() {
     return this.workoutsService.getExerciseCatalog();
+  }
+
+  @Get('workout-exercises/:exerciseType/last')
+  getLastLoggedExercise(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('exerciseType', new ParseEnumPipe(WorkoutExerciseType))
+    exerciseType: WorkoutExerciseType,
+  ) {
+    return this.workoutsService.getLastLoggedExercise(
+      user.userId,
+      exerciseType,
+    );
   }
 
   @Post('workout-sessions')

@@ -13,6 +13,7 @@ import { Card } from '../components/ui/Card';
 import { ProgressRing } from '../components/ui/ProgressRing';
 import { SecondaryButton } from '../components/ui/Button';
 import { MicIcon, PlusCircleIcon, ScanIcon } from '../components/ui/icons';
+import { formatLocalDate } from '../utils/dates';
 
 function greetingForHour(hour: number): string {
   if (hour < 12) return 'Good morning';
@@ -20,15 +21,14 @@ function greetingForHour(hour: number): string {
   return 'Good evening';
 }
 
+const DASHBOARD_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+  weekday: 'long',
+  month: 'short',
+  day: 'numeric',
+};
+
 function formatDisplayDate(dateStr: string): string {
-  // dateStr is YYYY-MM-DD; parse as local calendar date, not UTC, so it
-  // doesn't shift a day depending on the browser's own offset.
-  const [year, month, day] = dateStr.split('-').map(Number);
-  return new Date(year, month - 1, day).toLocaleDateString(undefined, {
-    weekday: 'long',
-    month: 'short',
-    day: 'numeric',
-  });
+  return formatLocalDate(dateStr, DASHBOARD_DATE_FORMAT);
 }
 
 // Remembers the selected history date for the rest of the browser tab's

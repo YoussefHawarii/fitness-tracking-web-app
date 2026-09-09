@@ -1,5 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { MuscleGroup, Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { MuscleGroup, Prisma, WorkoutExerciseType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { WORKOUT_EXERCISE_CATALOG } from './workout-exercise-catalog';
 import { CreateWorkoutSessionDto } from './dto/create-workout-session.dto';
@@ -19,6 +23,28 @@ export class WorkoutsService {
     return WORKOUT_EXERCISE_CATALOG;
   }
 
+  async getLastLoggedExercise(
+    userId: string,
+    exerciseType: WorkoutExerciseType,
+  ) {
+    const exercise = await this.prisma.workoutExercise.findFirst({
+      where: { exerciseType, workoutSession: { userId } },
+      orderBy: [
+        { workoutSession: { loggedForDate: 'desc' } },
+        { workoutSession: { createdAt: 'desc' } },
+      ],
+      include: {
+        sets: { orderBy: { setNumber: 'asc' } },
+        workoutSession: { select: { loggedForDate: true } },
+      },
+    });
+    if (!exercise) return null;
+    return {
+      loggedForDate: exercise.workoutSession.loggedForDate,
+      sets: exercise.sets,
+    };
+  }
+
   async createSession(userId: string, dto: CreateWorkoutSessionDto) {
     this.assertNotFutureDate(dto.date);
 
@@ -35,9 +61,9 @@ export class WorkoutsService {
 
   async listSessions(userId: string, muscleGroup?: MuscleGroup) {
     const exerciseTypeFilter = muscleGroup
-      ? WORKOUT_EXERCISE_CATALOG.filter((entry) => entry.muscleGroup === muscleGroup).map(
-          (entry) => entry.exerciseType,
-        )
+      ? WORKOUT_EXERCISE_CATALOG.filter(
+          (entry) => entry.muscleGroup === muscleGroup,
+        ).map((entry) => entry.exerciseType)
       : undefined;
 
     return this.prisma.workoutSession.findMany({
@@ -50,7 +76,9 @@ export class WorkoutsService {
       orderBy: [{ loggedForDate: 'desc' }, { createdAt: 'desc' }],
       include: {
         exercises: {
-          where: exerciseTypeFilter ? { exerciseType: { in: exerciseTypeFilter } } : undefined,
+          where: exerciseTypeFilter
+            ? { exerciseType: { in: exerciseTypeFilter } }
+            : undefined,
           orderBy: { order: 'asc' },
           include: { sets: { orderBy: { setNumber: 'asc' } } },
         },
@@ -72,7 +100,11 @@ export class WorkoutsService {
     return session;
   }
 
-  async updateSession(userId: string, id: string, dto: CreateWorkoutSessionDto) {
+  async updateSession(
+    userId: string,
+    id: string,
+    dto: CreateWorkoutSessionDto,
+  ) {
     await this.requireOwnedSession(userId, id);
     this.assertNotFutureDate(dto.date);
 
@@ -100,7 +132,9 @@ export class WorkoutsService {
   }
 
   private async requireOwnedSession(userId: string, id: string) {
-    const existing = await this.prisma.workoutSession.findFirst({ where: { id, userId } });
+    const existing = await this.prisma.workoutSession.findFirst({
+      where: { id, userId },
+    });
     if (!existing) {
       throw new NotFoundException('Workout session not found.');
     }
@@ -114,7 +148,9 @@ export class WorkoutsService {
     }
   }
 
-  private buildExercisesCreateInput(exercises: CreateWorkoutSessionDto['exercises']) {
+  private buildExercisesCreateInput(
+    exercises: CreateWorkoutSessionDto['exercises'],
+  ) {
     return exercises.map((exercise, exerciseIndex) => ({
       exerciseType: exercise.exerciseType,
       order: exerciseIndex,

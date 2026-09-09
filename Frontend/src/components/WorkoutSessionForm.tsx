@@ -2,12 +2,15 @@ import { useMemo, useState } from 'react';
 import {
   createWorkoutSession,
   exerciseLabel,
+  getLastLoggedExercise,
   updateWorkoutSession,
   MUSCLE_GROUP_LABELS,
+  type LastLoggedExercise,
   type MuscleGroup,
   type WorkoutExerciseCatalogEntry,
   type WorkoutSession,
 } from '../services/workoutService';
+import { useAccountContext } from '../context/AccountContext';
 import { MuscleGroupChips } from './MuscleGroupChips';
 import { WorkoutExerciseEditor, type DraftExercise, type DraftSet } from './WorkoutExerciseEditor';
 import { Card } from './ui/Card';
@@ -52,6 +55,8 @@ function draftExercisesFrom(
 
 export function WorkoutSessionForm({ catalog, initialSession, onSaved, onCancel }: Props) {
   const isEditing = initialSession != null;
+  const { account } = useAccountContext();
+  const unitsPreference = account?.unitsPreference ?? 'KG';
 
   const [selectedMuscleGroups, setSelectedMuscleGroups] = useState<MuscleGroup[]>(
     initialSession?.muscleGroups ?? [],
@@ -60,6 +65,9 @@ export function WorkoutSessionForm({ catalog, initialSession, onSaved, onCancel 
   const [draftExercises, setDraftExercises] = useState<DraftExercise[]>(
     initialSession ? draftExercisesFrom(initialSession, catalog) : [],
   );
+  const [lastLoggedByExerciseId, setLastLoggedByExerciseId] = useState<
+    Record<string, LastLoggedExercise | null>
+  >({});
   const [date, setDate] = useState(initialSession?.loggedForDate.slice(0, 10) ?? todayLocalDate());
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -91,12 +99,16 @@ export function WorkoutSessionForm({ catalog, initialSession, onSaved, onCancel 
     if (!exerciseType) return;
     const entry = catalog.find((e) => e.exerciseType === exerciseType);
     if (!entry) return;
+    const exerciseId = newId();
     setDraftExercises((prev) => [
       ...prev,
-      { id: newId(), exerciseType: entry.exerciseType, label: entry.label, sets: [emptySet()] },
+      { id: exerciseId, exerciseType: entry.exerciseType, label: entry.label, sets: [emptySet()] },
     ]);
     setSelectedExerciseType('');
     setSaved(false);
+    getLastLoggedExercise(entry.exerciseType)
+      .then((result) => setLastLoggedByExerciseId((prev) => ({ ...prev, [exerciseId]: result })))
+      .catch(() => {});
   }
 
   function removeExercise(exerciseId: string) {
@@ -246,6 +258,8 @@ export function WorkoutSessionForm({ catalog, initialSession, onSaved, onCancel 
         <WorkoutExerciseEditor
           key={exercise.id}
           exercise={exercise}
+          lastLogged={lastLoggedByExerciseId[exercise.id]}
+          unitsPreference={unitsPreference}
           onRemove={() => removeExercise(exercise.id)}
           onAddSet={() => addSet(exercise.id)}
           onRemoveSet={(setId) => removeSet(exercise.id, setId)}

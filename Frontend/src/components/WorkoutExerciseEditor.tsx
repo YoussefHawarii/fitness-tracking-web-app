@@ -1,5 +1,9 @@
 import { Input } from './ui/Input';
 import { SecondaryButton } from './ui/Button';
+import { formatWeight } from '../utils/units';
+import { formatLocalDate } from '../utils/dates';
+import type { Units } from '../services/accountService';
+import type { LastLoggedExercise, WorkoutSet } from '../services/workoutService';
 
 export interface DraftSet {
   id: string;
@@ -16,13 +20,35 @@ export interface DraftExercise {
 
 interface Props {
   exercise: DraftExercise;
+  lastLogged?: LastLoggedExercise | null;
+  unitsPreference: Units;
   onRemove: () => void;
   onAddSet: () => void;
   onRemoveSet: (setId: string) => void;
   onUpdateSet: (setId: string, field: 'reps' | 'weightKg', value: string) => void;
 }
 
-export function WorkoutExerciseEditor({ exercise, onRemove, onAddSet, onRemoveSet, onUpdateSet }: Props) {
+const LAST_LOGGED_DATE_FORMAT: Intl.DateTimeFormatOptions = {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+};
+
+function formatLastSet(set: WorkoutSet, unitsPreference: Units): string {
+  return set.weightKg != null
+    ? `${set.reps} × ${formatWeight(Number(set.weightKg), unitsPreference)}`
+    : `${set.reps} reps (bodyweight)`;
+}
+
+export function WorkoutExerciseEditor({
+  exercise,
+  lastLogged,
+  unitsPreference,
+  onRemove,
+  onAddSet,
+  onRemoveSet,
+  onUpdateSet,
+}: Props) {
   return (
     <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface-raised p-4">
       <div className="flex items-center justify-between">
@@ -31,6 +57,13 @@ export function WorkoutExerciseEditor({ exercise, onRemove, onAddSet, onRemoveSe
           Remove
         </SecondaryButton>
       </div>
+
+      {lastLogged && (
+        <p className="text-label text-text-muted">
+          Last time ({formatLocalDate(lastLogged.loggedForDate, LAST_LOGGED_DATE_FORMAT)}):{' '}
+          {lastLogged.sets.map((set) => formatLastSet(set, unitsPreference)).join(', ')}
+        </p>
+      )}
 
       <div className="flex items-center gap-3 text-label text-text-muted">
         <span className="flex-1">Reps</span>

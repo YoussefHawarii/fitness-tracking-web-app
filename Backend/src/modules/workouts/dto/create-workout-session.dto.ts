@@ -1,6 +1,12 @@
 import { MuscleGroup } from '@prisma/client';
 import { Type } from 'class-transformer';
-import { ArrayMinSize, IsArray, IsDateString, IsEnum, ValidateNested } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsDateString,
+  IsEnum,
+  ValidateNested,
+} from 'class-validator';
 import { CreateWorkoutExerciseDto } from './create-workout-exercise.dto';
 
 export class CreateWorkoutSessionDto {

@@ -112,3 +112,17 @@ export async function updateWorkoutSession(
 export async function deleteWorkoutSession(id: string): Promise<void> {
   await apiClient.delete(`/workout-sessions/${id}`);
 }
+
+export interface LastLoggedExercise {
+  loggedForDate: string;
+  sets: WorkoutSet[];
+}
+
+// A backend `null` (never logged this exercise before) arrives over HTTP as
+// an empty body, which axios surfaces as `""`, not `null` — normalize both.
+export async function getLastLoggedExercise(
+  exerciseType: string,
+): Promise<LastLoggedExercise | null> {
+  const { data } = await apiClient.get(`/workout-exercises/${exerciseType}/last`);
+  return data || null;
+}
