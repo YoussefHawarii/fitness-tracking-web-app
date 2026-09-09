@@ -59,6 +59,84 @@ enum Appearance {
   DARK
 }
 
+enum MuscleGroup {
+  CHEST
+  BACK
+  SHOULDERS
+  BICEPS
+  TRICEPS
+  LEGS
+  CORE
+}
+
+enum WorkoutExerciseType {
+  // Chest
+  BARBELL_BENCH_PRESS
+  INCLINE_BARBELL_BENCH_PRESS
+  DUMBBELL_BENCH_PRESS
+  INCLINE_DUMBBELL_PRESS
+  MACHINE_CHEST_PRESS
+  INCLINE_MACHINE_CHEST_PRESS
+  PEC_DECK_FLY
+  CABLE_CROSSOVER
+  PUSH_UPS
+  CHEST_DIPS
+  // Back
+  LAT_PULLDOWN
+  SEATED_CABLE_ROW
+  BENT_OVER_BARBELL_ROW
+  ONE_ARM_DUMBBELL_ROW
+  T_BAR_ROW
+  PULL_UPS
+  CHIN_UPS
+  STRAIGHT_ARM_PULLDOWN
+  DEADLIFT
+  // Shoulders
+  BARBELL_OVERHEAD_PRESS
+  DUMBBELL_SHOULDER_PRESS
+  MACHINE_SHOULDER_PRESS
+  LATERAL_RAISE
+  FRONT_RAISE
+  REAR_DELT_FLY
+  CABLE_LATERAL_RAISE
+  ARNOLD_PRESS
+  SHRUGS
+  // Biceps
+  BARBELL_CURL
+  DUMBBELL_CURL
+  HAMMER_CURL
+  PREACHER_CURL
+  CONCENTRATION_CURL
+  CABLE_CURL
+  INCLINE_DUMBBELL_CURL
+  // Triceps
+  CABLE_TRICEPS_PUSHDOWN
+  OVERHEAD_TRICEPS_EXTENSION
+  SKULL_CRUSHERS
+  CLOSE_GRIP_BENCH_PRESS
+  TRICEPS_DIPS
+  ROPE_PUSHDOWN
+  // Legs
+  BARBELL_SQUAT
+  LEG_PRESS
+  LEG_EXTENSION
+  LEG_CURL
+  ROMANIAN_DEADLIFT
+  LUNGES
+  BULGARIAN_SPLIT_SQUAT
+  HIP_THRUST
+  CALF_RAISE
+  // Abs/Core
+  CRUNCHES
+  SIT_UPS
+  PLANK
+  HANGING_LEG_RAISE
+  CABLE_CRUNCH
+  RUSSIAN_TWIST
+  AB_WHEEL_ROLLOUT
+  LEG_RAISE
+}
+
 model User {
   id                    String      @id @default(uuid())
   username              String?     @unique
@@ -82,6 +160,7 @@ model User {
   foodLogEntries   FoodLogEntry[]
   exerciseLogs     ExerciseLogEntry[]
   weighIns         WeighIn[]
+  workoutSessions  WorkoutSession[]
   refreshTokens    RefreshToken[]
   otpCodes         OtpCode[]
 
@@ -194,4 +273,41 @@ model WeighIn {
 
   @@index([userId, loggedForDate])
   @@map("weigh_ins")
+}
+
+model WorkoutSession {
+  id             String            @id @default(uuid())
+  userId         String
+  user           User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  muscleGroups   MuscleGroup[]
+  loggedForDate  DateTime          @db.Date
+  createdAt      DateTime          @default(now())
+  exercises      WorkoutExercise[]
+
+  @@index([userId, loggedForDate])
+  @@map("workout_sessions")
+}
+
+model WorkoutExercise {
+  id                String              @id @default(uuid())
+  workoutSessionId  String
+  workoutSession    WorkoutSession      @relation(fields: [workoutSessionId], references: [id], onDelete: Cascade)
+  exerciseType      WorkoutExerciseType
+  order             Int
+  sets              WorkoutSet[]
+
+  @@index([workoutSessionId])
+  @@map("workout_exercises")
+}
+
+model WorkoutSet {
+  id                 String          @id @default(uuid())
+  workoutExerciseId  String
+  workoutExercise    WorkoutExercise @relation(fields: [workoutExerciseId], references: [id], onDelete: Cascade)
+  setNumber          Int
+  reps               Int
+  weightKg           Decimal?
+
+  @@index([workoutExerciseId])
+  @@map("workout_sets")
 }

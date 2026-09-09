@@ -3,6 +3,7 @@ import { NavLink } from 'react-router-dom';
 import { ProfileMenu } from './profile-menu/ProfileMenu';
 import {
   BarChartIcon,
+  DumbbellIcon,
   HomeIcon,
   PlusCircleIcon,
   TargetIcon,
@@ -11,6 +12,7 @@ import {
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Home', icon: HomeIcon },
   { to: '/food-log', label: 'Log food', icon: PlusCircleIcon },
+  { to: '/workouts', label: 'Workouts', icon: DumbbellIcon },
   { to: '/weight-trend', label: 'Progress', icon: BarChartIcon },
   { to: '/goals', label: 'Goals', icon: TargetIcon },
 ];

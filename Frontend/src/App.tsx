@@ -15,6 +15,7 @@ import { Dashboard } from './pages/Dashboard';
 import { FoodLog } from './pages/FoodLog';
 import { WeightTrend } from './pages/WeightTrend';
 import { Exercise } from './pages/Exercise';
+import { Workouts } from './pages/Workouts';
 import { Terms } from './pages/legal/Terms';
 import { Privacy } from './pages/legal/Privacy';
 import { Help } from './pages/legal/Help';
@@ -94,6 +95,14 @@ function App() {
               element={
                 <AppPage>
                   <Exercise />
+                </AppPage>
+              }
+            />
+            <Route
+              path="/workouts"
+              element={
+                <AppPage>
+                  <Workouts />
                 </AppPage>
               }
             />

@@ -9,6 +9,7 @@ import { UsersModule } from './modules/users/users.module';
 import { FoodModule } from './modules/food/food.module';
 import { CalorieBalanceModule } from './modules/calorie-balance/calorie-balance.module';
 import { WeightPredictionModule } from './modules/weight-prediction/weight-prediction.module';
+import { WorkoutsModule } from './modules/workouts/workouts.module';
 import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
 
 @Module({
@@ -24,6 +25,7 @@ import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
     FoodModule,
     CalorieBalanceModule,
     WeightPredictionModule,
+    WorkoutsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: UserThrottlerGuard }],
 })

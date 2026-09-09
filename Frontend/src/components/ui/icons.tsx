@@ -52,6 +52,14 @@ export function TargetIcon(props: IconProps) {
   );
 }
 
+export function DumbbellIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4.5 8v8M6 9v6M9 12h6M18 9v6M19.5 8v8" />
+    </svg>
+  );
+}
+
 export function UserIcon(props: IconProps) {
   return (
     <svg {...base(props)}>
