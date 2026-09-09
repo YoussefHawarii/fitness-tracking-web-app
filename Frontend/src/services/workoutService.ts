@@ -36,3 +36,45 @@ export async function getWorkoutExerciseCatalog(): Promise<WorkoutExerciseCatalo
   const { data } = await apiClient.get('/workout-exercises');
   return data;
 }
+
+export interface WorkoutSet {
+  id: string;
+  reps: number;
+  weightKg: string | null;
+}
+
+export interface WorkoutExercise {
+  id: string;
+  exerciseType: string;
+  sets: WorkoutSet[];
+}
+
+export interface WorkoutSession {
+  id: string;
+  muscleGroups: MuscleGroup[];
+  loggedForDate: string;
+  exercises: WorkoutExercise[];
+}
+
+export interface CreateWorkoutSetInput {
+  reps: number;
+  weightKg?: number;
+}
+
+export interface CreateWorkoutExerciseInput {
+  exerciseType: string;
+  sets: CreateWorkoutSetInput[];
+}
+
+export interface CreateWorkoutSessionInput {
+  date: string;
+  muscleGroups: MuscleGroup[];
+  exercises: CreateWorkoutExerciseInput[];
+}
+
+export async function createWorkoutSession(
+  input: CreateWorkoutSessionInput,
+): Promise<WorkoutSession> {
+  const { data } = await apiClient.post('/workout-sessions', input);
+  return data;
+}
