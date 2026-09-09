@@ -11,6 +11,9 @@ import { WorkoutSessionForm } from './WorkoutSessionForm';
 import { Card } from './ui/Card';
 import { SecondaryButton } from './ui/Button';
 import { formatLocalDate } from '../utils/dates';
+import { formatWeight } from '../utils/units';
+import { useAccountContext } from '../context/AccountContext';
+import type { Units } from '../services/accountService';
 
 interface Props {
   session: WorkoutSession;
@@ -24,11 +27,15 @@ const SESSION_DATE_FORMAT: Intl.DateTimeFormatOptions = {
   day: 'numeric',
 };
 
-function formatSet(set: { reps: number; weightKg: string | null }): string {
-  return set.weightKg != null ? `${set.reps} × ${set.weightKg} kg` : `${set.reps} reps (bodyweight)`;
+function formatSet(set: { reps: number; weightKg: string | null }, unitsPreference: Units): string {
+  return set.weightKg != null
+    ? `${set.reps} × ${formatWeight(Number(set.weightKg), unitsPreference)}`
+    : `${set.reps} reps (bodyweight)`;
 }
 
 export function WorkoutSessionCard({ session, catalog, onChanged }: Props) {
+  const { account } = useAccountContext();
+  const unitsPreference = account?.unitsPreference ?? 'KG';
   const [editSession, setEditSession] = useState<WorkoutSession | null>(null);
   const [loadingEdit, setLoadingEdit] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -100,7 +107,7 @@ export function WorkoutSessionCard({ session, catalog, onChanged }: Props) {
           <div key={exercise.id}>
             <p className="text-body text-text">{exerciseLabel(exercise.exerciseType, catalog)}</p>
             <p className="text-label text-text-muted">
-              {exercise.sets.map(formatSet).join(', ')}
+              {exercise.sets.map((set) => formatSet(set, unitsPreference)).join(', ')}
             </p>
           </div>
         ))}
