@@ -72,7 +72,8 @@
     "typescript-eslint": "^8.20.0"
   },
   "overrides": {
-    "deepmerge-ts": "^8.0.0"
+    "deepmerge-ts": "^8.0.0",
+    "multer": "^2.3.0"
   },
   "jest": {
     "moduleFileExtensions": [
