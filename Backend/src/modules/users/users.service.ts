@@ -129,7 +129,14 @@ export class UsersService {
   }
 
   async confirmAvatarUpload(userId: string, dto: UploadAvatarDto) {
-    await this.cloudinaryService.verifyUpload(userId, dto.publicId);
+    // The client-submitted dto.url is never persisted: only Cloudinary's own
+    // verified secure_url for the confirmed resource is trusted, so a client
+    // can't point avatarUrl at an arbitrary URL unrelated to what it actually
+    // uploaded.
+    const avatarUrl = await this.cloudinaryService.verifyUpload(
+      userId,
+      dto.publicId,
+    );
 
     const existing = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -141,9 +148,9 @@ export class UsersService {
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { avatarUrl: dto.url, avatarPublicId: dto.publicId },
+      data: { avatarUrl, avatarPublicId: dto.publicId },
     });
-    return { avatarUrl: dto.url };
+    return { avatarUrl };
   }
 
   async removeAvatar(userId: string) {

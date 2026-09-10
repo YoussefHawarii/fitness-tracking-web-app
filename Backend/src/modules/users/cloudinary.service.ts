@@ -60,7 +60,9 @@ export class CloudinaryService {
   // Confirms the given asset actually exists and was uploaded to this
   // user's own signed folder — never trust a client-supplied publicId/url
   // pair blindly (data-model.md's avatarUrl/avatarPublicId validation rule).
-  async verifyUpload(userId: string, publicId: string): Promise<void> {
+  // Returns Cloudinary's own secure_url for the verified resource, which the
+  // caller should persist instead of whatever url the client submitted.
+  async verifyUpload(userId: string, publicId: string): Promise<string> {
     const expectedFolder = this.folderFor(userId);
     if (!publicId.startsWith(`${expectedFolder}/`)) {
       throw new BadRequestException(
@@ -68,7 +70,11 @@ export class CloudinaryService {
       );
     }
     try {
-      await cloudinary.api.resource(publicId);
+      // cloudinary's own types declare api.resource() as Promise<any>.
+      const resource = (await cloudinary.api.resource(publicId)) as {
+        secure_url: string;
+      };
+      return resource.secure_url;
     } catch {
       throw new BadRequestException('Could not verify the uploaded asset.');
     }

@@ -34,7 +34,12 @@ describe('Account/Settings (e2e)', () => {
           ),
         );
       }
-      return Promise.resolve();
+      // Mirrors the real CloudinaryService returning its own verified
+      // secure_url for the resource, deliberately not just echoing back
+      // whatever url the caller submitted.
+      return Promise.resolve(
+        `https://res.cloudinary.com/test-cloud/image/upload/v1/${publicId}.jpg`,
+      );
     },
     destroyAsset: () => Promise.resolve(),
   };

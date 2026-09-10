@@ -36,7 +36,13 @@ function buildService(
       folder: 'avatars/u_x',
       uploadUrl: 'https://api.cloudinary.com/v1_1/c/image/upload',
     })),
-    verifyUpload: overrides.verifyUpload ?? jest.fn(() => Promise.resolve()),
+    verifyUpload:
+      overrides.verifyUpload ??
+      jest.fn(() =>
+        Promise.resolve(
+          'https://res.cloudinary.com/c/image/upload/v1/avatars/u_x/default.jpg',
+        ),
+      ),
     destroyAsset: overrides.destroyAsset ?? jest.fn(() => Promise.resolve()),
   };
   const authService = {
@@ -90,28 +96,40 @@ describe('UsersService.updateDisplayName / getAccount', () => {
 });
 
 describe('UsersService avatar upload/remove', () => {
-  it('confirmAvatarUpload verifies the upload, destroys the previous asset, and persists the new one', async () => {
+  it("confirmAvatarUpload persists Cloudinary's own verified URL, destroys the previous asset, and ignores whatever url the client submitted", async () => {
     const destroyAsset = jest.fn(() => Promise.resolve());
+    const verifyUpload = jest.fn(() =>
+      Promise.resolve(
+        'https://res.cloudinary.com/c/image/upload/v1/avatars/u_u1/verified.jpg',
+      ),
+    );
     const { service, prisma } = buildService({
       findUniqueUser: () => ({ avatarPublicId: 'avatars/u_u1/old' }),
       destroyAsset,
+      verifyUpload,
     });
 
     const result = await service.confirmAvatarUpload('u1', {
-      url: 'https://res.cloudinary.com/c/image/upload/v1/avatars/u_u1/new.jpg',
+      // Deliberately different from what verifyUpload resolves with — a
+      // malicious or buggy client shouldn't be able to make this the
+      // persisted avatarUrl.
+      url: 'https://attacker.example.com/unrelated.jpg',
       publicId: 'avatars/u_u1/new',
     });
 
+    expect(verifyUpload).toHaveBeenCalledWith('u1', 'avatars/u_u1/new');
     expect(destroyAsset).toHaveBeenCalledWith('avatars/u_u1/old');
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: 'u1' },
       data: {
         avatarUrl:
-          'https://res.cloudinary.com/c/image/upload/v1/avatars/u_u1/new.jpg',
+          'https://res.cloudinary.com/c/image/upload/v1/avatars/u_u1/verified.jpg',
         avatarPublicId: 'avatars/u_u1/new',
       },
     });
-    expect(result.avatarUrl).toContain('new.jpg');
+    expect(result.avatarUrl).toBe(
+      'https://res.cloudinary.com/c/image/upload/v1/avatars/u_u1/verified.jpg',
+    );
   });
 
   it('removeAvatar destroys the stored asset and clears both fields', async () => {
