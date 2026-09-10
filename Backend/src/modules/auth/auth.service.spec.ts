@@ -2,11 +2,59 @@ import {
   BadGatewayException,
   ConflictException,
   ForbiddenException,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { AuthService } from './auth.service';
+
+// Minimal fake UserModel that forwards to whatever fake `prisma.user` /
+// `prisma.userBaseline` mock each block below already defines — keeps every
+// existing prisma.user.* assertion in this file working unchanged. The index
+// signature lets a block's prisma fake (e.g. { refreshToken, otpCode } only)
+// satisfy this type without TS flagging it as having nothing in common.
+type Mock = jest.Mock<unknown, any[]>;
+interface FakePrismaForUserModel {
+  user?: { findUnique: Mock; create?: Mock; update?: Mock };
+  userBaseline?: { findUnique?: Mock; upsert?: Mock; update?: Mock };
+  [key: string]: unknown;
+}
+
+function fakeUserModel(prisma: FakePrismaForUserModel) {
+  return {
+    findById: (id: string) => prisma.user?.findUnique({ where: { id } }),
+    findByIdOrThrow: async (id: string) => {
+      const user = await prisma.user?.findUnique({ where: { id } });
+      if (!user) throw new NotFoundException('User not found.');
+      return user;
+    },
+    findByEmail: (email: string) =>
+      prisma.user?.findUnique({ where: { email } }),
+    findByUsername: (username: string) =>
+      prisma.user?.findUnique({ where: { username } }),
+    findByGoogleSubjectId: (googleSubjectId: string) =>
+      prisma.user?.findUnique({ where: { googleSubjectId } }),
+    create: (data: Record<string, unknown>) => prisma.user?.create?.({ data }),
+    update: (id: string, data: Record<string, unknown>) =>
+      prisma.user?.update?.({ where: { id }, data }),
+    findBaselineByUserId: (userId: string) =>
+      prisma.userBaseline?.findUnique?.({ where: { userId } }),
+    findBaselineWithTimezone: (userId: string) =>
+      prisma.userBaseline?.findUnique?.({
+        where: { userId },
+        include: { user: { select: { timezone: true } } },
+      }),
+    upsertBaseline: (userId: string, data: Record<string, unknown>) =>
+      prisma.userBaseline?.upsert?.({
+        where: { userId },
+        create: { userId, ...data },
+        update: data,
+      }),
+    updateBaseline: (userId: string, data: Record<string, unknown>) =>
+      prisma.userBaseline?.update?.({ where: { userId }, data }),
+  };
+}
 
 // Covers FR-005: refreshTokens() must reject expired, revoked,
 // already-rotated (mismatched hash), and malformed/unverifiable refresh
@@ -64,12 +112,15 @@ describe('AuthService.refreshTokens', () => {
 
     const service = new AuthService(
       prisma as unknown as ConstructorParameters<typeof AuthService>[0],
-      jwtService as unknown as ConstructorParameters<typeof AuthService>[1],
-      configService as unknown as ConstructorParameters<typeof AuthService>[2],
-      mailService as unknown as ConstructorParameters<typeof AuthService>[3],
+      fakeUserModel(prisma) as unknown as ConstructorParameters<
+        typeof AuthService
+      >[1],
+      jwtService as unknown as ConstructorParameters<typeof AuthService>[2],
+      configService as unknown as ConstructorParameters<typeof AuthService>[3],
+      mailService as unknown as ConstructorParameters<typeof AuthService>[4],
       refreshJwtService as unknown as ConstructorParameters<
         typeof AuthService
-      >[4],
+      >[5],
     );
 
     return { service, prisma, refreshJwtService };
@@ -221,12 +272,15 @@ describe('AuthService.signup (OTP)', () => {
 
     const service = new AuthService(
       prisma as unknown as ConstructorParameters<typeof AuthService>[0],
-      jwtService as unknown as ConstructorParameters<typeof AuthService>[1],
-      configService as unknown as ConstructorParameters<typeof AuthService>[2],
-      mailService as unknown as ConstructorParameters<typeof AuthService>[3],
+      fakeUserModel(prisma) as unknown as ConstructorParameters<
+        typeof AuthService
+      >[1],
+      jwtService as unknown as ConstructorParameters<typeof AuthService>[2],
+      configService as unknown as ConstructorParameters<typeof AuthService>[3],
+      mailService as unknown as ConstructorParameters<typeof AuthService>[4],
       refreshJwtService as unknown as ConstructorParameters<
         typeof AuthService
-      >[4],
+      >[5],
     );
 
     return { service, prisma, mailService };
@@ -358,12 +412,15 @@ describe('AuthService.verifyOtp', () => {
 
     const service = new AuthService(
       prisma as unknown as ConstructorParameters<typeof AuthService>[0],
-      jwtService as unknown as ConstructorParameters<typeof AuthService>[1],
-      configService as unknown as ConstructorParameters<typeof AuthService>[2],
-      mailService as unknown as ConstructorParameters<typeof AuthService>[3],
+      fakeUserModel(prisma) as unknown as ConstructorParameters<
+        typeof AuthService
+      >[1],
+      jwtService as unknown as ConstructorParameters<typeof AuthService>[2],
+      configService as unknown as ConstructorParameters<typeof AuthService>[3],
+      mailService as unknown as ConstructorParameters<typeof AuthService>[4],
       refreshJwtService as unknown as ConstructorParameters<
         typeof AuthService
-      >[4],
+      >[5],
     );
 
     return { service, prisma, mailService };
@@ -483,12 +540,15 @@ describe('AuthService.login (email verification gate)', () => {
 
     const service = new AuthService(
       prisma as unknown as ConstructorParameters<typeof AuthService>[0],
-      jwtService as unknown as ConstructorParameters<typeof AuthService>[1],
-      configService as unknown as ConstructorParameters<typeof AuthService>[2],
-      mailService as unknown as ConstructorParameters<typeof AuthService>[3],
+      fakeUserModel(prisma) as unknown as ConstructorParameters<
+        typeof AuthService
+      >[1],
+      jwtService as unknown as ConstructorParameters<typeof AuthService>[2],
+      configService as unknown as ConstructorParameters<typeof AuthService>[3],
+      mailService as unknown as ConstructorParameters<typeof AuthService>[4],
       refreshJwtService as unknown as ConstructorParameters<
         typeof AuthService
-      >[4],
+      >[5],
     );
 
     await expect(
@@ -532,12 +592,15 @@ describe('AuthService.resendOtp', () => {
 
     const service = new AuthService(
       prisma as unknown as ConstructorParameters<typeof AuthService>[0],
-      jwtService as unknown as ConstructorParameters<typeof AuthService>[1],
-      configService as unknown as ConstructorParameters<typeof AuthService>[2],
-      mailService as unknown as ConstructorParameters<typeof AuthService>[3],
+      fakeUserModel(prisma) as unknown as ConstructorParameters<
+        typeof AuthService
+      >[1],
+      jwtService as unknown as ConstructorParameters<typeof AuthService>[2],
+      configService as unknown as ConstructorParameters<typeof AuthService>[3],
+      mailService as unknown as ConstructorParameters<typeof AuthService>[4],
       refreshJwtService as unknown as ConstructorParameters<
         typeof AuthService
-      >[4],
+      >[5],
     );
 
     return { service, prisma, mailService };
@@ -605,12 +668,15 @@ describe('AuthService.cleanupExpiredOtpCodes', () => {
 
     const service = new AuthService(
       prisma as unknown as ConstructorParameters<typeof AuthService>[0],
-      jwtService as unknown as ConstructorParameters<typeof AuthService>[1],
-      configService as unknown as ConstructorParameters<typeof AuthService>[2],
-      mailService as unknown as ConstructorParameters<typeof AuthService>[3],
+      fakeUserModel(prisma) as unknown as ConstructorParameters<
+        typeof AuthService
+      >[1],
+      jwtService as unknown as ConstructorParameters<typeof AuthService>[2],
+      configService as unknown as ConstructorParameters<typeof AuthService>[3],
+      mailService as unknown as ConstructorParameters<typeof AuthService>[4],
       refreshJwtService as unknown as ConstructorParameters<
         typeof AuthService
-      >[4],
+      >[5],
     );
 
     await service.cleanupExpiredOtpCodes();

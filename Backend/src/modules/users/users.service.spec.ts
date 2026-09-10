@@ -6,6 +6,51 @@ import {
 import * as bcrypt from 'bcrypt';
 import { UsersService } from './users.service';
 
+// Minimal fake UserModel that forwards to the same fake `prisma.user` /
+// `prisma.userBaseline` mocks buildService() below already defines — keeps
+// every existing prisma.user.* expectation in this file working unchanged.
+type Mock = jest.Mock<unknown, any[]>;
+function fakeUserModel(prisma: {
+  user: { findUnique: Mock; update: Mock };
+  userBaseline?: { findUnique?: Mock; upsert?: Mock; update?: Mock };
+}) {
+  return {
+    findById: (id: string) => prisma.user.findUnique({ where: { id } }),
+    findByIdOrThrow: async (id: string) => {
+      const user = await prisma.user.findUnique({ where: { id } });
+      if (!user) throw new NotFoundException('User not found.');
+      return user;
+    },
+    findByEmail: (email: string) =>
+      prisma.user.findUnique({ where: { email } }),
+    findByUsername: (username: string) =>
+      prisma.user.findUnique({ where: { username } }),
+    findByGoogleSubjectId: (googleSubjectId: string) =>
+      prisma.user.findUnique({ where: { googleSubjectId } }),
+    // UsersService never calls create() — only auth.service.ts does.
+    create: () => {
+      throw new Error('UserModel.create is not used by UsersService');
+    },
+    update: (id: string, data: Record<string, unknown>) =>
+      prisma.user.update({ where: { id }, data }),
+    findBaselineByUserId: (userId: string) =>
+      prisma.userBaseline?.findUnique?.({ where: { userId } }),
+    findBaselineWithTimezone: (userId: string) =>
+      prisma.userBaseline?.findUnique?.({
+        where: { userId },
+        include: { user: { select: { timezone: true } } },
+      }),
+    upsertBaseline: (userId: string, data: Record<string, unknown>) =>
+      prisma.userBaseline?.upsert?.({
+        where: { userId },
+        create: { userId, ...data },
+        update: data,
+      }),
+    updateBaseline: (userId: string, data: Record<string, unknown>) =>
+      prisma.userBaseline?.update?.({ where: { userId }, data }),
+  };
+}
+
 // Covers specs/008-sidebar-profile-account: display name, avatar
 // upload/remove, password change/set, and Google link/unlink — the ownership
 // and recompute/validation logic each guards.
@@ -55,10 +100,13 @@ function buildService(
 
   const service = new UsersService(
     prisma as unknown as ConstructorParameters<typeof UsersService>[0],
-    cloudinaryService as unknown as ConstructorParameters<
+    fakeUserModel(prisma) as unknown as ConstructorParameters<
       typeof UsersService
     >[1],
-    authService as unknown as ConstructorParameters<typeof UsersService>[2],
+    cloudinaryService as unknown as ConstructorParameters<
+      typeof UsersService
+    >[2],
+    authService as unknown as ConstructorParameters<typeof UsersService>[3],
   );
 
   return { service, prisma, cloudinaryService, authService };

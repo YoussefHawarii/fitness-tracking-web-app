@@ -5,6 +5,7 @@ import {
 } from '@nestjs/common';
 import { SportType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UserModel } from '../../db/models/user.model';
 import { getDayBoundaryUtc } from './day-boundary.util';
 import { calculateDailyBalance } from './balance-calculator';
 import { calculateExerciseCalories } from './exercise-calorie-calculator';
@@ -15,16 +16,17 @@ import { UpdateExerciseLogDto } from './dto/update-exercise-log.dto';
 
 @Injectable()
 export class CalorieBalanceService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly userModel: UserModel,
+  ) {}
 
   getSportCatalog() {
     return SPORT_CATALOG;
   }
 
   private async requireBaselineWeight(userId: string): Promise<number> {
-    const baseline = await this.prisma.userBaseline.findUnique({
-      where: { userId },
-    });
+    const baseline = await this.userModel.findBaselineByUserId(userId);
     if (!baseline) {
       throw new BadRequestException(
         'Complete onboarding (baseline weight) before logging exercise.',
@@ -101,18 +103,11 @@ export class CalorieBalanceService {
   }
 
   async getDailyBalance(userId: string, date: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-    });
-    if (!user) {
-      // Token references a user that no longer exists (e.g. a deleted
-      // account whose access token hasn't expired yet) — fail cleanly
-      // instead of letting Prisma's not-found error surface as a 500.
-      throw new NotFoundException('User not found.');
-    }
-    const baseline = await this.prisma.userBaseline.findUnique({
-      where: { userId },
-    });
+    // Token references a user that no longer exists (e.g. a deleted account
+    // whose access token hasn't expired yet) — fail cleanly instead of
+    // letting Prisma's not-found error surface as a 500.
+    const user = await this.userModel.findByIdOrThrow(userId);
+    const baseline = await this.userModel.findBaselineByUserId(userId);
 
     const { startUtc, endUtc } = getDayBoundaryUtc(date, user.timezone);
 

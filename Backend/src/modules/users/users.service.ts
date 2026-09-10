@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UserModel } from '../../db/models/user.model';
 import { AuthService } from '../auth/auth.service';
 import { calculateBaseline } from './baseline-calculator';
 import {
@@ -27,6 +28,7 @@ const BCRYPT_SALT_ROUNDS = 10;
 export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly userModel: UserModel,
     private readonly cloudinaryService: CloudinaryService,
     private readonly authService: AuthService,
   ) {}
@@ -64,34 +66,17 @@ export class UsersService {
       activityLevel: dto.activityLevel,
     });
 
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { timezone: dto.timezone },
-    });
+    await this.userModel.update(userId, { timezone: dto.timezone });
 
-    const baseline = await this.prisma.userBaseline.upsert({
-      where: { userId },
-      create: {
-        userId,
-        age: dto.age,
-        sex: dto.sex,
-        heightCm: dto.heightCm,
-        currentWeightKg: dto.currentWeightKg,
-        goalWeightKg: dto.goalWeightKg,
-        activityLevel: dto.activityLevel,
-        bmr,
-        tdee,
-      },
-      update: {
-        age: dto.age,
-        sex: dto.sex,
-        heightCm: dto.heightCm,
-        currentWeightKg: dto.currentWeightKg,
-        goalWeightKg: dto.goalWeightKg,
-        activityLevel: dto.activityLevel,
-        bmr,
-        tdee,
-      },
+    const baseline = await this.userModel.upsertBaseline(userId, {
+      age: dto.age,
+      sex: dto.sex,
+      heightCm: dto.heightCm,
+      currentWeightKg: dto.currentWeightKg,
+      goalWeightKg: dto.goalWeightKg,
+      activityLevel: dto.activityLevel,
+      bmr,
+      tdee,
     });
 
     return this.withGoalDirection(baseline);
@@ -101,10 +86,7 @@ export class UsersService {
   // — never returns the password hash, Google subject id, or Cloudinary
   // public id, only booleans/URLs derived from them.
   async getAccount(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found.');
-    }
+    const user = await this.userModel.findByIdOrThrow(userId);
     return {
       displayName: user.displayName ?? user.username ?? user.email,
       avatarUrl: user.avatarUrl,
@@ -117,10 +99,7 @@ export class UsersService {
   }
 
   async updateDisplayName(userId: string, dto: UpdateAccountDto) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { displayName: dto.displayName },
-    });
+    await this.userModel.update(userId, { displayName: dto.displayName });
     return this.getAccount(userId);
   }
 
@@ -138,41 +117,32 @@ export class UsersService {
       dto.publicId,
     );
 
-    const existing = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { avatarPublicId: true },
-    });
+    const existing = await this.userModel.findById(userId);
     if (existing?.avatarPublicId) {
       await this.cloudinaryService.destroyAsset(existing.avatarPublicId);
     }
 
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { avatarUrl, avatarPublicId: dto.publicId },
+    await this.userModel.update(userId, {
+      avatarUrl,
+      avatarPublicId: dto.publicId,
     });
     return { avatarUrl };
   }
 
   async removeAvatar(userId: string) {
-    const existing = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { avatarPublicId: true },
-    });
+    const existing = await this.userModel.findById(userId);
     if (existing?.avatarPublicId) {
       await this.cloudinaryService.destroyAsset(existing.avatarPublicId);
-      await this.prisma.user.update({
-        where: { id: userId },
-        data: { avatarUrl: null, avatarPublicId: null },
+      await this.userModel.update(userId, {
+        avatarUrl: null,
+        avatarPublicId: null,
       });
     }
     return { avatarUrl: null };
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found.');
-    }
+    const user = await this.userModel.findByIdOrThrow(userId);
     if (!user.passwordHash) {
       throw new UnauthorizedException(
         'This account has no password set yet — set one instead of changing it.',
@@ -186,10 +156,7 @@ export class UsersService {
       throw new UnauthorizedException('Current password is incorrect.');
     }
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_SALT_ROUNDS);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash },
-    });
+    await this.userModel.update(userId, { passwordHash });
     // A stolen refresh token must not survive a password change.
     await this.prisma.refreshToken.updateMany({
       where: { userId, revokedAt: null },
@@ -198,81 +165,58 @@ export class UsersService {
   }
 
   async setPassword(userId: string, dto: SetPasswordDto) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found.');
-    }
+    const user = await this.userModel.findByIdOrThrow(userId);
     if (user.passwordHash) {
       throw new ConflictException(
         'This account already has a password — use change password instead.',
       );
     }
     const passwordHash = await bcrypt.hash(dto.newPassword, BCRYPT_SALT_ROUNDS);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { passwordHash },
-    });
+    await this.userModel.update(userId, { passwordHash });
   }
 
   async linkGoogleAccount(userId: string, idToken: string) {
     const { subjectId } = await this.authService.verifyGoogleIdToken(idToken);
 
-    const existingOwner = await this.prisma.user.findUnique({
-      where: { googleSubjectId: subjectId },
-    });
+    const existingOwner = await this.userModel.findByGoogleSubjectId(subjectId);
     if (existingOwner && existingOwner.id !== userId) {
       throw new ConflictException(
         'This Google account is already linked to a different account.',
       );
     }
 
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { googleSubjectId: subjectId },
-    });
+    await this.userModel.update(userId, { googleSubjectId: subjectId });
     return { googleLinked: true };
   }
 
   async unlinkGoogleAccount(userId: string) {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found.');
-    }
+    const user = await this.userModel.findByIdOrThrow(userId);
     if (!user.passwordHash) {
       throw new ConflictException(
         'Set a password before unlinking Google — this is your only way to sign in.',
       );
     }
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { googleSubjectId: null },
-    });
+    await this.userModel.update(userId, { googleSubjectId: null });
     return { googleLinked: false };
   }
 
   async updatePreferences(userId: string, dto: UpdatePreferencesDto) {
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        ...(dto.unitsPreference !== undefined && {
-          unitsPreference: dto.unitsPreference,
-        }),
-        ...(dto.languagePreference !== undefined && {
-          languagePreference: dto.languagePreference,
-        }),
-        ...(dto.appearancePreference !== undefined && {
-          appearancePreference: dto.appearancePreference,
-        }),
-      },
+    await this.userModel.update(userId, {
+      ...(dto.unitsPreference !== undefined && {
+        unitsPreference: dto.unitsPreference,
+      }),
+      ...(dto.languagePreference !== undefined && {
+        languagePreference: dto.languagePreference,
+      }),
+      ...(dto.appearancePreference !== undefined && {
+        appearancePreference: dto.appearancePreference,
+      }),
     });
     return this.getAccount(userId);
   }
 
   async getGoals(userId: string) {
-    const baseline = await this.prisma.userBaseline.findUnique({
-      where: { userId },
-      include: { user: { select: { timezone: true } } },
-    });
+    const baseline = await this.userModel.findBaselineWithTimezone(userId);
     if (!baseline) {
       throw new NotFoundException(
         'No baseline found — complete onboarding first.',
@@ -304,9 +248,10 @@ export class UsersService {
       activityLevel: merged.activityLevel,
     });
 
-    const updated = await this.prisma.userBaseline.update({
-      where: { userId },
-      data: { ...merged, bmr, tdee },
+    const updated = await this.userModel.updateBaseline(userId, {
+      ...merged,
+      bmr,
+      tdee,
     });
 
     return this.withGoalDirection(updated);

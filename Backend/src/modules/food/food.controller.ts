@@ -5,7 +5,6 @@ import {
   Get,
   HttpCode,
   HttpStatus,
-  NotFoundException,
   Param,
   Patch,
   Post,
@@ -17,7 +16,7 @@ import {
   CurrentUser,
   type AuthenticatedUser,
 } from '../../common/decorators/current-user.decorator';
-import { PrismaService } from '../../prisma/prisma.service';
+import { UserModel } from '../../db/models/user.model';
 import { getDayBoundaryUtc } from '../calorie-balance/day-boundary.util';
 import { FoodService } from './food.service';
 import { CreateLocalFoodItemDto } from './dto/create-local-food-item.dto';
@@ -30,7 +29,7 @@ import { ListFoodLogsQueryDto } from './dto/list-food-logs-query.dto';
 export class FoodController {
   constructor(
     private readonly foodService: FoodService,
-    private readonly prisma: PrismaService,
+    private readonly userModel: UserModel,
   ) {}
 
   @Get('barcode/:code')
@@ -69,16 +68,10 @@ export class FoodController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: ListFoodLogsQueryDto,
   ) {
-    const record = await this.prisma.user.findUnique({
-      where: { id: user.userId },
-      select: { timezone: true },
-    });
-    if (!record) {
-      // Token references a user that no longer exists (e.g. a deleted
-      // account whose access token hasn't expired yet) — fail cleanly
-      // instead of letting Prisma's not-found error surface as a 500.
-      throw new NotFoundException('User not found.');
-    }
+    // Token references a user that no longer exists (e.g. a deleted account
+    // whose access token hasn't expired yet) — fail cleanly instead of
+    // letting Prisma's not-found error surface as a 500.
+    const record = await this.userModel.findByIdOrThrow(user.userId);
     const { startUtc, endUtc } = getDayBoundaryUtc(query.date, record.timezone);
     return this.foodService.listFoodLogsForDay(user.userId, startUtc, endUtc);
   }

@@ -16,6 +16,7 @@ import * as crypto from 'crypto';
 import { OAuth2Client } from 'google-auth-library';
 import { OtpPurpose } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UserModel } from '../../db/models/user.model';
 import { MailService } from '../mail/mail.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
@@ -43,6 +44,7 @@ export class AuthService {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly userModel: UserModel,
     private readonly jwtService: JwtService, // access-token secret
     private readonly configService: ConfigService,
     private readonly mailService: MailService,
@@ -92,18 +94,14 @@ export class AuthService {
   // FR-004) — it creates/reuses a pending, unverified account and emails a
   // 6-digit OTP instead. A session is only issued once verifyOtp succeeds.
   async signup(dto: SignupDto) {
-    const existingByEmail = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
+    const existingByEmail = await this.userModel.findByEmail(dto.email);
     if (existingByEmail?.emailVerified) {
       throw new ConflictException('An account with this email already exists.');
     }
 
     // Username must be unique, but a pending account resubmitting the same
     // username it already holds is not a conflict with itself (FR-002).
-    const usernameOwner = await this.prisma.user.findUnique({
-      where: { username: dto.username },
-    });
+    const usernameOwner = await this.userModel.findByUsername(dto.username);
     if (usernameOwner && usernameOwner.id !== existingByEmail?.id) {
       throw new ConflictException('This username is already taken.');
     }
@@ -113,21 +111,16 @@ export class AuthService {
     // Re-signing up against an existing *unverified* account reuses that
     // row and issues a fresh OTP, rather than erroring (spec Edge Cases).
     const user = existingByEmail
-      ? await this.prisma.user.update({
-          where: { id: existingByEmail.id },
-          data: {
-            username: dto.username,
-            passwordHash,
-            timezone: dto.timezone,
-          },
+      ? await this.userModel.update(existingByEmail.id, {
+          username: dto.username,
+          passwordHash,
+          timezone: dto.timezone,
         })
-      : await this.prisma.user.create({
-          data: {
-            username: dto.username,
-            email: dto.email,
-            passwordHash,
-            timezone: dto.timezone,
-          },
+      : await this.userModel.create({
+          username: dto.username,
+          email: dto.email,
+          passwordHash,
+          timezone: dto.timezone,
         });
 
     await this.issueAndSendOtp(user.id, user.email);
@@ -136,9 +129,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
+    const user = await this.userModel.findByEmail(dto.email);
     if (!user?.passwordHash) {
       throw new UnauthorizedException('Invalid email or password.');
     }
@@ -170,9 +161,7 @@ export class AuthService {
   // sign-in verifies email ownership itself but never runs the onboarding
   // step (specs/001-calorie-weight-tracking) the way the OTP flow does.
   private async userHasBaseline(userId: string): Promise<boolean> {
-    const baseline = await this.prisma.userBaseline.findUnique({
-      where: { userId },
-    });
+    const baseline = await this.userModel.findBaselineByUserId(userId);
     return baseline !== null;
   }
 
@@ -225,9 +214,7 @@ export class AuthService {
         'Invalid or expired code. Please request a new one.',
       );
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
+    const user = await this.userModel.findByEmail(dto.email);
     if (!user) {
       throw genericError();
     }
@@ -266,9 +253,8 @@ export class AuthService {
     }
 
     await this.prisma.otpCode.delete({ where: { id: otpCode.id } });
-    const verifiedUser = await this.prisma.user.update({
-      where: { id: user.id },
-      data: { emailVerified: true },
+    const verifiedUser = await this.userModel.update(user.id, {
+      emailVerified: true,
     });
 
     const { accessToken, refreshToken } =
@@ -292,9 +278,7 @@ export class AuthService {
   async resendOtp(dto: ResendOtpDto) {
     const genericResponse = { otpRequested: true };
 
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-    });
+    const user = await this.userModel.findByEmail(dto.email);
     if (!user || user.emailVerified) {
       return genericResponse;
     }
@@ -352,9 +336,8 @@ export class AuthService {
     const { email: googleEmail, subjectId: googleSubjectId } =
       await this.verifyGoogleIdToken(dto.idToken);
 
-    const existingByGoogleId = await this.prisma.user.findUnique({
-      where: { googleSubjectId },
-    });
+    const existingByGoogleId =
+      await this.userModel.findByGoogleSubjectId(googleSubjectId);
     if (existingByGoogleId) {
       const { accessToken, refreshToken } =
         await this.issueTokenPair(existingByGoogleId);
@@ -367,9 +350,7 @@ export class AuthService {
       };
     }
 
-    const existingByEmail = await this.prisma.user.findUnique({
-      where: { email: googleEmail },
-    });
+    const existingByEmail = await this.userModel.findByEmail(googleEmail);
 
     // Merge into an existing system account only if its email is already
     // verified — merging into an unverified email would let someone who
@@ -382,17 +363,15 @@ export class AuthService {
     }
 
     const user = existingByEmail
-      ? await this.prisma.user.update({
-          where: { id: existingByEmail.id },
-          data: { googleSubjectId, emailVerified: true },
+      ? await this.userModel.update(existingByEmail.id, {
+          googleSubjectId,
+          emailVerified: true,
         })
-      : await this.prisma.user.create({
-          data: {
-            email: googleEmail,
-            googleSubjectId,
-            emailVerified: true,
-            timezone: dto.timezone,
-          },
+      : await this.userModel.create({
+          email: googleEmail,
+          googleSubjectId,
+          emailVerified: true,
+          timezone: dto.timezone,
         });
 
     const { accessToken, refreshToken } = await this.issueTokenPair(user);

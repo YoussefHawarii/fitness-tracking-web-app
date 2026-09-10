@@ -4,6 +4,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from './config/config.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { DbModule } from './db/db.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { FoodModule } from './modules/food/food.module';
@@ -16,6 +17,7 @@ import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
   imports: [
     ConfigModule,
     PrismaModule,
+    DbModule,
     // 50 requests / rolling 5 minutes, keyed per user (or per IP if
     // unauthenticated) via UserThrottlerGuard below — FR-007 through FR-011.
     ThrottlerModule.forRoot([{ ttl: 300_000, limit: 50 }]),

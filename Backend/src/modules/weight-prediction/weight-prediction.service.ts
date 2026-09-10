@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UserModel } from '../../db/models/user.model';
 import { CalorieBalanceService } from '../calorie-balance/calorie-balance.service';
 import {
   calculatePredictedVsActual,
@@ -19,6 +20,7 @@ function isoDateNDaysBefore(dateStr: string, n: number): string {
 export class WeightPredictionService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly userModel: UserModel,
     private readonly calorieBalanceService: CalorieBalanceService,
   ) {}
 
@@ -63,9 +65,7 @@ export class WeightPredictionService {
     endDate: string,
     windowDays: number = DEFAULT_WINDOW_DAYS,
   ) {
-    const baseline = await this.prisma.userBaseline.findUnique({
-      where: { userId },
-    });
+    const baseline = await this.userModel.findBaselineByUserId(userId);
     if (!baseline) {
       return {
         insufficientData: true as const,
