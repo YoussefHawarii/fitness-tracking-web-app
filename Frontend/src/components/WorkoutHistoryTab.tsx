@@ -13,9 +13,10 @@ import { FieldLabel } from './ui/Input';
 
 interface Props {
   catalog: WorkoutExerciseCatalogEntry[];
+  catalogLoading: boolean;
 }
 
-export function WorkoutHistoryTab({ catalog }: Props) {
+export function WorkoutHistoryTab({ catalog, catalogLoading }: Props) {
   const [filter, setFilter] = useState<MuscleGroup | null>(null);
   const [sessions, setSessions] = useState<WorkoutSession[] | null>(null);
 
@@ -49,6 +50,7 @@ export function WorkoutHistoryTab({ catalog }: Props) {
               key={session.id}
               session={session}
               catalog={catalog}
+              catalogLoading={catalogLoading}
               onChanged={refresh}
             />
           ))}

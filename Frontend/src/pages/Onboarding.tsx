@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { submitOnboarding, type ActivityLevel, type Sex } from '../services/userService';
 import { Card, SegmentedControl } from '../components/ui/Card';
-import { Input, FieldLabel } from '../components/ui/Input';
+import { Input } from '../components/ui/Input';
 import { PrimaryButton } from '../components/ui/Button';
 import { getGoalDirection, GOAL_DIRECTION_LABEL } from '../utils/goalDirection';
 
@@ -73,15 +73,29 @@ export function Onboarding() {
       </div>
       <Card className="p-6">
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-          <div className="grid grid-cols-2 gap-4">
-            <FieldLabel>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            <label htmlFor="onboarding-age" className="text-body text-text">
               Age
-              <Input type="number" required min={1} value={age} onChange={(e) => setAge(e.target.value)} />
-            </FieldLabel>
-            <FieldLabel>
+            </label>
+            <label htmlFor="onboarding-height" className="text-body text-text">
               Height (cm)
-              <Input type="number" required min={1} value={heightCm} onChange={(e) => setHeightCm(e.target.value)} />
-            </FieldLabel>
+            </label>
+            <Input
+              id="onboarding-age"
+              type="number"
+              required
+              min={1}
+              value={age}
+              onChange={(e) => setAge(e.target.value)}
+            />
+            <Input
+              id="onboarding-height"
+              type="number"
+              required
+              min={1}
+              value={heightCm}
+              onChange={(e) => setHeightCm(e.target.value)}
+            />
           </div>
 
           <div>
@@ -96,29 +110,31 @@ export function Onboarding() {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
-            <FieldLabel>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+            <label htmlFor="onboarding-current-weight" className="text-body text-text">
               Current weight (kg)
-              <Input
-                type="number"
-                required
-                min={1}
-                step={0.01}
-                value={currentWeightKg}
-                onChange={(e) => setCurrentWeightKg(e.target.value)}
-              />
-            </FieldLabel>
-            <FieldLabel>
+            </label>
+            <label htmlFor="onboarding-goal-weight" className="text-body text-text">
               Goal weight (kg)
-              <Input
-                type="number"
-                required
-                min={1}
-                step={0.01}
-                value={goalWeightKg}
-                onChange={(e) => setGoalWeightKg(e.target.value)}
-              />
-            </FieldLabel>
+            </label>
+            <Input
+              id="onboarding-current-weight"
+              type="number"
+              required
+              min={1}
+              step={0.01}
+              value={currentWeightKg}
+              onChange={(e) => setCurrentWeightKg(e.target.value)}
+            />
+            <Input
+              id="onboarding-goal-weight"
+              type="number"
+              required
+              min={1}
+              step={0.01}
+              value={goalWeightKg}
+              onChange={(e) => setGoalWeightKg(e.target.value)}
+            />
           </div>
 
           {currentWeightKg && goalWeightKg && (

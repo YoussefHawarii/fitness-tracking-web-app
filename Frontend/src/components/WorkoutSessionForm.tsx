@@ -19,6 +19,7 @@ import { PrimaryButton, SecondaryButton } from './ui/Button';
 
 interface Props {
   catalog: WorkoutExerciseCatalogEntry[];
+  catalogLoading?: boolean;
   initialSession?: WorkoutSession;
   onSaved?: () => void;
   onCancel?: () => void;
@@ -53,7 +54,13 @@ function draftExercisesFrom(
   }));
 }
 
-export function WorkoutSessionForm({ catalog, initialSession, onSaved, onCancel }: Props) {
+export function WorkoutSessionForm({
+  catalog,
+  catalogLoading = false,
+  initialSession,
+  onSaved,
+  onCancel,
+}: Props) {
   const isEditing = initialSession != null;
   const { account } = useAccountContext();
   const unitsPreference = account?.unitsPreference ?? 'KG';
@@ -235,12 +242,16 @@ export function WorkoutSessionForm({ catalog, initialSession, onSaved, onCancel 
         <Select
           value={selectedExerciseType}
           onChange={(e) => handleExercisePicked(e.target.value)}
-          disabled={selectedMuscleGroups.length === 0}
+          disabled={selectedMuscleGroups.length === 0 || catalogLoading || catalog.length === 0}
         >
           <option value="" disabled>
             {selectedMuscleGroups.length === 0
               ? 'Select a muscle group above'
-              : 'Choose an exercise'}
+              : catalogLoading
+                ? 'Loading exercises…'
+                : catalog.length === 0
+                  ? 'Exercise list unavailable'
+                  : 'Choose an exercise'}
           </option>
           {selectedMuscleGroups.map((group) => (
             <optgroup key={group} label={MUSCLE_GROUP_LABELS[group]}>

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getGoals, updateGoals, type ActivityLevel, type Baseline } from '../services/userService';
 import { Card, SegmentedControl, StatusChip } from '../components/ui/Card';
-import { Input, FieldLabel } from '../components/ui/Input';
+import { Input } from '../components/ui/Input';
 import { PrimaryButton } from '../components/ui/Button';
 import { useAccountContext } from '../context/AccountContext';
 import { formatWeight } from '../utils/units';
@@ -113,15 +113,29 @@ export function Goals() {
         />
         <StatusChip className="self-start">{GOAL_DIRECTION_LABEL[goalDirection]}</StatusChip>
 
-        <div className="grid grid-cols-2 gap-4">
-          <FieldLabel>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+          <label htmlFor="goals-current-weight" className="text-body text-text">
             Current weight (kg)
-            <Input type="number" min={1} step={0.01} value={weightInput} onChange={(e) => setWeightInput(e.target.value)} />
-          </FieldLabel>
-          <FieldLabel>
+          </label>
+          <label htmlFor="goals-goal-weight" className="text-body text-text">
             Goal weight (kg)
-            <Input type="number" min={1} step={0.01} value={goalInput} onChange={(e) => setGoalInput(e.target.value)} />
-          </FieldLabel>
+          </label>
+          <Input
+            id="goals-current-weight"
+            type="number"
+            min={1}
+            step={0.01}
+            value={weightInput}
+            onChange={(e) => setWeightInput(e.target.value)}
+          />
+          <Input
+            id="goals-goal-weight"
+            type="number"
+            min={1}
+            step={0.01}
+            value={goalInput}
+            onChange={(e) => setGoalInput(e.target.value)}
+          />
         </div>
 
         <PrimaryButton onClick={handleSave} disabled={saving} className="self-start">

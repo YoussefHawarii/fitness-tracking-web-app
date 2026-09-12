@@ -18,6 +18,7 @@ import type { Units } from '../services/accountService';
 interface Props {
   session: WorkoutSession;
   catalog: WorkoutExerciseCatalogEntry[];
+  catalogLoading: boolean;
   onChanged: () => void;
 }
 
@@ -33,7 +34,7 @@ function formatSet(set: { reps: number; weightKg: string | null }, unitsPreferen
     : `${set.reps} reps (bodyweight)`;
 }
 
-export function WorkoutSessionCard({ session, catalog, onChanged }: Props) {
+export function WorkoutSessionCard({ session, catalog, catalogLoading, onChanged }: Props) {
   const { account } = useAccountContext();
   const unitsPreference = account?.unitsPreference ?? 'KG';
   const [editSession, setEditSession] = useState<WorkoutSession | null>(null);
@@ -74,6 +75,7 @@ export function WorkoutSessionCard({ session, catalog, onChanged }: Props) {
     return (
       <WorkoutSessionForm
         catalog={catalog}
+        catalogLoading={catalogLoading}
         initialSession={editSession}
         onSaved={() => {
           setEditSession(null);
