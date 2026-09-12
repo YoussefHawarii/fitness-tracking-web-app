@@ -15,7 +15,23 @@ const fieldClass =
 // couple pixels shorter than a same-styled input sitting next to it.
 // Textarea is intentionally excluded: its height comes from `rows`, not a
 // fixed control height, and h-11 would collapse a multi-row textarea.
+const dateWrapperClass =
+  'h-11 min-h-11 max-h-11 w-full shrink-0 flex items-center overflow-hidden rounded-xl border border-border bg-surface-raised px-4 text-body text-text focus-within:ring-2 focus-within:ring-accent-soft focus-within:border-accent';
+
 export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInputElement>) {
+  if (props.type === 'date') {
+    // Native date-control rendering can paint beyond the input's CSS box.
+    // Use a fixed outer box as the visual boundary so WebKit's internal UI
+    // cannot make this field appear taller than the adjacent controls.
+    return (
+      <span className={`${dateWrapperClass} ${className}`}>
+        <input
+          {...props}
+          className="h-full w-full min-w-0 border-0 bg-transparent p-0 text-body text-text focus:outline-none"
+        />
+      </span>
+    );
+  }
   return <input {...props} className={`${fieldClass} h-11 ${className}`} />;
 }
 
