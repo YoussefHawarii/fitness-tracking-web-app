@@ -44,9 +44,9 @@ Thumbs.db
 *.sln
 *.sw?
 
-# Claude Code / spec-kit project tooling (local-only, not part of the app)
-CLAUDE.md
+# spec-kit project tooling (local-only, not part of the app)
 .specify/
+.claude/skills/
 
 # Misc
 *.local
