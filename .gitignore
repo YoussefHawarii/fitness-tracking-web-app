@@ -47,6 +47,7 @@ Thumbs.db
 # spec-kit project tooling (local-only, not part of the app)
 .specify/
 .claude/skills/
+.claude/scheduled_tasks.lock
 
 # Misc
 *.local
