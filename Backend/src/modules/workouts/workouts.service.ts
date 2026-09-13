@@ -5,6 +5,8 @@ import {
 } from '@nestjs/common';
 import { MuscleGroup, Prisma, WorkoutExerciseType } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
+import { UserModel } from '../../db/models/user.model';
+import { getTodayInTimezone } from '../calorie-balance/day-boundary.util';
 import { WORKOUT_EXERCISE_CATALOG } from './workout-exercise-catalog';
 import { CreateWorkoutSessionDto } from './dto/create-workout-session.dto';
 
@@ -17,7 +19,10 @@ const SESSION_INCLUDE = {
 
 @Injectable()
 export class WorkoutsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly userModel: UserModel,
+  ) {}
 
   getExerciseCatalog() {
     return WORKOUT_EXERCISE_CATALOG;
@@ -47,7 +52,8 @@ export class WorkoutsService {
   }
 
   async createSession(userId: string, dto: CreateWorkoutSessionDto) {
-    this.assertNotFutureDate(dto.date);
+    const user = await this.userModel.findByIdOrThrow(userId);
+    this.assertNotFutureDate(dto.date, user.timezone);
     const loggedForDate = new Date(dto.date);
 
     // Exercises for the same day are often saved one at a time (Save
@@ -135,7 +141,8 @@ export class WorkoutsService {
     dto: CreateWorkoutSessionDto,
   ) {
     await this.requireOwnedSession(userId, id);
-    this.assertNotFutureDate(dto.date);
+    const user = await this.userModel.findByIdOrThrow(userId);
+    this.assertNotFutureDate(dto.date, user.timezone);
 
     // Full replace, not a partial patch: drop every existing exercise (sets
     // cascade) and recreate from the submitted draft. Wrapped in a
@@ -170,9 +177,9 @@ export class WorkoutsService {
     return existing;
   }
 
-  private assertNotFutureDate(date: string) {
-    const todayUtc = new Date().toISOString().slice(0, 10);
-    if (date > todayUtc) {
+  private assertNotFutureDate(date: string, timezone: string) {
+    const todayLocal = getTodayInTimezone(timezone);
+    if (date > todayLocal) {
       throw new BadRequestException('Workout date cannot be in the future.');
     }
   }

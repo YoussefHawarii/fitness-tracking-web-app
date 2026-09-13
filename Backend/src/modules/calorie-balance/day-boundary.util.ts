@@ -37,6 +37,17 @@ function tzOffsetMinutes(instant: Date, timezone: string): number {
   return (asUtc - instant.getTime()) / 60000;
 }
 
+// Today's calendar date ("YYYY-MM-DD") as observed in `timezone` right now.
+// 'en-CA' formats as YYYY-MM-DD, so no manual part-reassembly is needed.
+export function getTodayInTimezone(timezone: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+}
+
 // `dateStr` is a calendar date ("YYYY-MM-DD") in the user's own timezone.
 export function getDayBoundaryUtc(
   dateStr: string,

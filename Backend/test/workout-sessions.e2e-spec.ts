@@ -36,14 +36,14 @@ describe('Workouts (e2e)', () => {
     await app.close();
   });
 
-  async function signupAndVerify(email: string) {
+  async function signupAndVerify(email: string, timezone = 'UTC') {
     await request(app.getHttpServer())
       .post('/auth/signup')
       .send({
         username: `user${Date.now()}${Math.floor(Math.random() * 1_000_000)}`,
         email,
         password: 'CorrectHorse123',
-        timezone: 'UTC',
+        timezone,
       })
       .expect(201);
 
@@ -58,9 +58,9 @@ describe('Workouts (e2e)', () => {
     return verifyRes.body as { accessToken: string };
   }
 
-  async function newVerifiedUser(tag: string) {
+  async function newVerifiedUser(tag: string, timezone = 'UTC') {
     const email = `workout-${tag}-${Date.now()}${Math.floor(Math.random() * 1000)}@example.com`;
-    const { accessToken } = await signupAndVerify(email);
+    const { accessToken } = await signupAndVerify(email, timezone);
     return accessToken;
   }
 
@@ -464,6 +464,50 @@ describe('Workouts (e2e)', () => {
           ],
         })
         .expect(400);
+    });
+
+    it('accepts the user’s own local "today" even when the server’s UTC calendar date is still yesterday', async () => {
+      // Sign up on the real clock first — the frozen time below would
+      // otherwise make Date.now() identical on every run of this test,
+      // and the unique-email helper only adds a random 0-999 suffix, risking
+      // an email collision against this suite's persistent test database.
+      const accessToken = await newVerifiedUser('future-tz', 'Africa/Cairo');
+
+      // Freeze the clock at 23:30 UTC on Jan 15: the UTC calendar date is
+      // still 2026-01-15, but Africa/Cairo (UTC+2, no DST in January) has
+      // already rolled over to 2026-01-16 — that user's own local "today".
+      // A UTC-only future-date check would reject 2026-01-16 as future.
+      jest.useFakeTimers({
+        doNotFake: [
+          'setTimeout',
+          'clearTimeout',
+          'setInterval',
+          'clearInterval',
+          'setImmediate',
+          'clearImmediate',
+          'nextTick',
+          'hrtime',
+          'performance',
+          'queueMicrotask',
+        ],
+      });
+      jest.setSystemTime(new Date('2026-01-15T23:30:00.000Z'));
+
+      try {
+        await request(app.getHttpServer())
+          .post('/workout-sessions')
+          .set('Authorization', `Bearer ${accessToken}`)
+          .send({
+            date: '2026-01-16',
+            muscleGroups: ['CHEST'],
+            exercises: [
+              { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+            ],
+          })
+          .expect(201);
+      } finally {
+        jest.useRealTimers();
+      }
     });
 
     it('rejects an unknown exercise type or muscle group', async () => {
