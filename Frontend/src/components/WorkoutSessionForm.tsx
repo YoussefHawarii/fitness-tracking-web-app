@@ -11,6 +11,7 @@ import {
   type WorkoutSession,
 } from '../services/workoutService';
 import { useAccountContext } from '../context/AccountContext';
+import { useAccountTimezone } from '../hooks/useAccountTimezone';
 import { MuscleGroupChips } from './MuscleGroupChips';
 import { WorkoutExerciseEditor, type DraftExercise, type DraftSet } from './WorkoutExerciseEditor';
 import { Card } from './ui/Card';
@@ -23,11 +24,6 @@ interface Props {
   initialSession?: WorkoutSession;
   onSaved?: () => void;
   onCancel?: () => void;
-}
-
-function todayLocalDate(): string {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
 function newId(): string {
@@ -64,6 +60,7 @@ export function WorkoutSessionForm({
   const isEditing = initialSession != null;
   const { account } = useAccountContext();
   const unitsPreference = account?.unitsPreference ?? 'KG';
+  const { todayInAccountTimezone } = useAccountTimezone();
 
   const [selectedMuscleGroups, setSelectedMuscleGroups] = useState<MuscleGroup[]>(
     initialSession?.muscleGroups ?? [],
@@ -75,7 +72,13 @@ export function WorkoutSessionForm({
   const [lastLoggedByExerciseId, setLastLoggedByExerciseId] = useState<
     Record<string, LastLoggedExercise | null>
   >({});
-  const [date, setDate] = useState(initialSession?.loggedForDate.slice(0, 10) ?? todayLocalDate());
+  // `null` means "not yet touched" — the date tracks the live default
+  // (today, in the account's own timezone) until the user picks one
+  // explicitly, so it stays correct even if the account timezone is still
+  // loading when this form first renders.
+  const [manualDate, setManualDate] = useState<string | null>(null);
+  const date =
+    manualDate ?? initialSession?.loggedForDate.slice(0, 10) ?? todayInAccountTimezone();
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -209,7 +212,7 @@ export function WorkoutSessionForm({
         await createWorkoutSession(payload);
         setSelectedMuscleGroups([]);
         setDraftExercises([]);
-        setDate(todayLocalDate());
+        setManualDate(null);
         setSaved(true);
       }
       onSaved?.();
@@ -232,8 +235,8 @@ export function WorkoutSessionForm({
         <Input
           type="date"
           value={date}
-          max={todayLocalDate()}
-          onChange={(e) => setDate(e.target.value)}
+          max={todayInAccountTimezone()}
+          onChange={(e) => setManualDate(e.target.value)}
         />
       </FieldLabel>
 
