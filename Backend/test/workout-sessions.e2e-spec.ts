@@ -248,6 +248,45 @@ describe('Workouts (e2e)', () => {
       expect(sets[1]).toMatchObject({ reps: 6 });
       expect(Number(sets[1].weightKg)).toBe(65);
     });
+
+    it('returns the latest sets when the same exercise is appended to one merged session', async () => {
+      const accessToken = await newVerifiedUser('last-merged');
+
+      await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['CHEST'],
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 55 }],
+          },
+        ],
+      });
+      await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['CHEST'],
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 6, weightKg: 70 }],
+          },
+        ],
+      });
+
+      const res = await request(app.getHttpServer())
+        .get('/workout-exercises/BARBELL_BENCH_PRESS/last')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      const body = res.body as {
+        loggedForDate: string;
+        sets: { reps: number; weightKg: string | null }[];
+      };
+
+      expect(body.loggedForDate.slice(0, 10)).toBe('2026-01-15');
+      expect(body.sets).toHaveLength(1);
+      expect(body.sets[0]).toMatchObject({ reps: 6 });
+      expect(Number(body.sets[0].weightKg)).toBe(70);
+    });
   });
 
   describe('POST /workout-sessions', () => {
@@ -319,6 +358,22 @@ describe('Workouts (e2e)', () => {
         .send({
           date: '2026-01-15',
           muscleGroups: [],
+          exercises: [
+            { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
+          ],
+        })
+        .expect(400);
+    });
+
+    it('rejects duplicate muscle groups', async () => {
+      const accessToken = await newVerifiedUser('duplicate-groups');
+
+      await request(app.getHttpServer())
+        .post('/workout-sessions')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          date: '2026-01-15',
+          muscleGroups: ['CHEST', 'CHEST'],
           exercises: [
             { exerciseType: 'BARBELL_BENCH_PRESS', sets: [{ reps: 10 }] },
           ],
@@ -425,6 +480,157 @@ describe('Workouts (e2e)', () => {
           ],
         })
         .expect(400);
+    });
+
+    it('merges a same-day, same-muscle-group save into the existing session instead of creating a separate one', async () => {
+      const accessToken = await newVerifiedUser('merge-same-day');
+
+      const first = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['BACK'],
+        exercises: [
+          { exerciseType: 'T_BAR_ROW', sets: [{ reps: 12, weightKg: 32 }] },
+        ],
+      });
+
+      const second = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['BACK'],
+        exercises: [
+          {
+            exerciseType: 'SEATED_CABLE_ROW',
+            sets: [{ reps: 10, weightKg: 32 }],
+          },
+        ],
+      });
+
+      expect(second.id).toBe(first.id);
+      const exerciseTypes = second.exercises.map((e) => e.exerciseType);
+      expect(exerciseTypes).toEqual(['T_BAR_ROW', 'SEATED_CABLE_ROW']);
+
+      const list = await request(app.getHttpServer())
+        .get('/workout-sessions')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .expect(200);
+      const sessionsThatDay = (list.body as { id: string }[]).filter(
+        (s) => s.id === first.id,
+      );
+      expect(list.body).toHaveLength(1);
+      expect(sessionsThatDay).toHaveLength(1);
+    });
+
+    it('merges regardless of the order the muscle groups were selected in', async () => {
+      const accessToken = await newVerifiedUser('merge-group-order');
+
+      const first = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['CHEST', 'TRICEPS'],
+        exercises: [
+          {
+            exerciseType: 'BARBELL_BENCH_PRESS',
+            sets: [{ reps: 10, weightKg: 60 }],
+          },
+        ],
+      });
+
+      const second = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['TRICEPS', 'CHEST'],
+        exercises: [
+          {
+            exerciseType: 'CABLE_TRICEPS_PUSHDOWN',
+            sets: [{ reps: 12, weightKg: 20 }],
+          },
+        ],
+      });
+
+      expect(second.id).toBe(first.id);
+      expect(second.exercises).toHaveLength(2);
+    });
+
+    it('appends after an edit without changing the edited exercises, sets, or order', async () => {
+      const accessToken = await newVerifiedUser('merge-after-edit');
+      const created = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['BACK'],
+      });
+
+      const editRes = await request(app.getHttpServer())
+        .patch(`/workout-sessions/${created.id}`)
+        .set('Authorization', `Bearer ${accessToken}`)
+        .send({
+          date: '2026-01-15',
+          muscleGroups: ['BACK'],
+          exercises: [
+            {
+              exerciseType: 'SEATED_CABLE_ROW',
+              sets: [
+                { reps: 12, weightKg: 35 },
+                { reps: 10, weightKg: 40 },
+              ],
+            },
+            {
+              exerciseType: 'LAT_PULLDOWN',
+              sets: [{ reps: 8, weightKg: 50 }],
+            },
+          ],
+        })
+        .expect(200);
+      const edited = editRes.body as {
+        id: string;
+        exercises: {
+          id: string;
+          exerciseType: string;
+          sets: unknown[];
+        }[];
+      };
+
+      const appended = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['BACK'],
+        exercises: [
+          {
+            exerciseType: 'ONE_ARM_DUMBBELL_ROW',
+            sets: [{ reps: 10, weightKg: 22.5 }],
+          },
+        ],
+      });
+
+      expect(appended.id).toBe(created.id);
+      expect(
+        appended.exercises.map((exercise) => exercise.exerciseType),
+      ).toEqual(['SEATED_CABLE_ROW', 'LAT_PULLDOWN', 'ONE_ARM_DUMBBELL_ROW']);
+      expect(appended.exercises.slice(0, 2)).toEqual(edited.exercises);
+    });
+
+    it('does not merge sessions logged on different dates', async () => {
+      const accessToken = await newVerifiedUser('no-merge-date');
+
+      const first = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['BACK'],
+      });
+      const second = await createSession(accessToken, {
+        date: '2026-01-16',
+        muscleGroups: ['BACK'],
+      });
+
+      expect(second.id).not.toBe(first.id);
+    });
+
+    it('does not merge sessions with a different muscle-group selection on the same day', async () => {
+      const accessToken = await newVerifiedUser('no-merge-groups');
+
+      const first = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['CHEST'],
+      });
+      const second = await createSession(accessToken, {
+        date: '2026-01-15',
+        muscleGroups: ['BACK'],
+      });
+
+      expect(second.id).not.toBe(first.id);
     });
   });
 

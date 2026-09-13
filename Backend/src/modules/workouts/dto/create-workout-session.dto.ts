@@ -2,6 +2,7 @@ import { MuscleGroup } from '@prisma/client';
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  ArrayUnique,
   IsArray,
   IsDateString,
   IsEnum,
@@ -15,6 +16,7 @@ export class CreateWorkoutSessionDto {
 
   @IsArray()
   @ArrayMinSize(1)
+  @ArrayUnique()
   @IsEnum(MuscleGroup, { each: true })
   muscleGroups: MuscleGroup[];
 
