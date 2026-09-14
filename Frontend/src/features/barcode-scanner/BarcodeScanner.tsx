@@ -7,7 +7,7 @@ interface Props {
   // (BarcodeScanner.tsx used to ignore the callback's error argument
   // entirely, so this failure mode was silent — see
   // docs/food-log-input-modes-diagnosis.md §1.3).
-  onScanError?: () => void;
+  onScanError?: (error: unknown) => void;
 }
 
 // Camera + @zxing/browser decode loop, per docs/technical-decisions.md
@@ -27,6 +27,7 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
     let cancelled = false;
     let controls: { stop: () => void } | undefined;
     let decoded = false;
+    let failed = false;
 
     reader
       .decodeFromVideoDevice(
@@ -42,7 +43,7 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
           // still have a callback in flight from before that; without this
           // check it would fire `onDecoded` on the current, live component
           // instance from an abandoned camera stream.
-          if (decoded || cancelled) return;
+          if (decoded || cancelled || failed) return;
           if (result) {
             decoded = true;
             frameControls.stop();
@@ -54,12 +55,25 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
           // non-retryable error ends the scan loop for good; without this,
           // that failure was silent (§1.3).
           if (decodeError && !isRetryableDecodeError(decodeError)) {
-            onScanError?.();
+            failed = true;
+            frameControls.stop();
+            const video = videoRef.current;
+            const errorDetails = decodeError as { name?: unknown; message?: unknown };
+            console.error('Barcode scanner frame processing failed', {
+              name: typeof errorDetails.name === 'string' ? errorDetails.name : 'UnknownError',
+              message: typeof errorDetails.message === 'string' ? errorDetails.message : String(decodeError),
+              videoWidth: video?.videoWidth,
+              videoHeight: video?.videoHeight,
+              readyState: video?.readyState,
+              currentTime: video?.currentTime,
+              paused: video?.paused,
+            });
+            onScanError?.(decodeError);
           }
         },
       )
       .then((c) => {
-        if (cancelled || decoded) {
+        if (cancelled || decoded || failed) {
           c.stop();
           return;
         }

@@ -35,7 +35,13 @@ type PendingItem = {
   caloriesPer100g: number;
 };
 
-type ScanStatus = 'idle' | 'looking-up' | 'found' | 'not-found' | 'unavailable';
+type ScanStatus =
+  | 'idle'
+  | 'looking-up'
+  | 'found'
+  | 'not-found'
+  | 'unavailable'
+  | 'scanner-failed';
 
 interface FoodLogEntry {
   id: string;
@@ -47,6 +53,8 @@ interface FoodLogEntry {
 }
 
 const MEAL_ORDER: MealCategory[] = ['BREAKFAST', 'LUNCH', 'DINNER', 'SNACKS'];
+const MAX_AUTOMATIC_SCAN_RESTARTS = 2;
+const SCAN_RESTART_DELAY_MS = 350;
 
 function isInputMode(value: unknown): value is InputMode {
   return value === 'barcode' || value === 'voice' || value === 'manual';
@@ -88,6 +96,8 @@ export function FoodLog() {
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
   const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(null);
   const [scanAttempt, setScanAttempt] = useState(0);
+  const automaticScanRestartCountRef = useRef(0);
+  const scanRestartTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
   // Bumped on every new scan attempt (and whenever the user leaves the scan
   // in progress) so a lookup abandoned by a rescan/mode-switch can't apply
   // its result after something newer has already taken its place.
@@ -108,6 +118,15 @@ export function FoodLog() {
   useEffect(() => {
     refreshEntries();
   }, [refreshEntries]);
+
+  useEffect(
+    () => () => {
+      if (scanRestartTimerRef.current !== null) {
+        window.clearTimeout(scanRestartTimerRef.current);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     if (pendingItems.length > 0) {
@@ -170,6 +189,7 @@ export function FoodLog() {
 
   async function handleBarcodeDecoded(barcode: string) {
     if (scanStatus === 'looking-up') return; // single-flight guard
+    cancelPendingScanRestart();
     const requestId = ++scanRequestIdRef.current;
     setLastScannedBarcode(barcode);
     setScanStatus('looking-up');
@@ -200,16 +220,39 @@ export function FoodLog() {
   }
 
   function retryLastScan() {
+    automaticScanRestartCountRef.current = 0;
+    cancelPendingScanRestart();
     if (lastScannedBarcode) {
       handleBarcodeDecoded(lastScannedBarcode);
     }
   }
 
   function rescan() {
+    automaticScanRestartCountRef.current = 0;
+    cancelPendingScanRestart();
     scanRequestIdRef.current++; // invalidate any lookup still in flight
     setScanStatus('idle');
     setLastScannedBarcode(null);
     setScanAttempt((n) => n + 1);
+  }
+
+  function cancelPendingScanRestart() {
+    if (scanRestartTimerRef.current === null) return;
+    window.clearTimeout(scanRestartTimerRef.current);
+    scanRestartTimerRef.current = null;
+  }
+
+  function handleScannerError() {
+    if (automaticScanRestartCountRef.current >= MAX_AUTOMATIC_SCAN_RESTARTS) {
+      setScanStatus('scanner-failed');
+      return;
+    }
+
+    automaticScanRestartCountRef.current += 1;
+    scanRestartTimerRef.current = window.setTimeout(() => {
+      scanRestartTimerRef.current = null;
+      setScanAttempt((n) => n + 1);
+    }, SCAN_RESTART_DELAY_MS);
   }
 
   // Re-entering the Scan tab should always show a fresh camera view, not a
@@ -218,8 +261,11 @@ export function FoodLog() {
     if (newMode === 'barcode' && mode !== 'barcode') {
       rescan();
     }
-    if (mode === 'barcode' && newMode !== 'barcode' && scanStatus === 'looking-up') {
-      scanRequestIdRef.current++; // leaving mid-lookup invalidates it too
+    if (mode === 'barcode' && newMode !== 'barcode') {
+      cancelPendingScanRestart();
+      if (scanStatus === 'looking-up') {
+        scanRequestIdRef.current++; // leaving mid-lookup invalidates it too
+      }
     }
     if (newMode !== 'manual') {
       setManualBarcodeContext(null);
@@ -305,14 +351,18 @@ export function FoodLog() {
         {mode === 'barcode' && (
           <div className="flex flex-col gap-3">
             <div className="hud-frame overflow-hidden rounded-xl bg-black">
-              {scanStatus !== 'not-found' && scanStatus !== 'unavailable' && (
+              {scanStatus !== 'not-found' &&
+                scanStatus !== 'unavailable' &&
+                scanStatus !== 'scanner-failed' && (
                 <BarcodeScanner
                   key={scanAttempt}
                   onDecoded={handleBarcodeDecoded}
-                  onScanError={() => setScanStatus('unavailable')}
+                  onScanError={handleScannerError}
                 />
               )}
-              {(scanStatus === 'not-found' || scanStatus === 'unavailable') && (
+              {(scanStatus === 'not-found' ||
+                scanStatus === 'unavailable' ||
+                scanStatus === 'scanner-failed') && (
                 <div className="flex aspect-square w-full items-center justify-center bg-black" />
               )}
             </div>
@@ -357,8 +407,22 @@ export function FoodLog() {
                   Couldn't check that barcode right now — try again in a moment.
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  {/* No barcode yet (a scanner/camera error via onScanError) means retrying the lookup is a no-op — restart the scanner instead. */}
-                  <PrimaryButton type="button" onClick={lastScannedBarcode ? retryLastScan : rescan}>
+                  <PrimaryButton type="button" onClick={retryLastScan}>
+                    Try again
+                  </PrimaryButton>
+                  <SecondaryButton type="button" onClick={() => setMode('manual')}>
+                    Search manually instead
+                  </SecondaryButton>
+                </div>
+              </div>
+            )}
+            {scanStatus === 'scanner-failed' && (
+              <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+                <p className="text-body text-warn">
+                  The scanner had trouble reading camera frames — try again in a moment.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <PrimaryButton type="button" onClick={rescan}>
                     Try again
                   </PrimaryButton>
                   <SecondaryButton type="button" onClick={() => setMode('manual')}>

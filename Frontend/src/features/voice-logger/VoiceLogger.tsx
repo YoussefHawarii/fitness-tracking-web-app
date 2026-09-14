@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { searchFood, type FoodMatch, type FoodSearchResult } from '../../services/foodService';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
+import { SegmentedControl } from '../../components/ui/Card';
 import { FieldLabel, Textarea } from '../../components/ui/Input';
 import { useAccountContext } from '../../context/AccountContext';
 import { splitIntoFoodTerms } from './splitIntoFoodTerms';
@@ -72,12 +73,15 @@ const RECOGNITION_ERROR_MESSAGES: Record<string, string> = {
 // to search — and candidate matches are presented rather than auto-selected.
 export function VoiceLogger({ onMatchesSelected }: Props) {
   const { account, error: accountError } = useAccountContext();
+  const [explicitLanguageChoice, setExplicitLanguageChoice] = useState<'en' | 'ar' | null>(null);
   const [transcript, setTranscript] = useState('');
   const [recording, setRecording] = useState(false);
   const [termSearches, setTermSearches] = useState<TermSearch[] | null>(null);
   const [selections, setSelections] = useState<Record<number, FoodMatch>>({});
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const accountLanguageChoice = account?.languagePreference === 'ar' ? 'ar' : 'en';
+  const recognitionLanguageChoice = explicitLanguageChoice ?? accountLanguageChoice;
 
   function startRecording() {
     const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
@@ -86,9 +90,7 @@ export function VoiceLogger({ onMatchesSelected }: Props) {
       return;
     }
     const recognition = new SpeechRecognitionCtor();
-    recognition.lang =
-      SPEECH_RECOGNITION_LOCALES[account?.languagePreference ?? 'en'] ??
-      'en-US';
+    recognition.lang = SPEECH_RECOGNITION_LOCALES[recognitionLanguageChoice] ?? 'en-US';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.onresult = (event) => {
@@ -174,6 +176,22 @@ export function VoiceLogger({ onMatchesSelected }: Props) {
 
   return (
     <div className="flex flex-col gap-3">
+      {!preferencesLoading && (
+        <div className="flex flex-col items-start gap-2">
+          <span className="text-label text-text-muted normal-case tracking-normal">
+            Recording language
+          </span>
+          <SegmentedControl
+            value={recognitionLanguageChoice}
+            onChange={setExplicitLanguageChoice}
+            options={[
+              { value: 'en', label: 'English' },
+              { value: 'ar', label: 'العربية' },
+            ]}
+          />
+        </div>
+      )}
+
       <PrimaryButton
         type="button"
         disabled={preferencesLoading}
