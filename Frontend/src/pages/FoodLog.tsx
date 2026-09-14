@@ -92,7 +92,7 @@ export function FoodLog() {
   // in progress) so a lookup abandoned by a rescan/mode-switch can't apply
   // its result after something newer has already taken its place.
   const scanRequestIdRef = useRef(0);
-  const [manualPrefill, setManualPrefill] = useState<string | undefined>(undefined);
+  const [manualBarcodeContext, setManualBarcodeContext] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editGrams, setEditGrams] = useState('');
@@ -222,7 +222,7 @@ export function FoodLog() {
       scanRequestIdRef.current++; // leaving mid-lookup invalidates it too
     }
     if (newMode !== 'manual') {
-      setManualPrefill(undefined); // don't carry a stale barcode into an unrelated later Manual visit
+      setManualBarcodeContext(null);
     }
     setMode(newMode);
   }
@@ -339,7 +339,7 @@ export function FoodLog() {
                   <PrimaryButton
                     type="button"
                     onClick={() => {
-                      setManualPrefill(lastScannedBarcode ?? undefined);
+                      setManualBarcodeContext(lastScannedBarcode);
                       setMode('manual');
                     }}
                   >
@@ -382,10 +382,14 @@ export function FoodLog() {
             <p className="flex items-center gap-2 text-label text-text-muted normal-case tracking-normal">
               <PlusCircleIcon width={16} height={16} /> Add a food item
             </p>
+            {manualBarcodeContext && (
+              <p className="text-body text-text-muted">
+                Barcode {manualBarcodeContext} wasn't found — search for the product by name instead.
+              </p>
+            )}
             <ManualFoodSearch
               onMatchSelected={handleFoodMatchSelected}
               onLocalItemCreated={handleLocalItemCreated}
-              initialQuery={manualPrefill}
             />
           </div>
         )}

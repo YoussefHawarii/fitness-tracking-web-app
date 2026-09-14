@@ -11,9 +11,8 @@ import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 interface Props {
   onMatchSelected: (match: FoodMatch) => void;
   onLocalItemCreated: (item: LocalFoodItem) => void;
-  // Pre-fills the search box and runs the search once on mount — used when
-  // arriving here from a barcode scan that came back "not found", per
-  // docs/food-log-input-modes-diagnosis.md §1.6 item 5.
+  // Pre-fills the search box and runs the search once on mount for callers
+  // that already have a genuine food-name search term.
   initialQuery?: string;
 }
 

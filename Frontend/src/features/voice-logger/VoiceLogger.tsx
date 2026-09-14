@@ -71,7 +71,7 @@ const RECOGNITION_ERROR_MESSAGES: Record<string, string> = {
 // §5, the transcript is always shown for edit/confirmation before it is used
 // to search — and candidate matches are presented rather than auto-selected.
 export function VoiceLogger({ onMatchesSelected }: Props) {
-  const { account } = useAccountContext();
+  const { account, error: accountError } = useAccountContext();
   const [transcript, setTranscript] = useState('');
   const [recording, setRecording] = useState(false);
   const [termSearches, setTermSearches] = useState<TermSearch[] | null>(null);
@@ -170,11 +170,21 @@ export function VoiceLogger({ onMatchesSelected }: Props) {
 
   const selectedCount = Object.keys(selections).length;
   const showTermLabels = (termSearches?.length ?? 0) > 1;
+  const preferencesLoading = account === null && !accountError;
 
   return (
     <div className="flex flex-col gap-3">
-      <PrimaryButton type="button" onClick={recording ? stopRecording : startRecording} className="self-start">
-        {recording ? 'Stop recording' : 'Record what you ate'}
+      <PrimaryButton
+        type="button"
+        disabled={preferencesLoading}
+        onClick={recording ? stopRecording : startRecording}
+        className="self-start"
+      >
+        {preferencesLoading
+          ? 'Loading your preferences…'
+          : recording
+            ? 'Stop recording'
+            : 'Record what you ate'}
       </PrimaryButton>
 
       <FieldLabel>
