@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { BrowserMultiFormatReader } from '@zxing/browser';
+import { ChecksumException, FormatException, NotFoundException } from '@zxing/library';
 
 interface Props {
   onDecoded: (barcode: string) => void;
@@ -96,6 +97,10 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
 }
 
 function isRetryableDecodeError(error: unknown): boolean {
-  const name = (error as { name?: string } | undefined)?.name;
-  return name === 'NotFoundException' || name === 'ChecksumException' || name === 'FormatException';
+  // Exception names are minified in production; prototype identity remains stable.
+  return (
+    error instanceof NotFoundException ||
+    error instanceof ChecksumException ||
+    error instanceof FormatException
+  );
 }
