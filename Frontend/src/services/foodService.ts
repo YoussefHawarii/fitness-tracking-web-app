@@ -1,6 +1,13 @@
+import { isAxiosError } from 'axios';
 import { apiClient } from './apiClient';
 
-export type FoodSourceType = 'OPEN_FOOD_FACTS' | 'USDA' | 'LOCAL';
+// Kept in sync by hand with Backend/src/modules/food/dto/create-food-log.dto.ts's
+// FOOD_SOURCE_TYPES — this app has no shared package between Frontend and
+// Backend, so it can't import that union directly.
+export type FoodSourceType = 'OPEN_FOOD_FACTS' | 'USDA' | 'LOCAL' | 'CANONICAL';
+// Search never resolves a barcode — a FoodMatch only ever comes from
+// GET /food/search, which resolves the other three source types.
+export type FoodMatchSourceType = Exclude<FoodSourceType, 'OPEN_FOOD_FACTS'>;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
 
 export interface NutrientsPer100g {
@@ -15,14 +22,36 @@ export interface OpenFoodFactsProduct extends NutrientsPer100g {
   barcode: string;
 }
 
-export interface UsdaFoodMatch extends NutrientsPer100g {
-  fdcId: string;
-  name: string;
-}
-
 export interface LocalFoodItem extends NutrientsPer100g {
   id: string;
   name: string;
+}
+
+// A single search result, whichever of the three sources it came from —
+// returned by the shared GET /food/search endpoint used by both Manual
+// search and Voice. See docs/food-log-input-modes-diagnosis.md §3.4.
+export interface FoodMatch extends NutrientsPer100g {
+  sourceType: FoodMatchSourceType;
+  sourceRef: string;
+  name: string;
+}
+
+export type FoodSearchResult =
+  | { type: 'single'; match: FoodMatch }
+  | { type: 'candidates'; matches: FoodMatch[] }
+  | { type: 'empty' };
+
+// Thrown by lookupBarcode when the lookup couldn't be completed at all
+// (network error, our own rate limit, an OFF outage, an auth failure) — as
+// opposed to a confirmed "this barcode has no product," which resolves to
+// null instead. Collapsing both into the same "not found" outcome was the
+// bug: a rate-limited scan looked identical to a barcode OFF genuinely
+// doesn't have. See docs/food-log-input-modes-diagnosis.md §1.3.
+export class BarcodeLookupUnavailableError extends Error {
+  constructor() {
+    super('Barcode lookup could not be completed.');
+    this.name = 'BarcodeLookupUnavailableError';
+  }
 }
 
 export async function lookupBarcode(
@@ -33,13 +62,16 @@ export async function lookupBarcode(
       `/food/barcode/${encodeURIComponent(barcode)}`,
     );
     return data;
-  } catch {
-    return null; // not found → caller falls through to manual entry
+  } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 404) {
+      return null; // confirmed not found → caller falls through to manual entry
+    }
+    throw new BarcodeLookupUnavailableError();
   }
 }
 
-export async function searchUsda(term: string): Promise<UsdaFoodMatch[]> {
-  const { data } = await apiClient.get('/food/search-usda', {
+export async function searchFood(term: string): Promise<FoodSearchResult> {
+  const { data } = await apiClient.get('/food/search', {
     params: { term },
   });
   return data;
@@ -64,6 +96,9 @@ export async function listLocalFoodItems(): Promise<LocalFoodItem[]> {
 export async function createFoodLog(input: {
   sourceType: FoodSourceType;
   sourceRef: string;
+  // CANONICAL only — the display name already resolved by search, passed
+  // through so history shows whichever language (EN/AR) the user searched in.
+  name?: string;
   grams: number;
   mealCategory: MealCategory;
   loggedAtUtc: string;

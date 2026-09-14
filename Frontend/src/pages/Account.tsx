@@ -28,9 +28,13 @@ const ALLOWED_AVATAR_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
 // Only English is fully translated today (data-model.md's supported-language
 // list); the others are offered so the "not yet supported" notice (FR-020)
-// has something to demonstrate.
+// has something to demonstrate. Arabic is the exception: full UI
+// translation isn't done either, but this preference also drives the Voice
+// tab's speech-recognition language (ar-EG) and its search results, which
+// *are* fully functional — see docs/food-log-input-modes-diagnosis.md §2.4.
 const LANGUAGE_OPTIONS = [
   { code: 'en', label: 'English' },
+  { code: 'ar', label: 'العربية (Arabic)' },
   { code: 'es', label: 'Español' },
   { code: 'fr', label: 'Français' },
   { code: 'de', label: 'Deutsch' },

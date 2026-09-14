@@ -47,17 +47,27 @@ export class UsdaClient {
     }
     const body = (await response.json()) as UsdaSearchResponse;
 
-    return (body.foods ?? []).map((food) => ({
-      fdcId: String(food.fdcId),
-      name: food.description,
-      caloriesPer100g: extractNutrient(food.foodNutrients, 'Energy') ?? 0,
-      proteinPer100g: extractNutrient(food.foodNutrients, 'Protein'),
-      carbsPer100g: extractNutrient(
-        food.foodNutrients,
-        'Carbohydrate, by difference',
-      ),
-      fatPer100g: extractNutrient(food.foodNutrients, 'Total lipid (fat)'),
-    }));
+    const matches: UsdaFoodMatch[] = [];
+    for (const food of body.foods ?? []) {
+      const caloriesPer100g = extractNutrient(food.foodNutrients, 'Energy');
+      // A record with no "Energy" entry at all (uncommon but real — see
+      // docs/food-log-input-modes-diagnosis.md §3.3) can't be shown as a
+      // candidate: silently defaulting to 0 kcal is worse than not offering
+      // it, since the user has no way to tell it apart from a real 0.
+      if (caloriesPer100g === null) continue;
+      matches.push({
+        fdcId: String(food.fdcId),
+        name: food.description,
+        caloriesPer100g,
+        proteinPer100g: extractNutrient(food.foodNutrients, 'Protein'),
+        carbsPer100g: extractNutrient(
+          food.foodNutrients,
+          'Carbohydrate, by difference',
+        ),
+        fatPer100g: extractNutrient(food.foodNutrients, 'Total lipid (fat)'),
+      });
+    }
+    return matches;
   }
 
   // Fetches one food by its own fdcId — used when re-resolving an already
@@ -79,10 +89,15 @@ export class UsdaClient {
       value: n.amount,
     }));
 
+    const caloriesPer100g = extractNutrient(nutrients, 'Energy');
+    // Same missing-data case as searchByTerm — treat as not found rather
+    // than silently resolving to 0 kcal on save/edit.
+    if (caloriesPer100g === null) return null;
+
     return {
       fdcId: String(body.fdcId),
       name: body.description,
-      caloriesPer100g: extractNutrient(nutrients, 'Energy') ?? 0,
+      caloriesPer100g,
       proteinPer100g: extractNutrient(nutrients, 'Protein'),
       carbsPer100g: extractNutrient(nutrients, 'Carbohydrate, by difference'),
       fatPer100g: extractNutrient(nutrients, 'Total lipid (fat)'),

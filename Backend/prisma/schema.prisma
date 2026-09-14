@@ -25,6 +25,7 @@ enum FoodSourceType {
   OPEN_FOOD_FACTS
   USDA
   LOCAL
+  CANONICAL
 }
 
 enum MealCategory {
@@ -228,6 +229,28 @@ model LocalFoodItem {
   @@map("local_food_items")
 }
 
+// Small, curated, bilingual (English + Arabic, including common Egyptian dialect
+// terms) canonical foods table — searched before falling back to USDA's live API,
+// so a generic query like "chicken breast" resolves to one representative item
+// instead of USDA's many near-duplicate branded/prepared results.
+// See docs/food-log-input-modes-diagnosis.md §3.2 (Option A).
+model CanonicalFood {
+  id               String   @id @default(uuid())
+  nameEn           String   @unique
+  nameAr           String
+  aliasesEn        String[] @default([])
+  aliasesAr        String[] @default([])
+  caloriesPer100g  Decimal
+  proteinPer100g   Decimal?
+  carbsPer100g     Decimal?
+  fatPer100g       Decimal?
+  createdAt        DateTime @default(now())
+
+  foodLogEntries   FoodLogEntry[]
+
+  @@map("canonical_foods")
+}
+
 model FoodLogEntry {
   id                String         @id @default(uuid())
   userId            String
@@ -237,6 +260,8 @@ model FoodLogEntry {
   name              String         @default("")
   localFoodItemId   String?
   localFoodItem     LocalFoodItem? @relation(fields: [localFoodItemId], references: [id], onDelete: SetNull)
+  canonicalFoodId   String?
+  canonicalFood     CanonicalFood? @relation(fields: [canonicalFoodId], references: [id], onDelete: SetNull)
   grams             Decimal
   caloriesComputed  Decimal
   proteinComputed   Decimal?

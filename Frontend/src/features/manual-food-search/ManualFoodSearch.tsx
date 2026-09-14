@@ -1,21 +1,25 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   createLocalFoodItem,
-  searchUsda,
+  searchFood,
+  type FoodMatch,
   type LocalFoodItem,
-  type UsdaFoodMatch,
 } from '../../services/foodService';
 import { FieldLabel, Input } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 
 interface Props {
-  onMatchSelected: (match: UsdaFoodMatch) => void;
+  onMatchSelected: (match: FoodMatch) => void;
   onLocalItemCreated: (item: LocalFoodItem) => void;
+  // Pre-fills the search box and runs the search once on mount — used when
+  // arriving here from a barcode scan that came back "not found", per
+  // docs/food-log-input-modes-diagnosis.md §1.6 item 5.
+  initialQuery?: string;
 }
 
-export function ManualFoodSearch({ onMatchSelected, onLocalItemCreated }: Props) {
-  const [term, setTerm] = useState('');
-  const [matches, setMatches] = useState<UsdaFoodMatch[] | null>(null);
+export function ManualFoodSearch({ onMatchSelected, onLocalItemCreated, initialQuery }: Props) {
+  const [term, setTerm] = useState(initialQuery ?? '');
+  const [matches, setMatches] = useState<FoodMatch[] | null>(null);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -23,15 +27,33 @@ export function ManualFoodSearch({ onMatchSelected, onLocalItemCreated }: Props)
   const [fallbackName, setFallbackName] = useState('');
   const [fallbackCalories, setFallbackCalories] = useState('');
 
+  useEffect(() => {
+    if (initialQuery?.trim()) {
+      handleSearch();
+    }
+    // Mount-only: this component remounts fresh every time the user enters
+    // Manual mode (it's conditionally rendered in FoodLog.tsx), so there's
+    // no case where `initialQuery` changes under an already-mounted instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleSearch() {
     if (!term.trim()) return;
     setError(null);
     setMatches(null);
     setShowFallback(false);
     try {
-      const results = await searchUsda(term);
+      const result = await searchFood(term);
       setSearched(true);
-      setMatches(results);
+      if (result.type === 'single') {
+        // Exactly one recognized item — per the user's ask, skip the
+        // candidate-list step entirely and go straight to entering grams.
+        // See docs/food-log-input-modes-diagnosis.md §3.4 item 3.
+        onMatchSelected(result.match);
+        setMatches(null);
+        return;
+      }
+      setMatches(result.type === 'candidates' ? result.matches : []);
     } catch {
       setError('Search failed. Try again.');
     }
@@ -59,9 +81,10 @@ export function ManualFoodSearch({ onMatchSelected, onLocalItemCreated }: Props)
       <FieldLabel>
         Food name
         <Input
-          placeholder="e.g. Grilled chicken"
+          placeholder="e.g. Grilled chicken, or صدر فراخ"
           value={term}
           onChange={(e) => setTerm(e.target.value)}
+          dir="auto"
         />
       </FieldLabel>
       <SecondaryButton type="button" disabled={!term.trim()} onClick={handleSearch} className="self-start">
@@ -73,11 +96,12 @@ export function ManualFoodSearch({ onMatchSelected, onLocalItemCreated }: Props)
       {matches && matches.length > 0 && (
         <ul className="flex flex-col gap-2">
           {matches.map((match) => (
-            <li key={match.fdcId}>
+            <li key={`${match.sourceType}-${match.sourceRef}`}>
               <button
                 type="button"
                 onClick={() => onMatchSelected(match)}
                 className="w-full rounded-2xl border border-border bg-surface px-4 py-2.5 text-left text-body hover:bg-accent-soft"
+                dir="auto"
               >
                 {match.name} — {match.caloriesPer100g} kcal/100g
               </button>
@@ -105,6 +129,7 @@ export function ManualFoodSearch({ onMatchSelected, onLocalItemCreated }: Props)
               placeholder="e.g. Grandma's lasagna"
               value={fallbackName}
               onChange={(e) => setFallbackName(e.target.value)}
+              dir="auto"
             />
           </FieldLabel>
           <FieldLabel>

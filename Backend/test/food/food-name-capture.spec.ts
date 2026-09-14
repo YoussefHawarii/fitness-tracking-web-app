@@ -25,6 +25,9 @@ describe('FoodService — name capture on createFoodLog', () => {
       localFoodItem: {
         findFirst: jest.fn(),
       },
+      canonicalFood: {
+        findUnique: jest.fn(),
+      },
       ...overrides.prisma,
     };
     const openFoodFacts = {
@@ -36,11 +39,16 @@ describe('FoodService — name capture on createFoodLog', () => {
       getById: jest.fn(),
       ...overrides.usda,
     };
+    // Real BarcodeLookupCacheService behavior isn't under test here (see
+    // barcode-lookup-cache.spec.ts) — a pass-through stub is enough so
+    // FoodService's cache-through OFF lookup has something to call.
+    const barcodeCache = { get: () => null, set: () => undefined };
 
     const service = new FoodService(
       prisma as never,
       openFoodFacts as never,
       usda as never,
+      barcodeCache as never,
     );
     return { service, created };
   }
@@ -112,5 +120,76 @@ describe('FoodService — name capture on createFoodLog', () => {
     });
 
     expect(created[0].name).toBe("Mom's lasagna");
+  });
+
+  // A canonical food's history entry defaults to the server-resolved English
+  // name, but the search endpoint may have matched an Arabic query — the
+  // client passes back whichever name the user actually saw. Regression
+  // coverage for the 2026-09-14 review finding: a client-supplied name that
+  // doesn't match the resolved record must NOT be trusted verbatim, since
+  // that would decouple the displayed name from the nutrients actually
+  // logged (e.g. sourceRef → chicken breast, name → "Ice cream").
+  describe('CANONICAL source type', () => {
+    function buildCanonicalService() {
+      return buildService({
+        prisma: {
+          canonicalFood: {
+            findUnique: jest.fn().mockResolvedValue({
+              id: 'canon-1',
+              nameEn: 'Chicken breast, raw',
+              nameAr: 'صدر فراخ نيء',
+              caloriesPer100g: 120,
+              proteinPer100g: 22.5,
+              carbsPer100g: 0,
+              fatPer100g: 2.6,
+            }),
+          },
+        },
+      });
+    }
+
+    it('defaults to the canonical English name when the client sends no name', async () => {
+      const { service, created } = buildCanonicalService();
+
+      await service.createFoodLog(userId, {
+        sourceType: 'CANONICAL',
+        sourceRef: 'canon-1',
+        grams: 100,
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-08-30T12:00:00.000Z',
+      });
+
+      expect(created[0].name).toBe('Chicken breast, raw');
+    });
+
+    it('trusts a client-supplied name that matches the resolved Arabic name', async () => {
+      const { service, created } = buildCanonicalService();
+
+      await service.createFoodLog(userId, {
+        sourceType: 'CANONICAL',
+        sourceRef: 'canon-1',
+        name: 'صدر فراخ نيء',
+        grams: 100,
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-08-30T12:00:00.000Z',
+      });
+
+      expect(created[0].name).toBe('صدر فراخ نيء');
+    });
+
+    it('ignores a client-supplied name that does not match the resolved record', async () => {
+      const { service, created } = buildCanonicalService();
+
+      await service.createFoodLog(userId, {
+        sourceType: 'CANONICAL',
+        sourceRef: 'canon-1',
+        name: 'Ice cream',
+        grams: 100,
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-08-30T12:00:00.000Z',
+      });
+
+      expect(created[0].name).toBe('Chicken breast, raw');
+    });
   });
 });

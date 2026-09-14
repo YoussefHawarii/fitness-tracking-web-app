@@ -19,16 +19,19 @@ import {
 import { UserModel } from '../../db/models/user.model';
 import { getDayBoundaryUtc } from '../calorie-balance/day-boundary.util';
 import { FoodService } from './food.service';
+import { FoodSearchService } from './food-search.service';
 import { CreateLocalFoodItemDto } from './dto/create-local-food-item.dto';
 import { CreateFoodLogDto } from './dto/create-food-log.dto';
 import { UpdateFoodLogDto } from './dto/update-food-log.dto';
 import { ListFoodLogsQueryDto } from './dto/list-food-logs-query.dto';
+import { SearchFoodQueryDto } from './dto/search-food-query.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('food')
 export class FoodController {
   constructor(
     private readonly foodService: FoodService,
+    private readonly foodSearchService: FoodSearchService,
     private readonly userModel: UserModel,
   ) {}
 
@@ -37,9 +40,15 @@ export class FoodController {
     return this.foodService.lookupBarcode(code);
   }
 
-  @Get('search-usda')
-  searchUsda(@Query('term') term: string) {
-    return this.foodService.searchUsda(term);
+  // Shared by Manual search and Voice (both call this) — canonical bilingual
+  // catalog first, then the caller's own LocalFoodItems, then live USDA as
+  // the long-tail fallback. See docs/food-log-input-modes-diagnosis.md §3.4.
+  @Get('search')
+  search(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SearchFoodQueryDto,
+  ) {
+    return this.foodSearchService.search(query.term, user.userId);
   }
 
   @Post('local-items')

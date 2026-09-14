@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { BarcodeScanner } from '../features/barcode-scanner/BarcodeScanner';
@@ -10,10 +10,10 @@ import {
   listFoodLogsForDay,
   lookupBarcode,
   updateFoodLog,
+  type FoodMatch,
+  type FoodSourceType,
   type LocalFoodItem,
   type MealCategory,
-  type OpenFoodFactsProduct,
-  type UsdaFoodMatch,
 } from '../services/foodService';
 import { Card, SegmentedControl } from '../components/ui/Card';
 import { Input, FieldLabel, Select } from '../components/ui/Input';
@@ -28,10 +28,14 @@ import {
 import { useAccountTimezone } from '../hooks/useAccountTimezone';
 
 type InputMode = 'barcode' | 'voice' | 'manual';
-type PendingItem =
-  | { sourceType: 'OPEN_FOOD_FACTS'; sourceRef: string; name: string }
-  | { sourceType: 'USDA'; sourceRef: string; name: string }
-  | { sourceType: 'LOCAL'; sourceRef: string; name: string };
+type PendingItem = {
+  sourceType: FoodSourceType;
+  sourceRef: string;
+  name: string;
+  caloriesPer100g: number;
+};
+
+type ScanStatus = 'idle' | 'looking-up' | 'found' | 'not-found' | 'unavailable';
 
 interface FoodLogEntry {
   id: string;
@@ -48,6 +52,15 @@ function isInputMode(value: unknown): value is InputMode {
   return value === 'barcode' || value === 'voice' || value === 'manual';
 }
 
+function toPendingItem(match: FoodMatch): PendingItem {
+  return {
+    sourceType: match.sourceType,
+    sourceRef: match.sourceRef,
+    name: match.name,
+    caloriesPer100g: match.caloriesPer100g,
+  };
+}
+
 export function FoodLog() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -55,11 +68,31 @@ export function FoodLog() {
   const date = searchParams.get('date') || todayInAccountTimezone();
   const requestedMode = (location.state as { mode?: unknown } | null)?.mode;
   const [mode, setMode] = useState<InputMode>(isInputMode(requestedMode) ? requestedMode : 'barcode');
-  const [pendingItem, setPendingItem] = useState<PendingItem | null>(null);
+
+  // A queue rather than a single item so a voice recording that splits into
+  // several food terms ("chicken and rice") can be logged one at a time
+  // without losing the rest — see docs/food-log-input-modes-diagnosis.md §2.3.
+  const [pendingItems, setPendingItems] = useState<PendingItem[]>([]);
+  const pendingItem = pendingItems[0] ?? null;
+  const pendingCardRef = useRef<HTMLDivElement>(null);
+  const gramsInputRef = useRef<HTMLInputElement>(null);
+
   const [grams, setGrams] = useState('');
   const [mealCategory, setMealCategory] = useState<MealCategory>('BREAKFAST');
   const [status, setStatus] = useState<string | null>(null);
   const [entries, setEntries] = useState<FoodLogEntry[]>([]);
+
+  // Barcode scan state machine — see docs/food-log-input-modes-diagnosis.md
+  // §1.4/§1.6: a successful scan needs its own visible "found"/"not found"
+  // states inside the scan card itself, not just a muted caption below it.
+  const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
+  const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(null);
+  const [scanAttempt, setScanAttempt] = useState(0);
+  // Bumped on every new scan attempt (and whenever the user leaves the scan
+  // in progress) so a lookup abandoned by a rescan/mode-switch can't apply
+  // its result after something newer has already taken its place.
+  const scanRequestIdRef = useRef(0);
+  const [manualPrefill, setManualPrefill] = useState<string | undefined>(undefined);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editGrams, setEditGrams] = useState('');
@@ -75,6 +108,16 @@ export function FoodLog() {
   useEffect(() => {
     refreshEntries();
   }, [refreshEntries]);
+
+  useEffect(() => {
+    if (pendingItems.length > 0) {
+      pendingCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      // Selecting an item (scan/voice/manual) means grams is the very next
+      // thing to fill in — see docs/food-log-input-modes-diagnosis.md §1.6
+      // item 5.
+      gramsInputRef.current?.focus();
+    }
+  }, [pendingItems.length]);
 
   function startEdit(entry: FoodLogEntry) {
     setEditingId(entry.id);
@@ -126,42 +169,113 @@ export function FoodLog() {
   }
 
   async function handleBarcodeDecoded(barcode: string) {
-    const product: OpenFoodFactsProduct | null = await lookupBarcode(barcode);
-    if (!product) {
-      setStatus('No product found for that barcode — try manual entry.');
-      setMode('manual');
-      return;
+    if (scanStatus === 'looking-up') return; // single-flight guard
+    const requestId = ++scanRequestIdRef.current;
+    setLastScannedBarcode(barcode);
+    setScanStatus('looking-up');
+    try {
+      const product = await lookupBarcode(barcode);
+      if (scanRequestIdRef.current !== requestId) return; // superseded by a rescan/mode-switch
+      if (!product) {
+        setScanStatus('not-found');
+        return;
+      }
+      setPendingItems([
+        {
+          sourceType: 'OPEN_FOOD_FACTS',
+          sourceRef: barcode,
+          name: product.name,
+          caloriesPer100g: product.caloriesPer100g,
+        },
+      ]);
+      setScanStatus('found');
+      setStatus(null);
+    } catch {
+      // lookupBarcode only throws BarcodeLookupUnavailableError (a genuine
+      // "not found" resolves to null instead, handled above) — any failure
+      // here means the lookup itself couldn't be completed.
+      if (scanRequestIdRef.current !== requestId) return;
+      setScanStatus('unavailable');
     }
-    setPendingItem({ sourceType: 'OPEN_FOOD_FACTS', sourceRef: barcode, name: product.name });
+  }
+
+  function retryLastScan() {
+    if (lastScannedBarcode) {
+      handleBarcodeDecoded(lastScannedBarcode);
+    }
+  }
+
+  function rescan() {
+    scanRequestIdRef.current++; // invalidate any lookup still in flight
+    setScanStatus('idle');
+    setLastScannedBarcode(null);
+    setScanAttempt((n) => n + 1);
+  }
+
+  // Re-entering the Scan tab should always show a fresh camera view, not a
+  // leftover "not found"/"unavailable" banner from a previous visit.
+  function handleModeChange(newMode: InputMode) {
+    if (newMode === 'barcode' && mode !== 'barcode') {
+      rescan();
+    }
+    if (mode === 'barcode' && newMode !== 'barcode' && scanStatus === 'looking-up') {
+      scanRequestIdRef.current++; // leaving mid-lookup invalidates it too
+    }
+    if (newMode !== 'manual') {
+      setManualPrefill(undefined); // don't carry a stale barcode into an unrelated later Manual visit
+    }
+    setMode(newMode);
+  }
+
+  function handleFoodMatchSelected(match: FoodMatch) {
+    setPendingItems([toPendingItem(match)]);
     setStatus(null);
   }
 
-  function handleUsdaMatchSelected(match: UsdaFoodMatch) {
-    setPendingItem({ sourceType: 'USDA', sourceRef: match.fdcId, name: match.name });
+  function handleFoodMatchesSelected(matches: FoodMatch[]) {
+    if (matches.length === 0) return;
+    setPendingItems(matches.map(toPendingItem));
+    setStatus(null);
   }
 
   function handleLocalItemCreated(item: LocalFoodItem) {
-    setPendingItem({ sourceType: 'LOCAL', sourceRef: item.id, name: item.name });
+    setPendingItems([
+      { sourceType: 'LOCAL', sourceRef: item.id, name: item.name, caloriesPer100g: item.caloriesPer100g },
+    ]);
     setStatus(null);
   }
 
   async function handleSaveLog() {
-    if (!pendingItem || !grams || Number(grams) <= 0) {
+    const current = pendingItems[0];
+    if (!current || !grams || Number(grams) <= 0) {
       setStatus('Choose a food item and enter a valid gram amount.');
       return;
     }
     try {
       await createFoodLog({
-        sourceType: pendingItem.sourceType,
-        sourceRef: pendingItem.sourceRef,
+        sourceType: current.sourceType,
+        sourceRef: current.sourceRef,
+        name: current.sourceType === 'CANONICAL' ? current.name : undefined,
         grams: Number(grams),
         mealCategory,
         loggedAtUtc: new Date().toISOString(),
       });
-      setStatus(`Logged ${pendingItem.name} under ${mealCategory}.`);
-      setPendingItem(null);
+      const remaining = pendingItems.length - 1;
+      setStatus(
+        remaining > 0
+          ? `Logged ${current.name} under ${mealCategory}. ${remaining} more item${remaining === 1 ? '' : 's'} to log.`
+          : `Logged ${current.name} under ${mealCategory}.`,
+      );
+      const stillQueued = remaining > 0;
+      setPendingItems((prev) => prev.slice(1));
       setGrams('');
       refreshEntries();
+      // A scanned item was just saved and nothing else is queued — return
+      // the scan card to a ready-to-scan-again state instead of leaving the
+      // stale "✓ Found" caption's camera box sitting there blank.
+      if (current.sourceType === 'OPEN_FOOD_FACTS' && !stillQueued) {
+        rescan();
+      }
     } catch {
       setStatus('Could not save this entry.');
     }
@@ -179,7 +293,7 @@ export function FoodLog() {
 
       <SegmentedControl
         value={mode}
-        onChange={setMode}
+        onChange={handleModeChange}
         options={[
           { value: 'barcode', label: 'Scan' },
           { value: 'voice', label: 'Voice' },
@@ -191,11 +305,68 @@ export function FoodLog() {
         {mode === 'barcode' && (
           <div className="flex flex-col gap-3">
             <div className="hud-frame overflow-hidden rounded-xl bg-black">
-              <BarcodeScanner onDecoded={handleBarcodeDecoded} />
+              {scanStatus !== 'not-found' && scanStatus !== 'unavailable' && (
+                <BarcodeScanner
+                  key={scanAttempt}
+                  onDecoded={handleBarcodeDecoded}
+                  onScanError={() => setScanStatus('unavailable')}
+                />
+              )}
+              {(scanStatus === 'not-found' || scanStatus === 'unavailable') && (
+                <div className="flex aspect-square w-full items-center justify-center bg-black" />
+              )}
             </div>
-            <p className="flex items-center gap-2 text-label text-text-muted normal-case tracking-normal">
-              <ScanIcon width={16} height={16} /> Align barcode within frame
-            </p>
+
+            {scanStatus === 'idle' && (
+              <p className="flex items-center gap-2 text-label text-text-muted normal-case tracking-normal">
+                <ScanIcon width={16} height={16} /> Align barcode within frame
+              </p>
+            )}
+            {scanStatus === 'looking-up' && (
+              <p className="flex items-center gap-2 text-label text-text-muted normal-case tracking-normal">
+                <ScanIcon width={16} height={16} /> Barcode detected — looking it up…
+              </p>
+            )}
+            {scanStatus === 'found' && pendingItem?.sourceType === 'OPEN_FOOD_FACTS' && (
+              <p className="flex items-center gap-2 text-label text-accent normal-case tracking-normal">
+                ✓ Found: {pendingItem.name}
+              </p>
+            )}
+            {scanStatus === 'not-found' && (
+              <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+                <p className="text-body">We couldn't find a product for that barcode.</p>
+                <div className="flex flex-wrap gap-2">
+                  <PrimaryButton
+                    type="button"
+                    onClick={() => {
+                      setManualPrefill(lastScannedBarcode ?? undefined);
+                      setMode('manual');
+                    }}
+                  >
+                    Search manually instead
+                  </PrimaryButton>
+                  <SecondaryButton type="button" onClick={rescan}>
+                    Scan again
+                  </SecondaryButton>
+                </div>
+              </div>
+            )}
+            {scanStatus === 'unavailable' && (
+              <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+                <p className="text-body text-warn">
+                  Couldn't check that barcode right now — try again in a moment.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {/* No barcode yet (a scanner/camera error via onScanError) means retrying the lookup is a no-op — restart the scanner instead. */}
+                  <PrimaryButton type="button" onClick={lastScannedBarcode ? retryLastScan : rescan}>
+                    Try again
+                  </PrimaryButton>
+                  <SecondaryButton type="button" onClick={() => setMode('manual')}>
+                    Search manually instead
+                  </SecondaryButton>
+                </div>
+              </div>
+            )}
           </div>
         )}
         {mode === 'voice' && (
@@ -203,7 +374,7 @@ export function FoodLog() {
             <p className="flex items-center gap-2 text-label text-text-muted normal-case tracking-normal">
               <MicIcon width={16} height={16} /> Say what you ate
             </p>
-            <VoiceLogger onMatchSelected={handleUsdaMatchSelected} />
+            <VoiceLogger onMatchesSelected={handleFoodMatchesSelected} />
           </div>
         )}
         {mode === 'manual' && (
@@ -212,38 +383,48 @@ export function FoodLog() {
               <PlusCircleIcon width={16} height={16} /> Add a food item
             </p>
             <ManualFoodSearch
-              onMatchSelected={handleUsdaMatchSelected}
+              onMatchSelected={handleFoodMatchSelected}
               onLocalItemCreated={handleLocalItemCreated}
+              initialQuery={manualPrefill}
             />
           </div>
         )}
       </Card>
 
       {pendingItem && (
-        <Card className="flex flex-col gap-3 p-6">
-          <p className="text-heading">{pendingItem.name}</p>
-          <FieldLabel>
-            Grams
-            <Input
-              type="number"
-              min={1}
-              value={grams}
-              onChange={(e) => setGrams(e.target.value)}
-            />
-          </FieldLabel>
-          <FieldLabel>
-            Meal
-            <Select value={mealCategory} onChange={(e) => setMealCategory(e.target.value as MealCategory)}>
-              <option value="BREAKFAST">Breakfast</option>
-              <option value="LUNCH">Lunch</option>
-              <option value="DINNER">Dinner</option>
-              <option value="SNACKS">Snacks</option>
-            </Select>
-          </FieldLabel>
-          <PrimaryButton onClick={handleSaveLog} className="self-start">
-            Save entry
-          </PrimaryButton>
-        </Card>
+        <div ref={pendingCardRef}>
+          <Card className="flex flex-col gap-3 p-6">
+            {pendingItems.length > 1 && (
+              <p className="text-label text-text-muted normal-case tracking-normal">
+                Item 1 of {pendingItems.length} to log
+              </p>
+            )}
+            <p className="text-heading">{pendingItem.name}</p>
+            <p className="text-body text-text-muted">{pendingItem.caloriesPer100g} kcal/100g</p>
+            <FieldLabel>
+              Grams
+              <Input
+                ref={gramsInputRef}
+                type="number"
+                min={1}
+                value={grams}
+                onChange={(e) => setGrams(e.target.value)}
+              />
+            </FieldLabel>
+            <FieldLabel>
+              Meal
+              <Select value={mealCategory} onChange={(e) => setMealCategory(e.target.value as MealCategory)}>
+                <option value="BREAKFAST">Breakfast</option>
+                <option value="LUNCH">Lunch</option>
+                <option value="DINNER">Dinner</option>
+                <option value="SNACKS">Snacks</option>
+              </Select>
+            </FieldLabel>
+            <PrimaryButton onClick={handleSaveLog} className="self-start">
+              Save entry
+            </PrimaryButton>
+          </Card>
+        </div>
       )}
 
       {status && <p className="text-body text-text-muted">{status}</p>}

@@ -54,11 +54,13 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     };
     const openFoodFacts = { lookupByBarcode: jest.fn() };
     const usda = { searchByTerm: jest.fn() };
+    const barcodeCache = { get: () => null, set: () => undefined };
 
     const service = new FoodService(
       prisma as never,
       openFoodFacts as never,
       usda as never,
+      barcodeCache as never,
     );
     return { service, prisma, updateCalls };
   }
