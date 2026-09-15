@@ -24,9 +24,19 @@ export interface CanonicalMatch {
 const ARABIC_BLOCK = /[؀-ۿ]/;
 const ARABIC_DIACRITICS = /[ً-ٰٟۖ-ۭ]/g;
 const TATWEEL = /ـ/g;
+const INVISIBLE_TEXT_CONTROLS = /[\u200B-\u200F]/g;
+const NON_BREAKING_SPACE = /\u00A0/g;
+const COMMA_SEPARATORS = /[,،]/g;
 
 export function containsArabic(text: string): boolean {
   return ARABIC_BLOCK.test(text);
+}
+
+function normalizeSpacingCharacters(text: string): string {
+  return text
+    .replace(INVISIBLE_TEXT_CONTROLS, ' ')
+    .replace(NON_BREAKING_SPACE, ' ')
+    .replace(COMMA_SEPARATORS, ' ');
 }
 
 // Strips tashkeel/tatweel, folds the common alef/ya/ta-marbuta spelling
@@ -36,7 +46,7 @@ export function containsArabic(text: string): boolean {
 // speech, e.g. "الفراخ" for "the chicken"), and drops stray punctuation
 // (mirroring normalizeLatin) so "فراخ؟" still matches "فراخ".
 export function normalizeArabic(text: string): string {
-  return text
+  return normalizeSpacingCharacters(text)
     .replace(ARABIC_DIACRITICS, '')
     .replace(TATWEEL, '')
     .replace(/[إأآا]/g, 'ا')
@@ -49,7 +59,7 @@ export function normalizeArabic(text: string): string {
 }
 
 export function normalizeLatin(text: string): string {
-  return text
+  return normalizeSpacingCharacters(text)
     .toLowerCase()
     .replace(/[^\p{L}\p{N}\s]/gu, '')
     .replace(/\s+/g, ' ')
@@ -58,6 +68,11 @@ export function normalizeLatin(text: string): string {
 
 export function normalizeTerm(text: string): string {
   return containsArabic(text) ? normalizeArabic(text) : normalizeLatin(text);
+}
+
+export function tokenizeFoodTranscript(text: string): string[] {
+  const normalized = normalizeTerm(text);
+  return normalized ? normalized.split(' ') : [];
 }
 
 interface Candidate {

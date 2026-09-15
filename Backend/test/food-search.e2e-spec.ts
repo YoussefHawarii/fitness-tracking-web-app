@@ -20,6 +20,13 @@ type FoodSearchResponseBody =
   | { type: 'candidates'; matches: FoodMatchBody[] }
   | { type: 'empty' };
 
+interface TranscriptSearchResponseBody {
+  groups: Array<{
+    term: string;
+    result: Exclude<FoodSearchResponseBody, { type: 'empty' }>;
+  }>;
+}
+
 // Covers docs/food-log-input-modes-diagnosis.md §3.4 (GET /food/search:
 // canonical -> local -> USDA fallback) and §1.6 item 4 (barcode lookup
 // reused between scan and save instead of re-fetched from Open Food Facts).
@@ -150,6 +157,29 @@ describe('Food search + barcode reuse (e2e)', () => {
     if (body.type === 'single') {
       expect(body.match.sourceType).toBe('CANONICAL');
       expect(body.match.caloriesPer100g).toBe(120);
+    }
+    expect(usdaSearchByTerm).not.toHaveBeenCalled();
+  });
+
+  it('extracts a seeded canonical food from an authenticated transcript request', async () => {
+    const token = await newVerifiedUser('transcript');
+
+    const res = await request(app.getHttpServer())
+      .get('/food/search-transcript')
+      .query({ transcript: `I ate testchicken${testSuffix} today` })
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    const body = res.body as TranscriptSearchResponseBody;
+    expect(body.groups).toHaveLength(1);
+    expect(body.groups[0].term).toBe(`testchicken${testSuffix}`);
+    expect(body.groups[0].result.type).toBe('single');
+    if (body.groups[0].result.type === 'single') {
+      expect(body.groups[0].result.match.sourceType).toBe('CANONICAL');
+      expect(body.groups[0].result.match.sourceRef).toBe(
+        createdCanonicalFoodIds[0],
+      );
+      expect(body.groups[0].result.match.caloriesPer100g).toBe(120);
     }
     expect(usdaSearchByTerm).not.toHaveBeenCalled();
   });

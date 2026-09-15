@@ -25,6 +25,7 @@ import { CreateFoodLogDto } from './dto/create-food-log.dto';
 import { UpdateFoodLogDto } from './dto/update-food-log.dto';
 import { ListFoodLogsQueryDto } from './dto/list-food-logs-query.dto';
 import { SearchFoodQueryDto } from './dto/search-food-query.dto';
+import { SearchFoodTranscriptQueryDto } from './dto/search-food-transcript-query.dto';
 
 @UseGuards(JwtAuthGuard)
 @Controller('food')
@@ -40,15 +41,25 @@ export class FoodController {
     return this.foodService.lookupBarcode(code);
   }
 
-  // Shared by Manual search and Voice (both call this) — canonical bilingual
-  // catalog first, then the caller's own LocalFoodItems, then live USDA as
-  // the long-tail fallback. See docs/food-log-input-modes-diagnosis.md §3.4.
+  // Manual search uses the canonical bilingual catalog first, then the
+  // caller's own LocalFoodItems, then live USDA as the long-tail fallback.
   @Get('search')
   search(
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: SearchFoodQueryDto,
   ) {
     return this.foodSearchService.search(query.term, user.userId);
+  }
+
+  @Get('search-transcript')
+  searchTranscript(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SearchFoodTranscriptQueryDto,
+  ) {
+    return this.foodSearchService.searchTranscript(
+      query.transcript,
+      user.userId,
+    );
   }
 
   @Post('local-items')

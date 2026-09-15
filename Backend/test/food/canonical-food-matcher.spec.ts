@@ -4,6 +4,7 @@ import {
   normalizeArabic,
   normalizeLatin,
   normalizeTerm,
+  tokenizeFoodTranscript,
   type CanonicalFoodRecord,
 } from '../../src/modules/food/canonical-food-matcher';
 
@@ -75,6 +76,19 @@ describe('canonical-food-matcher normalization', () => {
   it('lowercases and strips punctuation for Latin text', () => {
     expect(normalizeLatin('Chicken-Breast!')).toBe('chickenbreast');
     expect(normalizeLatin('  Rice   ')).toBe('rice');
+  });
+
+  it('treats bidi, zero-width, joiner, and non-breaking characters as word boundaries', () => {
+    expect(
+      tokenizeFoodTranscript(
+        'I\u200Ehad\u200Fchicken\u200Bbreast\u200Crice\u200Dtoast\u00A0today',
+      ),
+    ).toEqual(['i', 'had', 'chicken', 'breast', 'rice', 'toast', 'today']);
+  });
+
+  it('treats English and Arabic commas as word boundaries without surrounding spaces', () => {
+    expect(tokenizeFoodTranscript('eggs,toast')).toEqual(['eggs', 'toast']);
+    expect(tokenizeFoodTranscript('رز،فراخ')).toEqual(['رز', 'فراخ']);
   });
 
   it('routes normalization by detected script', () => {

@@ -5,8 +5,8 @@ import { apiClient } from './apiClient';
 // FOOD_SOURCE_TYPES — this app has no shared package between Frontend and
 // Backend, so it can't import that union directly.
 export type FoodSourceType = 'OPEN_FOOD_FACTS' | 'USDA' | 'LOCAL' | 'CANONICAL';
-// Search never resolves a barcode — a FoodMatch only ever comes from
-// GET /food/search, which resolves the other three source types.
+// Search never resolves a barcode — a FoodMatch only ever comes from the
+// single-term or transcript search endpoints.
 export type FoodMatchSourceType = Exclude<FoodSourceType, 'OPEN_FOOD_FACTS'>;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
 
@@ -27,9 +27,8 @@ export interface LocalFoodItem extends NutrientsPer100g {
   name: string;
 }
 
-// A single search result, whichever of the three sources it came from —
-// returned by the shared GET /food/search endpoint used by both Manual
-// search and Voice. See docs/food-log-input-modes-diagnosis.md §3.4.
+// A single search result, whichever of the three searchable sources it came
+// from.
 export interface FoodMatch extends NutrientsPer100g {
   sourceType: FoodMatchSourceType;
   sourceRef: string;
@@ -40,6 +39,15 @@ export type FoodSearchResult =
   | { type: 'single'; match: FoodMatch }
   | { type: 'candidates'; matches: FoodMatch[] }
   | { type: 'empty' };
+
+export type RecognizedFoodSearchResult = Exclude<
+  FoodSearchResult,
+  { type: 'empty' }
+>;
+
+export interface TranscriptSearchResult {
+  groups: Array<{ term: string; result: RecognizedFoodSearchResult }>;
+}
 
 // Thrown by lookupBarcode when the lookup couldn't be completed at all
 // (network error, our own rate limit, an OFF outage, an auth failure) — as
@@ -73,6 +81,15 @@ export async function lookupBarcode(
 export async function searchFood(term: string): Promise<FoodSearchResult> {
   const { data } = await apiClient.get('/food/search', {
     params: { term },
+  });
+  return data;
+}
+
+export async function searchFoodTranscript(
+  transcript: string,
+): Promise<TranscriptSearchResult> {
+  const { data } = await apiClient.get('/food/search-transcript', {
+    params: { transcript },
   });
   return data;
 }

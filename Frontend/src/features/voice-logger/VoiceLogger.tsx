@@ -1,10 +1,13 @@
 import { useRef, useState } from 'react';
-import { searchFood, type FoodMatch, type FoodSearchResult } from '../../services/foodService';
+import {
+  searchFoodTranscript,
+  type FoodMatch,
+  type RecognizedFoodSearchResult,
+} from '../../services/foodService';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import { SegmentedControl } from '../../components/ui/Card';
 import { FieldLabel, Textarea } from '../../components/ui/Input';
 import { useAccountContext } from '../../context/AccountContext';
-import { splitIntoFoodTerms } from './splitIntoFoodTerms';
 
 // Maps the app's language-preference codes (Account page) to BCP-47 tags
 // the Web Speech API expects. Falls back to English for any unmapped code.
@@ -49,22 +52,21 @@ interface Props {
   onMatchesSelected: (matches: FoodMatch[]) => void;
 }
 
-// A rejected search (network blip) is distinct from a genuine empty result —
-// conflating them as 'empty' would tell the user "no match found" for a term
-// that was never actually searched.
-type TermSearchResult = FoodSearchResult | { type: 'error' };
-
 interface TermSearch {
   term: string;
-  result: TermSearchResult;
+  result: RecognizedFoodSearchResult;
 }
 
 const RECOGNITION_ERROR_MESSAGES: Record<string, string> = {
-  'not-allowed': 'Microphone access was blocked — allow it in your browser settings and try again.',
-  'service-not-allowed': 'Microphone access was blocked — allow it in your browser settings and try again.',
-  'language-not-supported': "Your browser doesn't support this language for voice input.",
+  'not-allowed':
+    'Microphone access was blocked — allow it in your browser settings and try again.',
+  'service-not-allowed':
+    'Microphone access was blocked — allow it in your browser settings and try again.',
+  'language-not-supported':
+    "Your browser doesn't support this language for voice input.",
   'audio-capture': 'No microphone was found. Check your device and try again.',
-  network: 'Voice recognition needs a network connection — check your connection and try again.',
+  network:
+    'Voice recognition needs a network connection — check your connection and try again.',
   'no-speech': "Didn't catch that — try recording again.",
 };
 
@@ -73,24 +75,30 @@ const RECOGNITION_ERROR_MESSAGES: Record<string, string> = {
 // to search — and candidate matches are presented rather than auto-selected.
 export function VoiceLogger({ onMatchesSelected }: Props) {
   const { account, error: accountError } = useAccountContext();
-  const [explicitLanguageChoice, setExplicitLanguageChoice] = useState<'en' | 'ar' | null>(null);
+  const [explicitLanguageChoice, setExplicitLanguageChoice] = useState<
+    'en' | 'ar' | null
+  >(null);
   const [transcript, setTranscript] = useState('');
   const [recording, setRecording] = useState(false);
   const [termSearches, setTermSearches] = useState<TermSearch[] | null>(null);
   const [selections, setSelections] = useState<Record<number, FoodMatch>>({});
   const [error, setError] = useState<string | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
-  const accountLanguageChoice = account?.languagePreference === 'ar' ? 'ar' : 'en';
-  const recognitionLanguageChoice = explicitLanguageChoice ?? accountLanguageChoice;
+  const accountLanguageChoice =
+    account?.languagePreference === 'ar' ? 'ar' : 'en';
+  const recognitionLanguageChoice =
+    explicitLanguageChoice ?? accountLanguageChoice;
 
   function startRecording() {
-    const SpeechRecognitionCtor = window.SpeechRecognition ?? window.webkitSpeechRecognition;
+    const SpeechRecognitionCtor =
+      window.SpeechRecognition ?? window.webkitSpeechRecognition;
     if (!SpeechRecognitionCtor) {
       setError('Voice input is not supported in this browser.');
       return;
     }
     const recognition = new SpeechRecognitionCtor();
-    recognition.lang = SPEECH_RECOGNITION_LOCALES[recognitionLanguageChoice] ?? 'en-US';
+    recognition.lang =
+      SPEECH_RECOGNITION_LOCALES[recognitionLanguageChoice] ?? 'en-US';
     recognition.continuous = false;
     recognition.interimResults = false;
     recognition.onresult = (event) => {
@@ -118,42 +126,23 @@ export function VoiceLogger({ onMatchesSelected }: Props) {
     setError(null);
     setTermSearches(null);
     setSelections({});
-    const terms = splitIntoFoodTerms(transcript);
-    if (terms.length === 0) {
-      setError('No matches found — try manual entry instead.');
-      return;
-    }
-    // allSettled rather than all — a network blip on one term (out of
-    // possibly several, when the transcript split into multiple foods)
-    // shouldn't discard results already found for the others.
-    const outcomes = await Promise.allSettled(terms.map((term) => searchFood(term)));
-    const searches: TermSearch[] = terms.map((term, i) => {
-      const outcome = outcomes[i];
-      return {
-        term,
-        result: outcome.status === 'fulfilled' ? outcome.value : { type: 'error' },
-      };
-    });
-    setTermSearches(searches);
+    try {
+      const { groups } = await searchFoodTranscript(transcript);
+      setTermSearches(groups);
 
-    const autoSelected: Record<number, FoodMatch> = {};
-    searches.forEach((s, i) => {
-      if (s.result.type === 'single') autoSelected[i] = s.result.match;
-    });
-    setSelections(autoSelected);
+      const autoSelected: Record<number, FoodMatch> = {};
+      groups.forEach((group, index) => {
+        if (group.result.type === 'single') {
+          autoSelected[index] = group.result.match;
+        }
+      });
+      setSelections(autoSelected);
 
-    const hasActionableResult = searches.some(
-      (s) => s.result.type === 'single' || s.result.type === 'candidates',
-    );
-    const anyFailed = searches.some((s) => s.result.type === 'error');
-    if (!hasActionableResult) {
-      setError(
-        anyFailed
-          ? 'Search failed. Try again or use manual entry.'
-          : 'No matches found — try manual entry instead.',
-      );
-    } else if (anyFailed) {
-      setError('Some terms could not be searched — try again for those, or use manual entry.');
+      if (groups.length === 0) {
+        setError('No food items recognized — try manual entry instead.');
+      }
+    } catch {
+      setError('Search failed. Try again or use manual entry.');
     }
   }
 
@@ -215,7 +204,12 @@ export function VoiceLogger({ onMatchesSelected }: Props) {
         />
       </FieldLabel>
 
-      <SecondaryButton type="button" disabled={!transcript.trim()} onClick={handleConfirm} className="self-start">
+      <SecondaryButton
+        type="button"
+        disabled={!transcript.trim()}
+        onClick={handleConfirm}
+        className="self-start"
+      >
         Confirm and search
       </SecondaryButton>
 
@@ -224,21 +218,22 @@ export function VoiceLogger({ onMatchesSelected }: Props) {
       {termSearches && termSearches.length > 0 && (
         <div className="flex flex-col gap-4">
           {termSearches.map((search, index) => (
-            <div key={`${search.term}-${index}`} className="flex flex-col gap-2">
+            <div
+              key={`${search.term}-${index}`}
+              className="flex flex-col gap-2"
+            >
               {showTermLabels && (
-                <p className="text-label text-text-muted normal-case tracking-normal" dir="auto">
+                <p
+                  className="text-label text-text-muted normal-case tracking-normal"
+                  dir="auto"
+                >
                   {search.term}
                 </p>
               )}
-              {search.result.type === 'empty' && (
-                <p className="text-body text-text-muted">No match found for "{search.term}".</p>
-              )}
-              {search.result.type === 'error' && (
-                <p className="text-body text-warn">Couldn't search for "{search.term}" — try again.</p>
-              )}
               {search.result.type === 'single' && (
                 <p className="rounded-2xl border border-accent bg-accent-soft px-4 py-2.5 text-body">
-                  ✓ {search.result.match.name} — {search.result.match.caloriesPer100g} kcal/100g
+                  ✓ {search.result.match.name} —{' '}
+                  {search.result.match.caloriesPer100g} kcal/100g
                 </p>
               )}
               {search.result.type === 'candidates' && (
