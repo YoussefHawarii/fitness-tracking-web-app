@@ -41,7 +41,8 @@ A three-tier web app: browser client (React/Angular SPA) → backend API (Node.j
 ┌─────────────────────────────────────┐
 │     PostgreSQL (via Prisma ORM)     │
 │  Users · UserBaseline · FoodLogs ·  │
-│  LocalFoodItems · WeighIns          │
+│  LocalFoodItems · PackagedProducts ·│
+│  WeighIns                           │
 └─────────────────────────────────────┘
 ```
 
@@ -58,10 +59,10 @@ A three-tier web app: browser client (React/Angular SPA) → backend API (Node.j
   - **Security caveat worth flagging:** linking accounts purely by matching email address is safe when the incoming email is *verified* — Google OAuth verifies email ownership itself, so a Google sign-in is trustworthy for this. But if the system signup path allows an unverified email, someone could register a system account with an email they don't actually own, then have it silently merged when the real owner later signs in with Google — effectively granting the squatter access to the real owner's merged account. Mitigation: require email verification on system signup before it's eligible for linking, or only perform the merge (rather than blocking/flagging it) once both sides are verified.
 - **User/Baseline module:** stores onboarding data; computes BMR/TDEE per business logic §1; recalculates on profile updates.
 - **Food Lookup & Log module:** implements the routing logic from business logic §5 —
-  1. Barcode → Open Food Facts.
+  1. Barcode → normalize barcode → check local `packaged_products` Postgres table → on a miss, query the Open Food Facts provider with a bounded timeout and persist a hit locally → on a complete miss, the user can submit the product themselves. Invalid barcodes, confirmed misses, and temporary provider failures remain distinct outcomes.
   2. Voice-confirmed text → USDA FoodData Central.
   3. Either miss → local per-user fallback table.
-  Also performs the gram-based calorie calculation (business logic §4) before persisting a log entry.
+  Also performs the gram-based calorie calculation (business logic §4) before persisting a log entry. Nutrition-label scanning (image upload) is a prepared-but-not-wired foundation — no OCR/vision provider is configured; activating one later would need an API key/credentials plus a per-request cost/rate budget. A CSV/JSON dataset-import mechanism exists at `Backend/prisma/import-packaged-products.ts` (run manually via `npm run db:import-products -- <file>` from `Backend/`); no dataset ships with the app. Future providers (e.g. a licensed Egyptian source) can be added behind the same provider interface without touching the controller.
 - **Weight/Prediction module:** implements the daily-balance and trend-prediction math (business logic §2–3), and the predicted-vs-actual comparison (business logic §8).
 - All day-boundary calculations (business logic §7) happen here, using each user's stored timezone — never computed client-side, to avoid clock-skew inconsistencies between client and server.
 

@@ -12,6 +12,7 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     overrides: {
       existing?: Partial<Record<string, unknown>>;
       localItem?: Partial<Record<string, unknown>> | null;
+      openFoodFactsProduct?: Partial<Record<string, unknown>> | null;
     } = {},
   ) {
     const existing = {
@@ -52,17 +53,36 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
         ),
       },
     };
-    const openFoodFacts = { lookupByBarcode: jest.fn() };
+    const openFoodFacts = {
+      lookupByBarcode: jest.fn().mockResolvedValue(
+        overrides.openFoodFactsProduct === null
+          ? null
+          : overrides.openFoodFactsProduct
+            ? {
+                name: 'Legacy barcode product',
+                caloriesPer100g: 250,
+                proteinPer100g: 5,
+                carbsPer100g: 30,
+                fatPer100g: 10,
+                ...overrides.openFoodFactsProduct,
+              }
+            : undefined,
+      ),
+    };
     const usda = { searchByTerm: jest.fn() };
     const barcodeCache = { get: () => null, set: () => undefined };
+    const productResolver = { resolveBarcode: jest.fn() };
+    const packagedProducts = { findById: jest.fn() };
 
     const service = new FoodService(
       prisma as never,
       openFoodFacts as never,
       usda as never,
       barcodeCache as never,
+      productResolver as never,
+      packagedProducts as never,
     );
-    return { service, prisma, updateCalls };
+    return { service, prisma, updateCalls, openFoodFacts, packagedProducts };
   }
 
   it('recomputes calories proportionally to the new grams', async () => {
@@ -84,6 +104,25 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
 
     expect(updateCalls[0].mealCategory).toBe('DINNER');
     expect(updateCalls[0].grams).toBe(100); // unchanged, from existing entry
+  });
+
+  it('still edits a pre-feature OPEN_FOOD_FACTS log without a PackagedProduct relation', async () => {
+    const { service, updateCalls, openFoodFacts, packagedProducts } =
+      buildService({
+        existing: {
+          sourceType: 'OPEN_FOOD_FACTS',
+          sourceRef: '3017620422003',
+          localFoodItemId: null,
+          packagedProductId: null,
+        },
+        openFoodFactsProduct: {},
+      });
+
+    await service.updateFoodLog(userId, 'log-1', { grams: 40 });
+
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledWith('3017620422003');
+    expect(packagedProducts.findById).not.toHaveBeenCalled();
+    expect(updateCalls[0].caloriesComputed).toBe(100);
   });
 
   it('throws NotFoundException when updating an entry not owned by the user', async () => {

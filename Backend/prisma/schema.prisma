@@ -26,6 +26,27 @@ enum FoodSourceType {
   USDA
   LOCAL
   CANONICAL
+  PACKAGED_PRODUCT
+}
+
+// Where a PackagedProduct row's data originated — distinct from
+// FoodSourceType, which routes a FoodLogEntry to the right table. A
+// PackagedProduct's ProductSource never changes after creation (it records
+// provenance, not current review state — see VerificationStatus for that).
+enum ProductSource {
+  OPEN_FOOD_FACTS
+  USER_SUBMITTED
+  ADMIN
+}
+
+// Data-quality state for a PackagedProduct, independent of ProductSource — an
+// Open Food Facts import is EXTERNAL (structured but not hand-checked), a
+// fresh user submission is UNVERIFIED, and VERIFIED is reserved for
+// deliberate confirmation (e.g. by an admin) later.
+enum VerificationStatus {
+  UNVERIFIED
+  EXTERNAL
+  VERIFIED
 }
 
 enum MealCategory {
@@ -252,26 +273,87 @@ model CanonicalFood {
 }
 
 model FoodLogEntry {
-  id                String         @id @default(uuid())
-  userId            String
-  user              User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sourceType        FoodSourceType
-  sourceRef         String
-  name              String         @default("")
-  localFoodItemId   String?
-  localFoodItem     LocalFoodItem? @relation(fields: [localFoodItemId], references: [id], onDelete: SetNull)
-  canonicalFoodId   String?
-  canonicalFood     CanonicalFood? @relation(fields: [canonicalFoodId], references: [id], onDelete: SetNull)
-  grams             Decimal
-  caloriesComputed  Decimal
-  proteinComputed   Decimal?
-  carbsComputed     Decimal?
-  fatComputed       Decimal?
-  mealCategory      MealCategory
-  loggedAtUtc       DateTime
+  id                 String           @id @default(uuid())
+  userId             String
+  user               User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceType         FoodSourceType
+  sourceRef          String
+  name               String           @default("")
+  localFoodItemId    String?
+  localFoodItem      LocalFoodItem?   @relation(fields: [localFoodItemId], references: [id], onDelete: SetNull)
+  canonicalFoodId    String?
+  canonicalFood      CanonicalFood?   @relation(fields: [canonicalFoodId], references: [id], onDelete: SetNull)
+  packagedProductId  String?
+  packagedProduct    PackagedProduct? @relation(fields: [packagedProductId], references: [id], onDelete: SetNull)
+  grams              Decimal
+  caloriesComputed   Decimal
+  proteinComputed    Decimal?
+  carbsComputed      Decimal?
+  fatComputed        Decimal?
+  mealCategory       MealCategory
+  loggedAtUtc        DateTime
 
   @@index([userId, loggedAtUtc])
   @@map("food_log_entries")
+}
+
+// Barcode-identified packaged/branded products (Chipsy, Pepsi, Molto, ...) —
+// deliberately a separate model from CanonicalFood rather than an extension
+// of it. CanonicalFood's identity is a unique display name matched by fuzzy
+// bilingual text (one row per generic food, e.g. "rice"); a packaged product's
+// identity is its barcode, and near-identical names must NOT collapse to one
+// row (Pepsi 330ml and Pepsi 1L are different barcodes and different
+// products). See docs/adr/0004-packaged-product-separate-model.md.
+model PackagedProduct {
+  id                  String              @id @default(uuid())
+  barcode             String              @unique
+  name                String
+  nameAr              String?
+  brand               String?
+  category            String?
+
+  servingSize         Decimal?
+  servingUnit         String?
+  packageSize         Decimal?
+  packageUnit         String?
+
+  // Per 100g, matching this app's one existing nutrition convention
+  // (docs/business-logic.md §4) — including for liquids, since Open Food
+  // Facts' own `_100g` nutriment fields (the only ones this app reads) are
+  // populated for beverages too. caloriesPer100g is required: a product
+  // without usable calorie data is treated as "not found" at resolution time
+  // (see ProductResolverService), the same data-quality bar Open Food
+  // Facts/USDA lookups already enforce elsewhere in this module.
+  caloriesPer100g     Decimal
+  proteinPer100g      Decimal?
+  carbsPer100g        Decimal?
+  fatPer100g          Decimal?
+  fiberPer100g        Decimal?
+  sugarPer100g        Decimal?
+  sodiumPer100g       Decimal?
+
+  imageUrl            String?
+  // Literal country of origin/distribution as reported by the source —
+  // not a "which market is this relevant to" field.
+  country             String?
+
+  source              ProductSource
+  // Provider-specific id for future refresh/verification (e.g. Open Food
+  // Facts' own code) — currently always equal to `barcode` since barcode is
+  // Open Food Facts' own lookup key too, but kept distinct in case a future
+  // provider's id differs from the barcode itself.
+  sourceId            String?
+  verificationStatus  VerificationStatus @default(UNVERIFIED)
+
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+
+  foodLogEntries      FoodLogEntry[]
+
+  @@index([name])
+  @@index([brand])
+  @@index([sourceId])
+  @@map("packaged_products")
 }
 
 model ExerciseLogEntry {

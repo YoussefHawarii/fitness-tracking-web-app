@@ -50,3 +50,17 @@ One discrete unit of a Workout exercise: a rep count plus an optional weight (kg
 
 **Bodyweight set**:
 A Set logged with no weight value (weight left blank), as opposed to a Set with an explicit weight of 0 — the app never asks the user to enter 0 for a bodyweight movement, and the two are never treated as equivalent.
+
+### Packaged products
+
+**Packaged product**:
+A barcode-identified branded/retail item (e.g. a specific size of Chipsy or Pepsi), distinct from a Canonical food (a generic, unbranded food matched by name, e.g. "rice") because two different package sizes of the same product are different Packaged products even though a Canonical food is deduplicated by name.
+_Avoid_: Product, Food item (ambiguous with the pre-existing LocalFoodItem/CanonicalFood concepts already in this glossary)
+
+**Product source**:
+Where a Packaged product's data originated — OPEN_FOOD_FACTS, USER_SUBMITTED, or ADMIN. Never changes after creation.
+_Avoid_: Provider (reserved for the resolution-order concept, not the stored provenance tag)
+
+**Verification status**:
+A Packaged product's data-quality state — UNVERIFIED (default, includes every fresh user submission), EXTERNAL (came from a structured source like Open Food Facts, not hand-checked), or VERIFIED (deliberately confirmed, e.g. by an admin).
+_Avoid_: Verified (bare) — always say "Verification status: VERIFIED" to avoid implying Open Food Facts data is trustworthy by default

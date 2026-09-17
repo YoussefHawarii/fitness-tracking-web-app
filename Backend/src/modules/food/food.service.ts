@@ -1,4 +1,8 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { OpenFoodFactsClient } from './clients/open-food-facts.client';
 import { UsdaClient } from './clients/usda.client';
@@ -7,6 +11,9 @@ import { calculateNutrientsForGrams } from './calorie-calculator';
 import { CreateLocalFoodItemDto } from './dto/create-local-food-item.dto';
 import { CreateFoodLogDto } from './dto/create-food-log.dto';
 import { UpdateFoodLogDto } from './dto/update-food-log.dto';
+import { ProductResolverService } from './product-resolver.service';
+import { PackagedProductService } from './packaged-product.service';
+import { serializePackagedProduct } from './product-mapper';
 
 @Injectable()
 export class FoodService {
@@ -15,13 +22,16 @@ export class FoodService {
     private readonly openFoodFacts: OpenFoodFactsClient,
     private readonly usda: UsdaClient,
     private readonly barcodeCache: BarcodeLookupCacheService,
+    private readonly productResolver: ProductResolverService,
+    private readonly packagedProducts: PackagedProductService,
   ) {}
 
-  // Cache-through wrapper — the scan-time lookup (this method, via the
-  // controller) and the save/edit-time resolve (resolveNutrients below) both
-  // go through here, so a barcode already resolved during scanning isn't
-  // re-fetched from Open Food Facts again a few seconds later at Save. See
-  // docs/food-log-input-modes-diagnosis.md §1.2/§1.6 item 4.
+  // Cache-through wrapper — kept for the legacy OPEN_FOOD_FACTS resolution
+  // path only (resolveNutrients below, for FoodLogEntry rows created before
+  // the local-first PackagedProduct cache existed). New scans no longer go
+  // through this method — see lookupBarcode, which now resolves via
+  // ProductResolverService (local DB first, Open Food Facts persisted on a
+  // hit) instead of calling Open Food Facts on every scan.
   private async getOpenFoodFactsProduct(barcode: string) {
     const cached = this.barcodeCache.get(barcode);
     if (cached) return cached;
@@ -31,13 +41,22 @@ export class FoodService {
   }
 
   async lookupBarcode(barcode: string) {
-    const product = await this.getOpenFoodFactsProduct(barcode);
-    if (!product) {
-      // Not found (per OFF's own body status, not just HTTP 200) — the
-      // caller falls through to manual entry rather than logging a zero result.
+    const result = await this.productResolver.resolveBarcode(barcode);
+    if (result.status === 'not_found') {
+      // Confirmed miss (local DB and every configured provider) — the
+      // caller falls through to manual entry / Add Product rather than
+      // logging a zero result.
       throw new NotFoundException('No product found for this barcode.');
     }
-    return product;
+    if (result.status === 'unavailable') {
+      // A provider errored and nothing else resolved it — distinct from a
+      // genuine "not found" so the frontend can offer "try again" instead of
+      // silently claiming the product doesn't exist.
+      throw new ServiceUnavailableException(
+        'Barcode lookup is temporarily unavailable.',
+      );
+    }
+    return serializePackagedProduct(result.product);
   }
 
   async createLocalFoodItem(userId: string, dto: CreateLocalFoodItemDto) {
@@ -64,6 +83,28 @@ export class FoodService {
         name: product.name,
         localFoodItemId: null as string | null,
         canonicalFoodId: null as string | null,
+        packagedProductId: null as string | null,
+        canonicalNames: null as string[] | null,
+      };
+    }
+    if (sourceType === 'PACKAGED_PRODUCT') {
+      const product = await this.packagedProducts.findById(sourceRef);
+      if (!product) throw new NotFoundException('Packaged product not found.');
+      return {
+        nutrients: {
+          caloriesPer100g: Number(product.caloriesPer100g),
+          proteinPer100g: product.proteinPer100g
+            ? Number(product.proteinPer100g)
+            : null,
+          carbsPer100g: product.carbsPer100g
+            ? Number(product.carbsPer100g)
+            : null,
+          fatPer100g: product.fatPer100g ? Number(product.fatPer100g) : null,
+        },
+        name: product.name,
+        localFoodItemId: null as string | null,
+        canonicalFoodId: null as string | null,
+        packagedProductId: product.id as string | null,
         canonicalNames: null as string[] | null,
       };
     }
@@ -75,6 +116,7 @@ export class FoodService {
         name: match.name,
         localFoodItemId: null as string | null,
         canonicalFoodId: null as string | null,
+        packagedProductId: null as string | null,
         canonicalNames: null as string[] | null,
       };
     }
@@ -100,6 +142,7 @@ export class FoodService {
         name: canonicalFood.nameEn,
         localFoodItemId: null as string | null,
         canonicalFoodId: canonicalFood.id,
+        packagedProductId: null as string | null,
         canonicalNames: [canonicalFood.nameEn, canonicalFood.nameAr] as
           string[] | null,
       };
@@ -123,6 +166,7 @@ export class FoodService {
       name: localItem.name,
       localFoodItemId: localItem.id,
       canonicalFoodId: null as string | null,
+      packagedProductId: null as string | null,
       canonicalNames: null as string[] | null,
     };
   }
@@ -133,6 +177,7 @@ export class FoodService {
       name,
       localFoodItemId,
       canonicalFoodId,
+      packagedProductId,
       canonicalNames,
     } = await this.resolveNutrients(userId, dto.sourceType, dto.sourceRef);
     const computed = calculateNutrientsForGrams(nutrients, dto.grams);
@@ -157,6 +202,7 @@ export class FoodService {
         name: resolvedName,
         localFoodItemId,
         canonicalFoodId,
+        packagedProductId,
         grams: dto.grams,
         caloriesComputed: computed.calories,
         proteinComputed: computed.protein,

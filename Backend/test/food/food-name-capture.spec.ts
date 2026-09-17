@@ -43,12 +43,16 @@ describe('FoodService — name capture on createFoodLog', () => {
     // barcode-lookup-cache.spec.ts) — a pass-through stub is enough so
     // FoodService's cache-through OFF lookup has something to call.
     const barcodeCache = { get: () => null, set: () => undefined };
+    const productResolver = { resolveBarcode: jest.fn() };
+    const packagedProducts = { findById: jest.fn() };
 
     const service = new FoodService(
       prisma as never,
       openFoodFacts as never,
       usda as never,
       barcodeCache as never,
+      productResolver as never,
+      packagedProducts as never,
     );
     return { service, created };
   }

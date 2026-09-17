@@ -18,6 +18,7 @@ export const FOOD_SOURCE_TYPES = [
   'USDA',
   'LOCAL',
   'CANONICAL',
+  'PACKAGED_PRODUCT',
 ] as const;
 export type FoodSourceType = (typeof FOOD_SOURCE_TYPES)[number];
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
@@ -26,7 +27,8 @@ export class CreateFoodLogDto {
   @IsIn(FOOD_SOURCE_TYPES)
   sourceType: FoodSourceType;
 
-  // Barcode (OFF), fdcId (USDA), LocalFoodItem id (LOCAL), or CanonicalFood id (CANONICAL)
+  // Barcode (OFF), fdcId (USDA), LocalFoodItem id (LOCAL), CanonicalFood id
+  // (CANONICAL), or PackagedProduct id (PACKAGED_PRODUCT).
   @IsString()
   sourceRef: string;
 

@@ -8,6 +8,10 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { UsdaClient } from '../src/modules/food/clients/usda.client';
 import { OpenFoodFactsClient } from '../src/modules/food/clients/open-food-facts.client';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
+import {
+  importPackagedProducts,
+  parsePackagedProductRecords,
+} from '../prisma/import-packaged-products';
 
 interface FoodMatchBody {
   sourceType: string;
@@ -25,6 +29,19 @@ interface TranscriptSearchResponseBody {
     term: string;
     result: Exclude<FoodSearchResponseBody, { type: 'empty' }>;
   }>;
+}
+
+// barcode-normalizer.ts now validates the GS1 check digit, so a synthetic
+// test barcode must carry a real one — this appends the correct 13th digit
+// to an arbitrary 12-digit prefix (per the same alternating 3/1 weighting).
+function ean13WithValidCheckDigit(twelveDigitPrefix: string): string {
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    const weight = i % 2 === 1 ? 3 : 1;
+    sum += Number(twelveDigitPrefix[i]) * weight;
+  }
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return `${twelveDigitPrefix}${checkDigit}`;
 }
 
 // Covers docs/food-log-input-modes-diagnosis.md §3.4 (GET /food/search:
@@ -245,11 +262,20 @@ describe('Food search + barcode reuse (e2e)', () => {
     expect(res.body).toEqual({ type: 'empty' });
   });
 
-  it('reuses the scan-time Open Food Facts lookup at save time instead of re-fetching', async () => {
-    const barcode = `999${testSuffix}`;
+  it('caches a barcode locally on first Open Food Facts hit, then serves later lookups and logging from the local DB', async () => {
+    // Valid 13-digit EAN-13 (real check digit) so it survives barcode
+    // normalization — the numeric suffix keeps it unique per test run.
+    const barcode = ean13WithValidCheckDigit(
+      `500000${testSuffix}`.padEnd(12, '1').slice(0, 12),
+    );
     offLookupByBarcode.mockResolvedValueOnce({
       barcode,
       name: 'Test Product',
+      nameAr: 'منتج اختبار',
+      brand: 'Test Brand',
+      imageUrl: 'https://images.example/test-product.jpg',
+      packageSize: 150,
+      packageUnit: 'g',
       caloriesPer100g: 250,
       proteinPer100g: 5,
       carbsPer100g: 30,
@@ -257,26 +283,313 @@ describe('Food search + barcode reuse (e2e)', () => {
     });
     const token = await newVerifiedUser('barcode-cache');
 
-    await request(app.getHttpServer())
+    // First scan: local DB miss -> Open Food Facts hit -> persisted locally.
+    const first = await request(app.getHttpServer())
       .get(`/food/barcode/${barcode}`)
       .set('Authorization', `Bearer ${token}`)
       .expect(200);
     expect(offLookupByBarcode).toHaveBeenCalledTimes(1);
+    const firstBody = first.body as {
+      id: string;
+      name: string;
+      nameAr: string;
+      brand: string;
+      imageUrl: string;
+      packageSize: number;
+      packageUnit: string;
+      caloriesPer100g: number;
+      proteinPer100g: number;
+      carbsPer100g: number;
+      fatPer100g: number;
+      verificationStatus: string;
+    };
+    const productId = firstBody.id;
+    expect(firstBody).toMatchObject({
+      name: 'Test Product',
+      nameAr: 'منتج اختبار',
+      brand: 'Test Brand',
+      imageUrl: 'https://images.example/test-product.jpg',
+      packageSize: 150,
+      packageUnit: 'g',
+      caloriesPer100g: 250,
+      proteinPer100g: 5,
+      carbsPer100g: 30,
+      fatPer100g: 10,
+      verificationStatus: 'EXTERNAL',
+    });
 
-    await request(app.getHttpServer())
+    // Second scan of the same barcode: local DB hit -> Open Food Facts is
+    // NOT called again.
+    const second = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(offLookupByBarcode).toHaveBeenCalledTimes(1);
+    expect((second.body as { id: string }).id).toBe(productId);
+
+    // Logging the resolved product computes calories from its cached
+    // per-100g values, still without a second Open Food Facts call.
+    const logged = await request(app.getHttpServer())
       .post('/food/logs')
       .set('Authorization', `Bearer ${token}`)
       .send({
-        sourceType: 'OPEN_FOOD_FACTS',
-        sourceRef: barcode,
-        grams: 100,
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: productId,
+        grams: 40,
         mealCategory: 'BREAKFAST',
         loggedAtUtc: '2026-01-15T08:00:00.000Z',
       })
       .expect(201);
-
-    // Still only 1 — save reused the cached product rather than calling OFF again.
     expect(offLookupByBarcode).toHaveBeenCalledTimes(1);
+    expect(
+      Number((logged.body as { caloriesComputed: string }).caloriesComputed),
+    ).toBeCloseTo(100, 5); // 250/100 * 40
+    expect(
+      Number((logged.body as { proteinComputed: string }).proteinComputed),
+    ).toBeCloseTo(2, 5);
+    expect(
+      Number((logged.body as { carbsComputed: string }).carbsComputed),
+    ).toBeCloseTo(12, 5);
+    expect(
+      Number((logged.body as { fatComputed: string }).fatComputed),
+    ).toBeCloseTo(4, 5);
+    expect((logged.body as { grams: string }).grams).toBe('40');
+    expect((logged.body as { mealCategory: string }).mealCategory).toBe(
+      'BREAKFAST',
+    );
+
+    await prisma.packagedProduct.delete({ where: { id: productId } });
+  });
+
+  it('returns 404 (not 500) when a barcode is unknown to both the local DB and Open Food Facts', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500001${testSuffix}`.padEnd(12, '2').slice(0, 12),
+    );
+    offLookupByBarcode.mockResolvedValueOnce(null);
+    const token = await newVerifiedUser('barcode-miss');
+
+    await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(404);
+  });
+
+  it('returns 503, distinct from not-found, when Open Food Facts is unavailable', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500004${testSuffix}`.padEnd(12, '5').slice(0, 12),
+    );
+    offLookupByBarcode.mockRejectedValueOnce(new Error('OFF timed out'));
+    const token = await newVerifiedUser('barcode-outage');
+
+    await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(503);
+  });
+
+  it('rejects a malformed barcode with 400 before ever calling Open Food Facts', async () => {
+    const token = await newVerifiedUser('barcode-invalid');
+
+    await request(app.getHttpServer())
+      .get('/food/barcode/not-a-barcode')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(400);
+    expect(offLookupByBarcode).not.toHaveBeenCalled();
+  });
+
+  it('lets a user submit an unknown product, then discovers it by barcode afterwards', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500002${testSuffix}`.padEnd(12, '3').slice(0, 12),
+    );
+    offLookupByBarcode.mockResolvedValueOnce(null); // Open Food Facts doesn't know it either
+    const token = await newVerifiedUser('user-submit');
+
+    await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(404);
+
+    const submitted = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Homemade Karkade Concentrate',
+        brand: "Grandma's",
+        caloriesPer100g: 45,
+        proteinPer100g: 0.2,
+        carbsPer100g: 11,
+        fatPer100g: 0,
+      })
+      .expect(201);
+    expect((submitted.body as { source: string }).source).toBe(
+      'USER_SUBMITTED',
+    );
+    expect(
+      (submitted.body as { verificationStatus: string }).verificationStatus,
+    ).toBe('UNVERIFIED');
+
+    const found = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect((found.body as { name: string }).name).toBe(
+      'Homemade Karkade Concentrate',
+    );
+
+    const duplicate = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Duplicate attempt',
+        caloriesPer100g: 1,
+        proteinPer100g: 1,
+        carbsPer100g: 1,
+        fatPer100g: 1,
+      })
+      .expect(409);
+    expect((duplicate.body as { message: string }).message).toMatch(
+      /already exists/i,
+    );
+
+    await prisma.packagedProduct.delete({ where: { barcode } });
+  });
+
+  it('rejects a product submission with negative nutrition values', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500003${testSuffix}`.padEnd(12, '4').slice(0, 12),
+    );
+    const token = await newVerifiedUser('user-submit-invalid');
+
+    await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Bad Data Product',
+        caloriesPer100g: -10,
+        proteinPer100g: 1,
+        carbsPer100g: 1,
+        fatPer100g: 1,
+      })
+      .expect(400);
+  });
+
+  it('keeps two pack sizes with the same brand and name as distinct products', async () => {
+    const firstBarcode = ean13WithValidCheckDigit(
+      `500005${testSuffix}`.padEnd(12, '6').slice(0, 12),
+    );
+    const secondBarcode = ean13WithValidCheckDigit(
+      `500006${testSuffix}`.padEnd(12, '7').slice(0, 12),
+    );
+    const token = await newVerifiedUser('pack-sizes');
+    const base = {
+      name: 'Same Branded Drink',
+      brand: 'Same Brand',
+      packageUnit: 'ml',
+      caloriesPer100g: 42,
+      proteinPer100g: 0,
+      carbsPer100g: 10.5,
+      fatPer100g: 0,
+    };
+
+    const first = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ...base, barcode: firstBarcode, packageSize: 330 })
+      .expect(201);
+    const second = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ ...base, barcode: secondBarcode, packageSize: 1000 })
+      .expect(201);
+
+    expect((first.body as { id: string }).id).not.toBe(
+      (second.body as { id: string }).id,
+    );
+    await request(app.getHttpServer())
+      .get(`/food/barcode/${firstBarcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect((res) => {
+        expect((res.body as { packageSize: number }).packageSize).toBe(330);
+      });
+    await request(app.getHttpServer())
+      .get(`/food/barcode/${secondBarcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect((res) => {
+        expect((res.body as { packageSize: number }).packageSize).toBe(1000);
+      });
+
+    await prisma.packagedProduct.deleteMany({
+      where: { barcode: { in: [firstBarcode, secondBarcode] } },
+    });
+  });
+
+  it('allows manual submission after nutrition-label extraction reports unavailable', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500007${testSuffix}`.padEnd(12, '8').slice(0, 12),
+    );
+    const token = await newVerifiedUser('label-fallback');
+
+    const extraction = await request(app.getHttpServer())
+      .post('/food/nutrition-label/extract')
+      .set('Authorization', `Bearer ${token}`)
+      .attach('image', Buffer.from('test-image'), {
+        filename: 'nutrition-label.jpg',
+        contentType: 'image/jpeg',
+      })
+      .expect(201);
+    expect(extraction.body).toMatchObject({ available: false });
+
+    await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Manually Entered Product',
+        caloriesPer100g: 100,
+        proteinPer100g: 2,
+        carbsPer100g: 20,
+        fatPer100g: 1,
+      })
+      .expect(201);
+
+    await prisma.packagedProduct.delete({ where: { barcode } });
+  });
+
+  it('makes an imported product discoverable through the normal scan flow', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500008${testSuffix}`.padEnd(12, '9').slice(0, 12),
+    );
+    const records = parsePackagedProductRecords(
+      JSON.stringify([
+        {
+          barcode,
+          name: 'Imported Egyptian Product',
+          caloriesPer100g: 180,
+          proteinPer100g: 3,
+          carbsPer100g: 25,
+          fatPer100g: 7,
+        },
+      ]),
+      'json',
+    );
+    await importPackagedProducts(records, prisma);
+    const token = await newVerifiedUser('import-discovery');
+
+    const found = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect((found.body as { name: string }).name).toBe(
+      'Imported Egyptian Product',
+    );
+    expect(offLookupByBarcode).not.toHaveBeenCalled();
+    await prisma.packagedProduct.delete({ where: { barcode } });
   });
 
   it('POST /food/logs with sourceType CANONICAL computes calories from the catalog entry', async () => {

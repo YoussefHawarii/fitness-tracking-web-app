@@ -10,9 +10,13 @@ import {
   type CanonicalFoodRecord,
 } from './canonical-food-matcher';
 
-// Search never resolves a barcode — OPEN_FOOD_FACTS entries only ever come
-// from the dedicated scan endpoint, not from GET /food/search.
-export type FoodMatchSourceType = Exclude<FoodSourceType, 'OPEN_FOOD_FACTS'>;
+// Search never resolves a barcode — OPEN_FOOD_FACTS and PACKAGED_PRODUCT
+// entries only ever come from the dedicated barcode endpoint, not from
+// GET /food/search.
+export type FoodMatchSourceType = Exclude<
+  FoodSourceType,
+  'OPEN_FOOD_FACTS' | 'PACKAGED_PRODUCT'
+>;
 
 export interface FoodMatch extends NutrientsPer100g {
   sourceType: FoodMatchSourceType;

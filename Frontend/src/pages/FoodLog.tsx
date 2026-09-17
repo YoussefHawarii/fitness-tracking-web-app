@@ -4,16 +4,19 @@ import { isAxiosError } from 'axios';
 import { BarcodeScanner } from '../features/barcode-scanner/BarcodeScanner';
 import { VoiceLogger } from '../features/voice-logger/VoiceLogger';
 import { ManualFoodSearch } from '../features/manual-food-search/ManualFoodSearch';
+import { AddProductForm } from '../features/add-product/AddProductForm';
 import {
   createFoodLog,
   deleteFoodLog,
   listFoodLogsForDay,
   lookupBarcode,
   updateFoodLog,
+  InvalidBarcodeError,
   type FoodMatch,
   type FoodSourceType,
   type LocalFoodItem,
   type MealCategory,
+  type PackagedProduct,
 } from '../services/foodService';
 import { Card, SegmentedControl } from '../components/ui/Card';
 import { Input, FieldLabel, Select } from '../components/ui/Input';
@@ -33,6 +36,15 @@ type PendingItem = {
   sourceRef: string;
   name: string;
   caloriesPer100g: number;
+  proteinPer100g?: number | null;
+  carbsPer100g?: number | null;
+  fatPer100g?: number | null;
+  nameAr?: string | null;
+  brand?: string | null;
+  imageUrl?: string | null;
+  packageSize?: number | null;
+  packageUnit?: string | null;
+  verificationStatus?: PackagedProduct['verificationStatus'] | null;
 };
 
 type ScanStatus =
@@ -40,6 +52,7 @@ type ScanStatus =
   | 'looking-up'
   | 'found'
   | 'not-found'
+  | 'invalid'
   | 'unavailable'
   | 'scanner-failed';
 
@@ -69,13 +82,121 @@ function toPendingItem(match: FoodMatch): PendingItem {
   };
 }
 
+function toPackagedPendingItem(product: PackagedProduct): PendingItem {
+  return {
+    sourceType: 'PACKAGED_PRODUCT',
+    sourceRef: product.id,
+    name: product.name,
+    caloriesPer100g: product.caloriesPer100g,
+    proteinPer100g: product.proteinPer100g,
+    carbsPer100g: product.carbsPer100g,
+    fatPer100g: product.fatPer100g,
+    nameAr: product.nameAr,
+    brand: product.brand,
+    imageUrl: product.imageUrl,
+    packageSize: product.packageSize,
+    packageUnit: product.packageUnit,
+    verificationStatus: product.verificationStatus,
+  };
+}
+
+export function PackagedProductPreview({ product }: { product: PendingItem }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-4">
+      <div className="flex items-start gap-3">
+        {product.imageUrl && (
+          <img
+            src={product.imageUrl}
+            alt={product.name}
+            className="h-16 w-16 shrink-0 rounded-lg object-cover"
+          />
+        )}
+        <div className="flex flex-col gap-1">
+          <p className="flex items-center gap-2 text-label text-accent normal-case tracking-normal">
+            ✓ Found: {product.name}
+          </p>
+          {product.nameAr && (
+            <p className="text-body text-text-muted" dir="auto">
+              {product.nameAr}
+            </p>
+          )}
+          {product.brand && (
+            <p className="text-body text-text-muted">{product.brand}</p>
+          )}
+          {product.packageSize != null && (
+            <p className="text-body text-text-muted">
+              {product.packageSize}
+              {product.packageUnit ? ` ${product.packageUnit}` : ''}
+            </p>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-4 gap-2 text-body text-text-muted">
+        <span>{product.caloriesPer100g} kcal</span>
+        <span>
+          {product.proteinPer100g != null
+            ? `${product.proteinPer100g}g protein`
+            : 'Protein: not available'}
+        </span>
+        <span>
+          {product.carbsPer100g != null
+            ? `${product.carbsPer100g}g carbs`
+            : 'Carbs: not available'}
+        </span>
+        <span>
+          {product.fatPer100g != null
+            ? `${product.fatPer100g}g fat`
+            : 'Fat: not available'}
+        </span>
+      </div>
+      {product.verificationStatus &&
+        product.verificationStatus !== 'EXTERNAL' && (
+          <p className="text-label text-text-muted normal-case tracking-normal">
+            {product.verificationStatus === 'VERIFIED'
+              ? 'Verified'
+              : 'Community submitted'}
+          </p>
+        )}
+    </div>
+  );
+}
+
+export function BarcodeNotFoundActions({
+  onAdd,
+  onSearch,
+  onRescan,
+}: {
+  onAdd: () => void;
+  onSearch: () => void;
+  onRescan: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+      <p className="text-body">We couldn't find a product for that barcode.</p>
+      <div className="flex flex-wrap gap-2">
+        <PrimaryButton type="button" onClick={onAdd}>
+          Add this product
+        </PrimaryButton>
+        <SecondaryButton type="button" onClick={onSearch}>
+          Search manually instead
+        </SecondaryButton>
+        <SecondaryButton type="button" onClick={onRescan}>
+          Scan again
+        </SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
 export function FoodLog() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const { todayInAccountTimezone } = useAccountTimezone();
   const date = searchParams.get('date') || todayInAccountTimezone();
   const requestedMode = (location.state as { mode?: unknown } | null)?.mode;
-  const [mode, setMode] = useState<InputMode>(isInputMode(requestedMode) ? requestedMode : 'barcode');
+  const [mode, setMode] = useState<InputMode>(
+    isInputMode(requestedMode) ? requestedMode : 'barcode',
+  );
 
   // A queue rather than a single item so a voice recording that splits into
   // several food terms ("chicken and rice") can be logged one at a time
@@ -94,15 +215,22 @@ export function FoodLog() {
   // §1.4/§1.6: a successful scan needs its own visible "found"/"not found"
   // states inside the scan card itself, not just a muted caption below it.
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
-  const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(null);
+  const [lastScannedBarcode, setLastScannedBarcode] = useState<string | null>(
+    null,
+  );
   const [scanAttempt, setScanAttempt] = useState(0);
   const automaticScanRestartCountRef = useRef(0);
-  const scanRestartTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const scanRestartTimerRef = useRef<ReturnType<
+    typeof window.setTimeout
+  > | null>(null);
   // Bumped on every new scan attempt (and whenever the user leaves the scan
   // in progress) so a lookup abandoned by a rescan/mode-switch can't apply
   // its result after something newer has already taken its place.
   const scanRequestIdRef = useRef(0);
-  const [manualBarcodeContext, setManualBarcodeContext] = useState<string | null>(null);
+  const [manualBarcodeContext, setManualBarcodeContext] = useState<
+    string | null
+  >(null);
+  const [showAddProduct, setShowAddProduct] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editGrams, setEditGrams] = useState('');
@@ -130,7 +258,10 @@ export function FoodLog() {
 
   useEffect(() => {
     if (pendingItems.length > 0) {
-      pendingCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      pendingCardRef.current?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+      });
       // Selecting an item (scan/voice/manual) means grams is the very next
       // thing to fill in — see docs/food-log-input-modes-diagnosis.md §1.6
       // item 5.
@@ -200,21 +331,15 @@ export function FoodLog() {
         setScanStatus('not-found');
         return;
       }
-      setPendingItems([
-        {
-          sourceType: 'OPEN_FOOD_FACTS',
-          sourceRef: barcode,
-          name: product.name,
-          caloriesPer100g: product.caloriesPer100g,
-        },
-      ]);
+      setPendingItems([toPackagedPendingItem(product)]);
       setScanStatus('found');
       setStatus(null);
-    } catch {
-      // lookupBarcode only throws BarcodeLookupUnavailableError (a genuine
-      // "not found" resolves to null instead, handled above) — any failure
-      // here means the lookup itself couldn't be completed.
+    } catch (error) {
       if (scanRequestIdRef.current !== requestId) return;
+      if (error instanceof InvalidBarcodeError) {
+        setScanStatus('invalid');
+        return;
+      }
       setScanStatus('unavailable');
     }
   }
@@ -234,6 +359,7 @@ export function FoodLog() {
     setScanStatus('idle');
     setLastScannedBarcode(null);
     setScanAttempt((n) => n + 1);
+    setShowAddProduct(false);
   }
 
   function cancelPendingScanRestart() {
@@ -286,8 +412,20 @@ export function FoodLog() {
 
   function handleLocalItemCreated(item: LocalFoodItem) {
     setPendingItems([
-      { sourceType: 'LOCAL', sourceRef: item.id, name: item.name, caloriesPer100g: item.caloriesPer100g },
+      {
+        sourceType: 'LOCAL',
+        sourceRef: item.id,
+        name: item.name,
+        caloriesPer100g: item.caloriesPer100g,
+      },
     ]);
+    setStatus(null);
+  }
+
+  function handleProductCreated(product: PackagedProduct) {
+    setPendingItems([toPackagedPendingItem(product)]);
+    setShowAddProduct(false);
+    setScanStatus('found');
     setStatus(null);
   }
 
@@ -319,7 +457,7 @@ export function FoodLog() {
       // A scanned item was just saved and nothing else is queued — return
       // the scan card to a ready-to-scan-again state instead of leaving the
       // stale "✓ Found" caption's camera box sitting there blank.
-      if (current.sourceType === 'OPEN_FOOD_FACTS' && !stillQueued) {
+      if (current.sourceType === 'PACKAGED_PRODUCT' && !stillQueued) {
         rescan();
       }
     } catch {
@@ -352,15 +490,17 @@ export function FoodLog() {
           <div className="flex flex-col gap-3">
             <div className="hud-frame overflow-hidden rounded-xl bg-black">
               {scanStatus !== 'not-found' &&
+                scanStatus !== 'invalid' &&
                 scanStatus !== 'unavailable' &&
                 scanStatus !== 'scanner-failed' && (
-                <BarcodeScanner
-                  key={scanAttempt}
-                  onDecoded={handleBarcodeDecoded}
-                  onScanError={handleScannerError}
-                />
-              )}
+                  <BarcodeScanner
+                    key={scanAttempt}
+                    onDecoded={handleBarcodeDecoded}
+                    onScanError={handleScannerError}
+                  />
+                )}
               {(scanStatus === 'not-found' ||
+                scanStatus === 'invalid' ||
                 scanStatus === 'unavailable' ||
                 scanStatus === 'scanner-failed') && (
                 <div className="flex aspect-square w-full items-center justify-center bg-black" />
@@ -374,31 +514,31 @@ export function FoodLog() {
             )}
             {scanStatus === 'looking-up' && (
               <p className="flex items-center gap-2 text-label text-text-muted normal-case tracking-normal">
-                <ScanIcon width={16} height={16} /> Barcode detected — looking it up…
+                <ScanIcon width={16} height={16} /> Barcode detected — looking
+                it up…
               </p>
             )}
-            {scanStatus === 'found' && pendingItem?.sourceType === 'OPEN_FOOD_FACTS' && (
-              <p className="flex items-center gap-2 text-label text-accent normal-case tracking-normal">
-                ✓ Found: {pendingItem.name}
-              </p>
+            {scanStatus === 'found' &&
+              pendingItem?.sourceType === 'PACKAGED_PRODUCT' && (
+                <PackagedProductPreview product={pendingItem} />
+              )}
+            {scanStatus === 'not-found' && !showAddProduct && (
+              <BarcodeNotFoundActions
+                onAdd={() => setShowAddProduct(true)}
+                onSearch={() => {
+                  setManualBarcodeContext(lastScannedBarcode);
+                  setMode('manual');
+                }}
+                onRescan={rescan}
+              />
             )}
-            {scanStatus === 'not-found' && (
+            {scanStatus === 'not-found' && showAddProduct && (
               <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
-                <p className="text-body">We couldn't find a product for that barcode.</p>
-                <div className="flex flex-wrap gap-2">
-                  <PrimaryButton
-                    type="button"
-                    onClick={() => {
-                      setManualBarcodeContext(lastScannedBarcode);
-                      setMode('manual');
-                    }}
-                  >
-                    Search manually instead
-                  </PrimaryButton>
-                  <SecondaryButton type="button" onClick={rescan}>
-                    Scan again
-                  </SecondaryButton>
-                </div>
+                <AddProductForm
+                  barcode={lastScannedBarcode ?? ''}
+                  onCreated={handleProductCreated}
+                  onCancel={() => setShowAddProduct(false)}
+                />
               </div>
             )}
             {scanStatus === 'unavailable' && (
@@ -410,7 +550,29 @@ export function FoodLog() {
                   <PrimaryButton type="button" onClick={retryLastScan}>
                     Try again
                   </PrimaryButton>
-                  <SecondaryButton type="button" onClick={() => setMode('manual')}>
+                  <SecondaryButton
+                    type="button"
+                    onClick={() => setMode('manual')}
+                  >
+                    Search manually instead
+                  </SecondaryButton>
+                </div>
+              </div>
+            )}
+            {scanStatus === 'invalid' && (
+              <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+                <p className="text-body text-warn">
+                  That barcode is invalid or damaged. Scan it again or enter the
+                  product manually.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <PrimaryButton type="button" onClick={rescan}>
+                    Scan again
+                  </PrimaryButton>
+                  <SecondaryButton
+                    type="button"
+                    onClick={() => setMode('manual')}
+                  >
                     Search manually instead
                   </SecondaryButton>
                 </div>
@@ -419,13 +581,17 @@ export function FoodLog() {
             {scanStatus === 'scanner-failed' && (
               <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
                 <p className="text-body text-warn">
-                  The scanner had trouble reading camera frames — try again in a moment.
+                  The scanner had trouble reading camera frames — try again in a
+                  moment.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <PrimaryButton type="button" onClick={rescan}>
                     Try again
                   </PrimaryButton>
-                  <SecondaryButton type="button" onClick={() => setMode('manual')}>
+                  <SecondaryButton
+                    type="button"
+                    onClick={() => setMode('manual')}
+                  >
                     Search manually instead
                   </SecondaryButton>
                 </div>
@@ -448,7 +614,8 @@ export function FoodLog() {
             </p>
             {manualBarcodeContext && (
               <p className="text-body text-text-muted">
-                Barcode {manualBarcodeContext} wasn't found — search for the product by name instead.
+                Barcode {manualBarcodeContext} wasn't found — search for the
+                product by name instead.
               </p>
             )}
             <ManualFoodSearch
@@ -468,7 +635,9 @@ export function FoodLog() {
               </p>
             )}
             <p className="text-heading">{pendingItem.name}</p>
-            <p className="text-body text-text-muted">{pendingItem.caloriesPer100g} kcal/100g</p>
+            <p className="text-body text-text-muted">
+              {pendingItem.caloriesPer100g} kcal/100g
+            </p>
             <FieldLabel>
               Grams
               <Input
@@ -481,7 +650,12 @@ export function FoodLog() {
             </FieldLabel>
             <FieldLabel>
               Meal
-              <Select value={mealCategory} onChange={(e) => setMealCategory(e.target.value as MealCategory)}>
+              <Select
+                value={mealCategory}
+                onChange={(e) =>
+                  setMealCategory(e.target.value as MealCategory)
+                }
+              >
                 <option value="BREAKFAST">Breakfast</option>
                 <option value="LUNCH">Lunch</option>
                 <option value="DINNER">Dinner</option>
@@ -502,16 +676,27 @@ export function FoodLog() {
           <div key={meal}>
             <div className="mb-2 flex items-center justify-between">
               <span className="text-label text-text-muted">{meal}</span>
-              {items.length > 0 && <span className="text-readout text-xs text-text-muted">{total.toFixed(0)} KCAL</span>}
+              {items.length > 0 && (
+                <span className="text-readout text-xs text-text-muted">
+                  {total.toFixed(0)} KCAL
+                </span>
+              )}
             </div>
             <Card className="divide-y divide-border">
               {items.length === 0 ? (
-                <p className="p-4 text-body text-text-muted">No items logged.</p>
+                <p className="p-4 text-body text-text-muted">
+                  No items logged.
+                </p>
               ) : (
                 items.map((item) =>
                   editingId === item.id ? (
-                    <div key={item.id} className="flex flex-col gap-3 p-4 text-body">
-                      <span className="truncate font-medium">{item.name || 'Unnamed item'}</span>
+                    <div
+                      key={item.id}
+                      className="flex flex-col gap-3 p-4 text-body"
+                    >
+                      <span className="truncate font-medium">
+                        {item.name || 'Unnamed item'}
+                      </span>
                       <FieldLabel>
                         Grams
                         <Input
@@ -525,7 +710,9 @@ export function FoodLog() {
                         Meal
                         <Select
                           value={editMeal}
-                          onChange={(e) => setEditMeal(e.target.value as MealCategory)}
+                          onChange={(e) =>
+                            setEditMeal(e.target.value as MealCategory)
+                          }
                         >
                           <option value="BREAKFAST">Breakfast</option>
                           <option value="LUNCH">Lunch</option>
@@ -533,9 +720,14 @@ export function FoodLog() {
                           <option value="SNACKS">Snacks</option>
                         </Select>
                       </FieldLabel>
-                      {editError && <p className="text-body text-warn">{editError}</p>}
+                      {editError && (
+                        <p className="text-body text-warn">{editError}</p>
+                      )}
                       <div className="flex gap-2">
-                        <PrimaryButton type="button" onClick={() => saveEdit(item.id)}>
+                        <PrimaryButton
+                          type="button"
+                          onClick={() => saveEdit(item.id)}
+                        >
                           Save
                         </PrimaryButton>
                         <SecondaryButton type="button" onClick={cancelEdit}>
@@ -544,11 +736,18 @@ export function FoodLog() {
                       </div>
                     </div>
                   ) : (
-                    <div key={item.id} className="flex items-center justify-between gap-3 p-4 text-body">
-                      <span className="truncate">{item.name || 'Unnamed item'}</span>
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between gap-3 p-4 text-body"
+                    >
+                      <span className="truncate">
+                        {item.name || 'Unnamed item'}
+                      </span>
                       <span className="flex shrink-0 items-center gap-3 text-readout">
                         <span>{Number(item.grams).toFixed(0)} g</span>
-                        <span>{Number(item.caloriesComputed).toFixed(0)} kcal</span>
+                        <span>
+                          {Number(item.caloriesComputed).toFixed(0)} kcal
+                        </span>
                         <button
                           type="button"
                           aria-label="Edit entry"

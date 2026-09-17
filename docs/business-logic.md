@@ -34,6 +34,7 @@
 - When a user logs an item with a given gram amount:
   `Calories for entry = (nutrient_per_100g ÷ 100) × grams_entered`
 - Same formula applies to any other tracked macros (protein/carbs/fat) if those are shown.
+- Packaged products use the exact same per-100g formula as every other source — no separate calculation method exists.
 - Units are grams-only for v1 (per requirements §3 — household units deferred).
 
 ### 5. Food Lookup Routing Logic
@@ -41,9 +42,10 @@ Order of resolution, per input method:
 
 - **Barcode scan path:**
   1. Decode barcode client-side.
-  2. Query Open Food Facts by barcode.
-  3. **Important implementation rule:** Open Food Facts returns HTTP 200 even when it has no data for that barcode — the app must check the response body's status field, not just the HTTP status code, or it will silently log an empty/zero result as if it were real data.
-  4. If not found → fall through to manual entry (private to that user, per requirements §4.3/§4.4).
+  2. Normalize barcode (reject an unrecognized format or a failed GS1 check digit) and check the local `packaged_products` Postgres table.
+  3. On a local miss, query the Open Food Facts provider with a bounded request timeout. **Important implementation rule, unchanged from before local-first caching was added:** Open Food Facts returns HTTP 200 even when it has no data for that barcode — the app must check the response body's status field, not just the HTTP status code, or it will silently treat an empty/zero result as real data. A genuine hit is normalized and persisted locally so it never needs to be fetched from Open Food Facts again. Provider/network failures return a temporary-unavailable outcome distinct from a confirmed miss.
+  4. On a complete miss (local DB and Open Food Facts both have nothing), the user can submit the product themselves via manual entry, which is saved to the same local table for future scans.
+  5. If not found and not submitted → fall through to manual entry (private to that user, per requirements §4.3/§4.4).
 
 - **Voice logging path:**
   1. Record audio → transcribe via Web Speech API (`lang: ar-EG`).

@@ -4,9 +4,9 @@ A calorie, macro, exercise, and weight tracking web app. Users log meals (via ba
 
 ## Stack
 
-- **Frontend** (`Frontend/`) — React 19 + Vite + TypeScript, Tailwind CSS v4, Zustand, react-router-dom v7
+- **Frontend** (`Frontend/`) — React 19 + Vite + TypeScript, Tailwind CSS v4, React Context, react-router-dom v7
 - **Backend** (`Backend/`) — NestJS 11 + Prisma + PostgreSQL (Neon)
-- **External APIs** — Open Food Facts (barcode lookup), USDA FoodData Central (food name lookup), Web Speech API (client-side voice input), Cloudinary (avatar uploads)
+- **External APIs** — Open Food Facts (barcode lookup, used as fallback behind a local Postgres product cache), USDA FoodData Central (food name lookup), Web Speech API (client-side voice input), Cloudinary (avatar uploads)
 
 This is a monorepo, but Frontend and Backend deploy independently:
 - **Frontend** → Vercel (root directory set to `Frontend/` in the Vercel dashboard; framework auto-detected, no committed manifest)

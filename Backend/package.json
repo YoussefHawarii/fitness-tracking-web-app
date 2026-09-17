@@ -1,6 +1,6 @@
 {
   "name": "Backend",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "",
   "author": "",
   "private": true,
@@ -18,7 +18,8 @@
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
-    "db:seed": "prisma db seed"
+    "db:seed": "prisma db seed",
+    "db:import-products": "ts-node prisma/import-packaged-products.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
@@ -54,6 +55,7 @@
     "@types/bcrypt": "^6.0.0",
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
+    "@types/multer": "^2.2.0",
     "@types/node": "^24.0.0",
     "@types/nodemailer": "^8.0.1",
     "@types/passport-google-oauth20": "^2.0.17",

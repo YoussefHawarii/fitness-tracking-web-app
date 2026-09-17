@@ -1,0 +1,3 @@
+# Separate PackagedProduct model from CanonicalFood
+
+This app added a new `PackagedProduct` Prisma model rather than extending the existing `CanonicalFood` model, because `CanonicalFood`'s identity is a unique display name matched by fuzzy bilingual text (right for a generic food like "rice"), while a packaged product's identity is its barcode — two different pack sizes of the same branded product (e.g. Pepsi 330ml vs Pepsi 1L) must remain separate rows even though their names are nearly identical, which is the opposite of how `CanonicalFood` dedupes. That is a genuine identity-model mismatch, not just a missing field, hence a separate model.

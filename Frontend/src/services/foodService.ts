@@ -4,10 +4,14 @@ import { apiClient } from './apiClient';
 // Kept in sync by hand with Backend/src/modules/food/dto/create-food-log.dto.ts's
 // FOOD_SOURCE_TYPES — this app has no shared package between Frontend and
 // Backend, so it can't import that union directly.
-export type FoodSourceType = 'OPEN_FOOD_FACTS' | 'USDA' | 'LOCAL' | 'CANONICAL';
+export type FoodSourceType =
+  'OPEN_FOOD_FACTS' | 'USDA' | 'LOCAL' | 'CANONICAL' | 'PACKAGED_PRODUCT';
 // Search never resolves a barcode — a FoodMatch only ever comes from the
 // single-term or transcript search endpoints.
-export type FoodMatchSourceType = Exclude<FoodSourceType, 'OPEN_FOOD_FACTS'>;
+export type FoodMatchSourceType = Exclude<
+  FoodSourceType,
+  'OPEN_FOOD_FACTS' | 'PACKAGED_PRODUCT'
+>;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
 
 export interface NutrientsPer100g {
@@ -20,6 +24,30 @@ export interface NutrientsPer100g {
 export interface OpenFoodFactsProduct extends NutrientsPer100g {
   name: string;
   barcode: string;
+}
+
+export interface PackagedProduct {
+  id: string;
+  barcode: string;
+  name: string;
+  nameAr: string | null;
+  brand: string | null;
+  category: string | null;
+  servingSize: number | null;
+  servingUnit: string | null;
+  packageSize: number | null;
+  packageUnit: string | null;
+  caloriesPer100g: number;
+  proteinPer100g: number | null;
+  carbsPer100g: number | null;
+  fatPer100g: number | null;
+  fiberPer100g: number | null;
+  sugarPer100g: number | null;
+  sodiumPer100g: number | null;
+  imageUrl: string | null;
+  country: string | null;
+  source: 'OPEN_FOOD_FACTS' | 'USER_SUBMITTED' | 'ADMIN';
+  verificationStatus: 'UNVERIFIED' | 'EXTERNAL' | 'VERIFIED';
 }
 
 export interface LocalFoodItem extends NutrientsPer100g {
@@ -62,9 +90,16 @@ export class BarcodeLookupUnavailableError extends Error {
   }
 }
 
+export class InvalidBarcodeError extends Error {
+  constructor() {
+    super('The scanned barcode failed validation.');
+    this.name = 'InvalidBarcodeError';
+  }
+}
+
 export async function lookupBarcode(
   barcode: string,
-): Promise<OpenFoodFactsProduct | null> {
+): Promise<PackagedProduct | null> {
   try {
     const { data } = await apiClient.get(
       `/food/barcode/${encodeURIComponent(barcode)}`,
@@ -73,6 +108,9 @@ export async function lookupBarcode(
   } catch (err) {
     if (isAxiosError(err) && err.response?.status === 404) {
       return null; // confirmed not found → caller falls through to manual entry
+    }
+    if (isAxiosError(err) && err.response?.status === 400) {
+      throw new InvalidBarcodeError();
     }
     throw new BarcodeLookupUnavailableError();
   }
@@ -156,4 +194,68 @@ export async function updateFoodLog(
 
 export async function deleteFoodLog(id: string): Promise<void> {
   await apiClient.delete(`/food/logs/${id}`);
+}
+
+export class ProductConflictError extends Error {
+  constructor() {
+    super('A product with this barcode already exists.');
+    this.name = 'ProductConflictError';
+  }
+}
+
+export async function createPackagedProduct(input: {
+  barcode: string;
+  name: string;
+  nameAr?: string;
+  brand?: string;
+  category?: string;
+  servingSize?: number;
+  servingUnit?: string;
+  packageSize?: number;
+  packageUnit?: string;
+  caloriesPer100g: number;
+  proteinPer100g: number;
+  carbsPer100g: number;
+  fatPer100g: number;
+  fiberPer100g?: number;
+  sugarPer100g?: number;
+  sodiumPer100g?: number;
+  country?: string;
+}): Promise<PackagedProduct> {
+  try {
+    const { data } = await apiClient.post('/food/products', input);
+    return data;
+  } catch (err) {
+    if (isAxiosError(err) && err.response?.status === 409) {
+      throw new ProductConflictError();
+    }
+    throw err;
+  }
+}
+
+export async function extractNutritionLabel(file: File): Promise<{
+  available: boolean;
+  reason?: string;
+  candidate?: {
+    caloriesPer100g?: number;
+    proteinPer100g?: number;
+    carbsPer100g?: number;
+    fatPer100g?: number;
+    fiberPer100g?: number;
+    sugarPer100g?: number;
+    sodiumPer100g?: number;
+    servingSize?: number;
+    servingUnit?: string;
+  };
+}> {
+  const formData = new FormData();
+  formData.append('image', file);
+  const { data } = await apiClient.post(
+    '/food/nutrition-label/extract',
+    formData,
+    {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    },
+  );
+  return data;
 }
