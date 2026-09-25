@@ -204,6 +204,10 @@ export class FoodService {
         canonicalFoodId,
         packagedProductId,
         grams: dto.grams,
+        // Expand-step dual-write (specs/009-barcode-portion-logging ticket
+        // 01): every create records the explicit amount alongside grams.
+        amount: dto.grams,
+        amountUnit: 'G',
         caloriesComputed: computed.calories,
         proteinComputed: computed.protein,
         carbsComputed: computed.carbs,
@@ -232,7 +236,9 @@ export class FoodService {
       throw new NotFoundException('Food log entry not found.');
     }
 
-    const grams = dto.grams ?? Number(existing.grams);
+    // Prefer the explicit amount, falling back to grams for rows written
+    // before ticket 01's dual-write (specs/009-barcode-portion-logging).
+    const grams = dto.grams ?? Number(existing.amount ?? existing.grams);
     const mealCategory = dto.mealCategory ?? existing.mealCategory;
 
     // Re-resolve nutrients (rather than trusting the stored computed
@@ -249,6 +255,10 @@ export class FoodService {
       where: { id },
       data: {
         grams,
+        // Expand-step dual-write (specs/009-barcode-portion-logging ticket
+        // 01): the update path keeps amount and grams equal.
+        amount: grams,
+        amountUnit: 'G',
         mealCategory,
         caloriesComputed: computed.calories,
         proteinComputed: computed.protein,

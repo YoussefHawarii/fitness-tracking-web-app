@@ -162,19 +162,54 @@ export async function createFoodLog(input: {
   return data;
 }
 
+export type BaseUnit = 'G' | 'ML';
+
 export interface FoodLogEntry {
   id: string;
   sourceType: FoodSourceType;
   sourceRef: string;
   localFoodItemId: string | null;
   name: string;
-  grams: string;
+  grams: string | null;
+  // Explicit consumed amount, dual-written by the backend alongside grams
+  // (specs/009-barcode-portion-logging ticket 01). Absent/null on rows (or
+  // older backends) that only carry grams.
+  amount?: string | null;
+  amountUnit?: BaseUnit | null;
   caloriesComputed: string;
   proteinComputed: string | null;
   carbsComputed: string | null;
   fatComputed: string | null;
   mealCategory: MealCategory;
   loggedAtUtc: string;
+}
+
+// Displayed quantity for history rendering and edit pre-fill: prefer the
+// explicit amount, falling back to grams when amount is null/absent (a
+// grams-only response from a row or backend predating dual-write). Display
+// stays "N g" — ML rendering is a later ticket.
+export function getEntryDisplayAmount(entry: {
+  amount?: string | number | null;
+  grams?: string | number | null;
+}): string | number | null | undefined {
+  return entry.amount ?? entry.grams;
+}
+
+// Exact history text FoodLog renders today: "N g" with toFixed(0) rounding,
+// "0 g" when neither amount nor grams is present.
+export function formatEntryAmount(entry: {
+  amount?: string | number | null;
+  grams?: string | number | null;
+}): string {
+  return `${Number(getEntryDisplayAmount(entry) ?? 0).toFixed(0)} g`;
+}
+
+// Exact string FoodLog's startEdit puts in the edit input.
+export function getEditPrefill(entry: {
+  amount?: string | number | null;
+  grams?: string | number | null;
+}): string {
+  return String(getEntryDisplayAmount(entry) ?? '');
 }
 
 export async function listFoodLogsForDay(

@@ -56,6 +56,19 @@ enum MealCategory {
   SNACKS
 }
 
+// Base unit for a consumed amount (specs/009-barcode-portion-logging).
+enum BaseUnit {
+  G
+  ML
+}
+
+// How the consumed amount was chosen (specs/009-barcode-portion-logging).
+enum PortionKind {
+  PACKAGE
+  SERVING
+  CUSTOM
+}
+
 enum OtpPurpose {
   SIGNUP_VERIFICATION
 }
@@ -285,7 +298,18 @@ model FoodLogEntry {
   canonicalFood      CanonicalFood?   @relation(fields: [canonicalFoodId], references: [id], onDelete: SetNull)
   packagedProductId  String?
   packagedProduct    PackagedProduct? @relation(fields: [packagedProductId], references: [id], onDelete: SetNull)
-  grams              Decimal
+  // Legacy quantity in grams. Nullable since ticket 01 of
+  // specs/009-barcode-portion-logging: a future ML entry stores grams = NULL
+  // so no column named grams ever holds millilitres (see
+  // docs/portion-model-decisions.md §9.2). Readers must use
+  // `amount ?? grams`.
+  grams              Decimal?
+  // Explicit consumed amount in `amountUnit` (ticket 01 dual-writes
+  // amount = grams, amountUnit = G; backfill of older rows is ticket 02).
+  amount             Decimal?
+  amountUnit         BaseUnit?
+  portionKind        PortionKind?
+  portionMultiplier  Decimal?
   caloriesComputed   Decimal
   proteinComputed    Decimal?
   carbsComputed      Decimal?

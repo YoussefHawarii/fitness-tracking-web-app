@@ -8,6 +8,8 @@ import { AddProductForm } from '../features/add-product/AddProductForm';
 import {
   createFoodLog,
   deleteFoodLog,
+  formatEntryAmount,
+  getEditPrefill,
   listFoodLogsForDay,
   lookupBarcode,
   updateFoodLog,
@@ -59,7 +61,9 @@ type ScanStatus =
 interface FoodLogEntry {
   id: string;
   name: string;
-  grams: string;
+  grams: string | null;
+  amount?: string | null;
+  amountUnit?: 'G' | 'ML' | null;
   caloriesComputed: string;
   mealCategory: MealCategory;
   loggedAtUtc: string;
@@ -271,7 +275,7 @@ export function FoodLog() {
 
   function startEdit(entry: FoodLogEntry) {
     setEditingId(entry.id);
-    setEditGrams(entry.grams);
+    setEditGrams(getEditPrefill(entry));
     setEditMeal(entry.mealCategory);
     setEditError(null);
   }
@@ -744,7 +748,7 @@ export function FoodLog() {
                         {item.name || 'Unnamed item'}
                       </span>
                       <span className="flex shrink-0 items-center gap-3 text-readout">
-                        <span>{Number(item.grams).toFixed(0)} g</span>
+                        <span>{formatEntryAmount(item)}</span>
                         <span>
                           {Number(item.caloriesComputed).toFixed(0)} kcal
                         </span>
