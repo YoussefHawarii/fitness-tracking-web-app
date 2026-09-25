@@ -1,0 +1,11 @@
+# Nutrition values are per 100 base units, and food log amounts carry a unit
+
+Every nutrition column in this app is named `*Per100g`, and `FoodLogEntry` records a single required `grams` column that the calorie calculator scales by `per100g / 100 * grams`. For a 330 ml soft drink that arithmetic produces the right answer while the names describing it are wrong: the stored 42 is per 100 **ml**, and the logged 330 is millilitres recorded in a column called `grams`.
+
+The decision is to reinterpret the existing per-100 columns as **per 100 base units** — 100 g for a MASS product, 100 ml for a VOLUME product — and to replace `FoodLogEntry.grams` with an explicit amount plus its unit, backfilling existing rows to grams.
+
+Reinterpreting rather than duplicating was chosen because the stored numbers are already correct; what was missing was the label on them. Adding parallel `*Per100ml` columns would double every nutrient column while carrying no new information, and treating 100 ml as 100 g is the defect being removed. Because both dimensions scale by the same `amount / 100` factor, no arithmetic changes and no conversion between mass and volume is ever performed — a product is scaled only by an amount expressed in its own base unit, so density never enters the model.
+
+Retiring the `grams` column is the expensive half, and was chosen deliberately over the cheaper alternative of keeping `grams` and adding a nullable unit beside it. That alternative works — a null unit would mean grams and every legacy row would keep its meaning — but it leaves a column named `grams` holding `330` meaning millilitres, read by the dashboard, the history list and the edit flow. A schema that lies to every future reader is the failure mode this codebase's glossary exists to prevent, and the backfill is mechanical and lossless.
+
+Two consequences are load-bearing. Historical amounts meant grams when they were written, so they are treated as MASS/grams permanently and are never reinterpreted as millilitres from a later product lookup. And an amount alone is no longer sufficient to compute nutrition: the amount's dimension must match the product's effective nutrition basis, which is the invariant ADR 0007 depends on.
