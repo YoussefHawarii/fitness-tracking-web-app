@@ -2,7 +2,7 @@
 
 ## Context recap
 
-Backend is NestJS 11 + Prisma (PostgreSQL/Neon), currently issuing a single
+Backend is NestJS 11 + Prisma (PostgreSQL/Supabase), currently issuing a single
 7-day JWT (HS256, `@nestjs/jwt` on `jsonwebtoken`) at signup/login/google-login
 with no refresh flow, no revocation, and no request-rate limiting anywhere in
 the app (`AuthService.issueSessionToken`, `AuthModule`, `main.ts`).

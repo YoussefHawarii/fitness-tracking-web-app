@@ -16,7 +16,7 @@ Replace the current sign-up flow — which asks for email + password and grants 
 
 **Primary Dependencies**: NestJS 11, Prisma, bcrypt, `class-validator`, `@nestjs/throttler` (existing); **new**: `nodemailer` for SMTP email delivery, `@nestjs/schedule` for periodic expired-OTP cleanup. Frontend reuses the existing `axios`-based `apiClient`, `react-router-dom` v7, and the existing UI kit (`Card`, `Input`, `PrimaryButton`) — no new frontend dependencies.
 
-**Storage**: PostgreSQL via Prisma (Neon), using `prisma db push` (no `migrations/` directory, per project convention) — new `OtpCode` table plus a `username` column on `User`.
+**Storage**: PostgreSQL via Prisma (Supabase), using `prisma db push` (no `migrations/` directory, per project convention) — new `OtpCode` table plus a `username` column on `User`.
 
 **Testing**: Backend — Jest unit tests (`*.spec.ts`, CI-enforced) and Jest e2e tests (`*.e2e-spec.ts`, run locally for behavior changes per project convention). Frontend has no test runner configured — verify manually via the dev server per project convention.
 

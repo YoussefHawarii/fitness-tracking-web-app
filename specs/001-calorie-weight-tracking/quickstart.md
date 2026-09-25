@@ -5,7 +5,7 @@ Validation guide only — proves the four prioritized user stories from `spec.md
 ## Prerequisites
 
 - Node.js 20 LTS, package manager of choice (npm/pnpm)
-- A PostgreSQL connection string (Neon free-tier project, per `docs/technical-decisions.md`)
+- A PostgreSQL connection string (Supabase in production; local development uses the Docker Postgres in `docker-compose.yml`, per `docs/technical-decisions.md`)
 - A free USDA FoodData Central API key (Open Food Facts requires no key)
 - A Google OAuth client ID/secret (for the Google sign-in path)
 - Camera and microphone access in the browser used for manual verification (barcode scan and voice logging paths)

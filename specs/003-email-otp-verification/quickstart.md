@@ -5,7 +5,7 @@ Validation guide only — proves the three prioritized user stories from `spec.m
 ## Prerequisites
 
 - Node.js 20 LTS, npm
-- A PostgreSQL connection string (Neon free-tier project, per `docs/technical-decisions.md`)
+- A PostgreSQL connection string (Supabase in production; local development uses the Docker Postgres in `docker-compose.yml`, per `docs/technical-decisions.md`)
 - SMTP credentials the app can send mail through (an Ethereal/Mailtrap test inbox is sufficient for validation — no production mail provider required)
 - Access to the inbox tied to the SMTP `to` address used during manual testing, to read the received OTP/welcome emails
 

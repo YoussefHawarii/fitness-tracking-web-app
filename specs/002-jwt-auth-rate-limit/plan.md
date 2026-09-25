@@ -32,7 +32,7 @@ decisions this is built on.
 (existing); **new**: `jose` (JWK/JWKS generation), `@nestjs/throttler`
 (rate limiting)
 
-**Storage**: PostgreSQL via Prisma (Neon) — existing; adds one new table
+**Storage**: PostgreSQL via Prisma (Supabase) — existing; adds one new table
 (`RefreshToken`, see [data-model.md](data-model.md))
 
 **Testing**: Jest (unit specs) + Supertest (`test/*.e2e-spec.ts`) — existing

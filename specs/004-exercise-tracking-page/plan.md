@@ -14,7 +14,7 @@ Replace the dashboard's free-text "calories burned" quick-entry form with a dedi
 
 **Primary Dependencies**: NestJS 11, Prisma ORM, class-validator/class-transformer (Backend); React 19 + Vite, react-router-dom v7, Tailwind CSS v4 (Frontend)
 
-**Storage**: PostgreSQL (Neon) — existing database, extending the existing `exercise_log_entries` table via `prisma db push` (no migrations directory in this project)
+**Storage**: PostgreSQL (Supabase) — existing database, extending the existing `exercise_log_entries` table via `prisma db push` (no migrations directory in this project)
 
 **Testing**: Jest for Backend unit tests (`*.spec.ts`) and e2e tests (`*.e2e-spec.ts`, run locally per CLAUDE.md); no Frontend test runner is configured in this repo — Frontend verification is manual/browser-based (per CLAUDE.md's UI verification guidance) plus `tsc -b` and `eslint`
 

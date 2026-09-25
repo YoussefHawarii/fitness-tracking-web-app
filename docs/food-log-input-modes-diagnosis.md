@@ -417,7 +417,7 @@ the project's own dev-server launcher and running the command directly. Static i
 obvious cause (the Nest bootstrap in `Backend/src/main.ts` is unremarkable, and `nest-cli.json` looks
 ordinary). The most likely candidate, per source inspection, is `PrismaService`'s unconditional
 `$connect()` during module initialization (`Backend/src/prisma/prisma.service.ts`) stalling before
-`app.listen()` can run — e.g. a slow/unreachable first connection to the Neon Postgres instance from this
+`app.listen()` can run — e.g. a slow/unreachable first connection to the hosted Postgres instance from this
 particular sandbox network. This did not block the diagnosis above (which relied on static code tracing
 and direct calls to the real Open Food Facts/USDA APIs instead), and did not reproduce as a problem for
 the user in their own environment (they report the manual search and camera already working live) — flagging

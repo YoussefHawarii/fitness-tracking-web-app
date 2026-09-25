@@ -16,7 +16,7 @@ A three-tier web app (React SPA → NestJS REST API → PostgreSQL/Prisma) that 
 
 **Primary Dependencies**: NestJS (backend framework), Prisma ORM, React, Tailwind CSS, `@zxing/browser` (client-side barcode decode), Web Speech API (browser-native, no library)
 
-**Storage**: PostgreSQL, hosted on Neon (free tier, built-in PgBouncer pooler, scale-to-zero after 5 min idle)
+**Storage**: PostgreSQL, hosted on Supabase (free tier, database only, Supavisor session pooler)
 
 **Testing**: Jest — unit tests scoped to the business-logic layer (BMR/TDEE, daily-balance, weight-prediction pure functions) per `docs/technical-decisions.md`; broader integration/E2E testing is out of scope for v1
 

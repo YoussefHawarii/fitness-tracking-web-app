@@ -13,7 +13,7 @@ description: "Task list template for feature implementation"
 
 **Organization**: Tasks are grouped by user story (from `spec.md`) to enable independent implementation and testing of each story.
 
-**Note on migrations**: ~~This sandbox has no live Postgres/Neon instance~~ — **update**: a real Neon project ("Fitness App", `little-resonance-81589429`) is now connected via MCP. The full schema (6 tables, 4 enums, all foreign keys) was applied directly against it and verified: `npx prisma db pull` round-trips to the same schema, the backend boots and connects successfully ("Nest application successfully started"), and a live signup request wrote and was read back from the real `users` table (then cleaned up). `Backend/.env`'s `DATABASE_URL` now points at this real database. `Backend/prisma/migrations/` has no migration history yet since the schema was applied as raw SQL rather than via `prisma migrate dev` — run `npx prisma migrate resolve --applied <name>` or a fresh `prisma migrate dev` baseline next time you evolve the schema, so future changes go through Prisma's normal migration history instead of ad hoc SQL.
+**Note on migrations**: ~~This sandbox has no live Postgres instance~~ — **update**: a real hosted Postgres project (the previous database host) is now connected via MCP. The full schema (6 tables, 4 enums, all foreign keys) was applied directly against it and verified: `npx prisma db pull` round-trips to the same schema, the backend boots and connects successfully ("Nest application successfully started"), and a live signup request wrote and was read back from the real `users` table (then cleaned up). `Backend/.env`'s `DATABASE_URL` now points at this real database. `Backend/prisma/migrations/` has no migration history yet since the schema was applied as raw SQL rather than via `prisma migrate dev` — run `npx prisma migrate resolve --applied <name>` or a fresh `prisma migrate dev` baseline next time you evolve the schema, so future changes go through Prisma's normal migration history instead of ad hoc SQL.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -37,7 +37,7 @@ description: "Task list template for feature implementation"
 - [X] T003 [P] Configure ESLint + Prettier for the backend in `Backend/.eslintrc.js`
 - [X] T004 [P] Configure ESLint + Prettier for the frontend in `Frontend/.eslintrc.js`
 - [X] T005 [P] Configure Tailwind CSS in `Frontend/tailwind.config.js` and `Frontend/src/index.css`
-- [X] T006 Install and configure Prisma CLI in `Backend/` (`prisma init`, `DATABASE_URL` wired to a Neon Postgres connection string)
+- [X] T006 Install and configure Prisma CLI in `Backend/` (`prisma init`, `DATABASE_URL` wired to a Postgres connection string (production: Supabase; local: Docker))
 - [X] T007 [P] Configure Jest for business-logic unit testing in `Backend/jest.config.js`
 - [X] T008 [P] Create environment config module (`DATABASE_URL`, `JWT_SECRET`, `USDA_API_KEY`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) in `Backend/src/config/config.module.ts`
 - [X] T009 Create a GitHub Actions workflow that runs the Jest suite on every pull request in `.github/workflows/ci.yml`
@@ -177,7 +177,7 @@ description: "Task list template for feature implementation"
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T064 [P] Run all `quickstart.md` validation scenarios end-to-end and record results — **partially done**: frontend routing/auth-guard/console-clean smoke-tested in-browser; backend now confirmed live against a real Neon DB (signup wrote and was read back from the real `users` table, JWT guard verified). Still blocked on a Google OAuth client and a USDA API key for the remaining scenarios (voice logging, USDA search, Google sign-in)
+- [ ] T064 [P] Run all `quickstart.md` validation scenarios end-to-end and record results — **partially done**: frontend routing/auth-guard/console-clean smoke-tested in-browser; backend now confirmed live against a real hosted Postgres DB (signup wrote and was read back from the real `users` table, JWT guard verified). Still blocked on a Google OAuth client and a USDA API key for the remaining scenarios (voice logging, USDA search, Google sign-in)
 - [X] T065 [P] Add consistent loading/error states across `Frontend/src/pages/*`
 - [X] T066 Configure Vercel and Railway to build/deploy only their respective subfolder (`Frontend/`, `Backend/`) via each platform's dashboard root-directory setting — test deploy completed: both are live (Vercel site + Railway service)
 - [X] T067 [P] Review CORS and security headers on the backend in `Backend/src/main.ts`

@@ -86,7 +86,7 @@ Foreign keys tie all logs back to `users`, enforcing the data-integrity requirem
 ### 6. Deployment Topology (targeting $0/month)
 - **Frontend:** Vercel free (Hobby) tier (static SPA hosting).
 - **Backend:** Railway (usage-based free tier — $5 free credit for the first 30 days, then $1/month recurring credit; no card required to start). Unlike a classic free-tier host, the instance does not sleep on idle by default, so there's no idle-sleep cold start on the backend layer itself — the real constraint is staying within the monthly usage credit.
-- **Database:** Supabase Postgres (free tier), used as a plain Postgres database only. It replaced Neon in September 2026.
+- **Database:** Supabase Postgres (free tier), used as a plain Postgres database only. It became the production database in September 2026.
   - Railway (US-East) connects through the Supavisor session pooler in `us-east-1`, which is IPv4 and supports Prisma's prepared statements. Pool size is capped with `connection_limit` because the free tier's pooler allows only a small number of server connections.
   - **Trade-offs:** a free project pauses after 7 days of low activity, and the database is capped at 500 MB. See `technical-decisions.md` for the connection and Data API details.
   - Local development and e2e use a separate Docker Postgres (`docker-compose.yml`), never the deployed database.
