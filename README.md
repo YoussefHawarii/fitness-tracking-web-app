@@ -5,13 +5,13 @@ A calorie, macro, exercise, and weight tracking web app. Users log meals (via ba
 ## Stack
 
 - **Frontend** (`Frontend/`) — React 19 + Vite + TypeScript, Tailwind CSS v4, React Context, react-router-dom v7
-- **Backend** (`Backend/`) — NestJS 11 + Prisma + PostgreSQL (Neon)
+- **Backend** (`Backend/`) — NestJS 11 + Prisma + PostgreSQL (Supabase, database only)
 - **External APIs** — Open Food Facts (barcode lookup, used as fallback behind a local Postgres product cache), USDA FoodData Central (food name lookup), Web Speech API (client-side voice input), Cloudinary (avatar uploads)
 
 This is a monorepo, but Frontend and Backend deploy independently:
 - **Frontend** → Vercel (root directory set to `Frontend/` in the Vercel dashboard; framework auto-detected, no committed manifest)
 - **Backend** → Railway (root directory set to `Backend/` in the Railway dashboard; build/deploy config is managed there, not via a committed manifest)
-- **Database** → Neon (Postgres)
+- **Database** → Supabase Postgres (database only — Supabase Auth, Storage and the Data API are not used). Local development and e2e use the Docker Postgres in `docker-compose.yml`.
 
 See `docs/architecture.md` for the full system design and `docs/business-logic.md` for the calorie/TDEE/prediction formulas.
 
@@ -19,7 +19,7 @@ See `docs/architecture.md` for the full system design and `docs/business-logic.m
 
 ### Prerequisites
 - Node.js 20+
-- A Postgres database (e.g. a free [Neon](https://neon.tech) project)
+- Docker, for the local Postgres (`docker compose up -d` from the repo root)
 - API keys: [USDA FoodData Central](https://fdc.nal.usda.gov/api-key-signup), Google OAuth client credentials, SMTP credentials (e.g. a Gmail App Password), Cloudinary credentials
 
 ### Backend setup
@@ -27,9 +27,10 @@ See `docs/architecture.md` for the full system design and `docs/business-logic.m
 ```bash
 cd Backend
 npm install
-cp .env.example .env   # fill in DATABASE_URL, ACCESS_TOKEN, REFRESH_TOKEN, USDA_API_KEY, etc.
+cp .env.example .env   # DATABASE_URL already points at the local Docker DB; fill in ACCESS_TOKEN, REFRESH_TOKEN, USDA_API_KEY, etc.
 npx prisma db push     # applies the schema — this project uses `prisma db push`, not migrations
 npx prisma generate
+npx prisma db seed     # loads the canonical food catalog (idempotent)
 npm run start:dev      # http://localhost:3000
 ```
 

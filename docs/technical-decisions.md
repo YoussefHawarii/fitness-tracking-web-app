@@ -16,7 +16,11 @@
 
 ### Database
 - **Engine:** PostgreSQL.
-- **Host:** Neon (free tier). Built-in PgBouncer pooler handles connection limits; known trade-off is compute scale-to-zero after 5 minutes idle — the Railway backend does not sleep on idle, so this cold-start risk is isolated to the database layer (see architecture.md §6).
+- **Host:** Supabase Postgres (free tier), **database only**. Supabase Auth, Storage, Edge Functions and the Data API are not used; Prisma is the only data-access path. It replaced Neon in September 2026, after Neon's free compute quota ran out and made the database unreachable. Neon held only disposable test data, so the cutover started from an empty database built from the Prisma schema.
+  - **Connection:** the Railway backend is a long-lived server in US-East, so it connects through the Supavisor **session** pooler (port 5432, IPv4, supports prepared statements) as a dedicated `prisma` user, with `sslmode=require` and an explicit `connection_limit`. No `DIRECT_URL` is needed. The transaction pooler (port 6543, needs `pgbouncer=true`) is meant for serverless, and the direct host is IPv6-only unless the IPv4 add-on is bought. `prisma db push` runs over the same session connection.
+  - **Data API:** turned off, and `anon`/`authenticated` hold no privileges on application tables, so the Supabase publishable key cannot read them.
+  - **Free-tier trade-offs:** 500 MB per project, and a project pauses after 7 days of low activity. There is no point-in-time restore, so destructive schema steps take an explicit `pg_dump` first.
+- **Local development and e2e:** the Docker Postgres in the repo-root `docker-compose.yml` (Postgres 17, matching production). Local `.env` and tests must never point at the deployed database.
 
 ### Testing
 - **Framework:** Jest.
@@ -35,4 +39,4 @@
 |---|---|
 | Frontend | Vercel |
 | Backend | Railway |
-| Database | Neon |
+| Database | Supabase (Postgres only) |

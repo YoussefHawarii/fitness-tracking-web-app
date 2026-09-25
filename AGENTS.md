@@ -4,7 +4,7 @@ Guidance for AI coding agents working in this repository, regardless of which to
 
 ## Project overview
 
-A fitness tracking web app: `Frontend/` (React 19 + Vite + TypeScript, Tailwind CSS v4, React Context for shared state, react-router-dom v7) talks to `Backend/` (NestJS 11 + Prisma + Postgres/Neon). Deployed separately — Frontend on Vercel (root directory `Frontend/`, framework auto-detected, no committed manifest), Backend on Railway (root directory `Backend/`, build/start commands and env vars managed in the Railway dashboard — no committed manifest).
+A fitness tracking web app: `Frontend/` (React 19 + Vite + TypeScript, Tailwind CSS v4, React Context for shared state, react-router-dom v7) talks to `Backend/` (NestJS 11 + Prisma + Postgres on Supabase, database only). Deployed separately — Frontend on Vercel (root directory `Frontend/`, framework auto-detected, no committed manifest), Backend on Railway (root directory `Backend/`, build/start commands and env vars managed in the Railway dashboard — no committed manifest).
 
 ## Backend (`Backend/`)
 
@@ -12,6 +12,7 @@ A fitness tracking web app: `Frontend/` (React 19 + Vite + TypeScript, Tailwind 
 - Unit tests: `npm test` (jest, matches `*.spec.ts`) — this is what CI runs
 - E2E tests: `npm run test:e2e` (jest, matches `*.e2e-spec.ts`, config at `test/jest-e2e.json`) — **not run in CI, but run these locally whenever backend behavior changes**, not just unit tests
 - Lint: `npm run lint` (eslint, auto-fixes) — Format: `npm run format` (prettier)
+- Database: production is Supabase Postgres, database only (never Supabase Auth, Storage or the Data API). Railway reaches it through the Supavisor session pooler; see `docs/technical-decisions.md`. **Local development and e2e use the Docker Postgres from the repo-root `docker-compose.yml`** (`docker compose up -d`; the URL is in `Backend/.env.example`). Never run `db push`, e2e tests or one-off scripts against the deployed database.
 - Prisma schema: `Backend/prisma/schema.prisma`. There is **no `migrations/` directory** — schema changes are applied with `prisma db push` + `prisma generate`, not `prisma migrate dev`. Keep using `db push` for schema changes.
 - Auth: JWTs are signed with **HS256 using two symmetric secrets**, `ACCESS_TOKEN` and `REFRESH_TOKEN` (see `Backend/.env.example`, `src/modules/auth/keys.ts`). There is no RS256 keypair and no JWKS endpoint — `Backend/README.md`'s "Auth & rate limiting" section is stale and describes an old RS256/JWKS design; don't trust it for the signing algorithm.
 - Refresh tokens rotate on use: `POST /auth/refresh` issues a new access/refresh pair and revokes the presented refresh token in the same call (single-use).
