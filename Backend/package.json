@@ -1,6 +1,6 @@
 {
   "name": "Backend",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "",
   "author": "",
   "private": true,
@@ -19,7 +19,8 @@
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "db:seed": "prisma db seed",
-    "db:import-products": "ts-node prisma/import-packaged-products.ts"
+    "db:import-products": "ts-node prisma/import-packaged-products.ts",
+    "db:backfill-amounts": "ts-node prisma/backfill-food-log-amounts.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
