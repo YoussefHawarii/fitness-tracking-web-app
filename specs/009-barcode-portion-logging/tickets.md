@@ -27,6 +27,7 @@ lint).
 | 06 | Done | 0.1.15 | Rework: PACKAGE/SERVING choices rejected for non-barcode sources; a grams edit resets a structured choice to CUSTOM; tests added for persistence failure, `NUTRITION_BASIS_UNKNOWN`, `DIMENSION_BASIS_CONFLICT` and a serving larger than its package. Update-path validation and safety deferred to 08, where the ticket places them. |
 | 07 | Done | 0.1.16 | Rework: the next queued item keeps its scenario default after a save; stored-choice re-resolution checks the unit and keeps valid non-quick multipliers (e.g. SERVING × 1.5) for 08's edit reuse; payload and preview math extracted and tested; OFF fixtures use an INFERRED basis. Rejected: a resolved amount on the custom option's label (unknown until typed). |
 | 08 | Done | 0.1.17 | Adds an authenticated `GET /food/products/:id` so the edit view can re-resolve the product. Rework: legacy OFF entries now reject ML amounts and PACKAGE/SERVING choices instead of storing them as grams; an update resending the stored amount counts as a meal-only change, so an older frontend's `{grams, mealCategory}` edit still works on a Not-scalable product; missing tests added. |
+| 09 | Done | 0.1.18 | Rework: create/edit save decisions extracted into tested pure helpers (OK saves the unchanged payload, Cancel sends nothing, meal-only edits never prompt); an edit whose product is no longer loggable estimates calories from the stored entry, not live figures; guards and tests for negative targets, cross-unit packages and invalid amounts. |
 
 ## Conventions applying to every ticket
 

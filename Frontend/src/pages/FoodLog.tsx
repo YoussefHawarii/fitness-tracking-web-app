@@ -21,6 +21,12 @@ import {
   type PortionOptionsResult,
 } from '../features/portion-selector/portionOptions';
 import {
+  saveCreateWithPlausibility,
+  saveEditWithPlausibility,
+  type CreateSubmittedPayload,
+  type EditSubmittedPayload,
+} from '../features/portion-selector/saveDecisions';
+import {
   createFoodLog,
   deleteFoodLog,
   formatEntryAmount,
@@ -50,6 +56,7 @@ import {
   TrashIcon,
 } from '../components/ui/icons';
 import { useAccountTimezone } from '../hooks/useAccountTimezone';
+import { getGoals } from '../services/userService';
 
 type InputMode = 'barcode' | 'voice' | 'manual';
 export type PendingItem = {
@@ -478,6 +485,9 @@ export function FoodLog() {
   const [mealCategory, setMealCategory] = useState<MealCategory>('BREAKFAST');
   const [status, setStatus] = useState<string | null>(null);
   const [entries, setEntries] = useState<FoodLogEntry[]>([]);
+  const [dailyCalorieTarget, setDailyCalorieTarget] = useState<number | null>(
+    null,
+  );
 
   // Barcode scan state machine — see docs/food-log-input-modes-diagnosis.md
   // §1.4/§1.6: a successful scan needs its own visible "found"/"not found"
@@ -575,6 +585,18 @@ export function FoodLog() {
     refreshEntries();
   }, [refreshEntries]);
 
+  useEffect(() => {
+    let ignore = false;
+    getGoals()
+      .then((baseline) => {
+        if (!ignore) setDailyCalorieTarget(baseline.dailyCalorieTarget);
+      })
+      .catch(() => undefined);
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
   useEffect(
     () => () => {
       if (scanRestartTimerRef.current !== null) {
@@ -642,7 +664,15 @@ export function FoodLog() {
     if (!entry) return;
     if (!editAmountDirty) {
       try {
-        await updateFoodLog(id, { mealCategory: editMeal });
+        await saveEditWithPlausibility({
+          entry,
+          product: editProduct,
+          submittedPayload: { mealCategory: editMeal },
+          resolution: editResolution,
+          dailyCalorieTarget,
+          confirm: (message) => window.confirm(message),
+          save: (payload) => updateFoodLog(id, payload),
+        });
         setEditingId(null);
         setEditError(null);
         refreshEntries();
@@ -690,8 +720,21 @@ export function FoodLog() {
       setEditError('Enter a valid amount greater than 0.');
       return;
     }
+    const submittedPayload: EditSubmittedPayload = {
+      ...amountPayload,
+      mealCategory: editMeal,
+    };
     try {
-      await updateFoodLog(id, { ...amountPayload, mealCategory: editMeal });
+      const outcome = await saveEditWithPlausibility({
+        entry,
+        product: editProduct,
+        submittedPayload,
+        resolution: editResolution,
+        dailyCalorieTarget,
+        confirm: (message) => window.confirm(message),
+        save: (payload) => updateFoodLog(id, payload),
+      });
+      if (!outcome.saved) return;
       setEditingId(null);
       setEditError(null);
       refreshEntries();
@@ -879,14 +922,23 @@ export function FoodLog() {
                 ? ({ portionKind: 'CUSTOM' } as const)
                 : {}),
             };
-      await createFoodLog({
+      const submittedPayload: CreateSubmittedPayload = {
         sourceType: current.sourceType,
         sourceRef: current.sourceRef,
         name: current.sourceType === 'CANONICAL' ? current.name : undefined,
         ...amountPayload,
         mealCategory,
         loggedAtUtc: new Date().toISOString(),
+      };
+      const outcome = await saveCreateWithPlausibility({
+        pendingItem: current,
+        submittedPayload,
+        resolution: loggableResolution,
+        dailyCalorieTarget,
+        confirm: (message) => window.confirm(message),
+        save: createFoodLog,
       });
+      if (!outcome.saved) return;
       const remaining = pendingItems.length - 1;
       setStatus(
         remaining > 0
