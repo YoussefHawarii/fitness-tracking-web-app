@@ -14,6 +14,7 @@ export type FoodMatchSourceType = Exclude<
 >;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
 export type BaseUnit = 'G' | 'ML';
+export type PortionKind = 'PACKAGE' | 'SERVING' | 'CUSTOM';
 export type ContainerKey = 'PACKAGE' | 'CAN' | 'BOTTLE' | 'JAR' | 'BOX' | 'BAG';
 export type PortionDimension = 'MASS' | 'VOLUME' | 'UNKNOWN';
 export type NutritionBasis = 'PER_100_G' | 'PER_100_ML';
@@ -192,16 +193,35 @@ export async function listLocalFoodItems(): Promise<LocalFoodItem[]> {
   return data;
 }
 
-export async function createFoodLog(input: {
+type CreateFoodLogBase = {
   sourceType: FoodSourceType;
   sourceRef: string;
   // CANONICAL only — the display name already resolved by search, passed
   // through so history shows whichever language (EN/AR) the user searched in.
   name?: string;
-  grams: number;
   mealCategory: MealCategory;
   loggedAtUtc: string;
-}) {
+};
+
+export type CreateFoodLogInput = CreateFoodLogBase &
+  (
+    | {
+        grams: number;
+        amount?: never;
+        amountUnit?: never;
+        portionKind?: never;
+        portionMultiplier?: never;
+      }
+    | {
+        grams?: never;
+        amount: number;
+        amountUnit: BaseUnit;
+        portionKind?: PortionKind;
+        portionMultiplier?: number;
+      }
+  );
+
+export async function createFoodLog(input: CreateFoodLogInput) {
   const { data } = await apiClient.post('/food/logs', input);
   return data;
 }
@@ -214,10 +234,12 @@ export interface FoodLogEntry {
   name: string;
   grams: string | null;
   // Explicit consumed amount, dual-written by the backend alongside grams
-  // (specs/009-barcode-portion-logging ticket 01). Absent/null on rows (or
+  // for G entries. Absent/null on rows (or
   // older backends) that only carry grams.
   amount?: string | null;
   amountUnit?: BaseUnit | null;
+  portionKind?: PortionKind | null;
+  portionMultiplier?: string | null;
   caloriesComputed: string;
   proteinComputed: string | null;
   carbsComputed: string | null;
@@ -229,7 +251,6 @@ export interface FoodLogEntry {
 // Displayed quantity for history rendering and edit pre-fill: prefer the
 // explicit amount, falling back to grams when amount is null/absent (a
 // grams-only response from a row or backend predating dual-write). Display
-// stays "N g" — ML rendering is a later ticket.
 export function getEntryDisplayAmount(entry: {
   amount?: string | number | null;
   grams?: string | number | null;
@@ -237,13 +258,21 @@ export function getEntryDisplayAmount(entry: {
   return entry.amount ?? entry.grams;
 }
 
-// Exact history text FoodLog renders today: "N g" with toFixed(0) rounding,
-// "0 g" when neither amount nor grams is present.
+// G entries retain the existing whole-gram display. ML entries expose their
+// stored Base unit and preserve the supported one-decimal input precision.
 export function formatEntryAmount(entry: {
   amount?: string | number | null;
   grams?: string | number | null;
+  amountUnit?: BaseUnit | null;
 }): string {
-  return `${Number(getEntryDisplayAmount(entry) ?? 0).toFixed(0)} g`;
+  const value = Number(getEntryDisplayAmount(entry) ?? 0);
+  if (entry.amountUnit === 'ML') {
+    const displayed = Number.isInteger(value)
+      ? value.toFixed(0)
+      : value.toFixed(1);
+    return `${displayed} ml`;
+  }
+  return `${value.toFixed(0)} g`;
 }
 
 // Exact string FoodLog's startEdit puts in the edit input.
@@ -263,7 +292,12 @@ export async function listFoodLogsForDay(
 
 export async function updateFoodLog(
   id: string,
-  input: { grams?: number; mealCategory?: MealCategory },
+  input: {
+    grams?: number;
+    amount?: number;
+    amountUnit?: BaseUnit;
+    mealCategory?: MealCategory;
+  },
 ): Promise<FoodLogEntry> {
   const { data } = await apiClient.patch(`/food/logs/${id}`, input);
   return data;

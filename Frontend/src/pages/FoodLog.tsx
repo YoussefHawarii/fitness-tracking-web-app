@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { BarcodeScanner } from '../features/barcode-scanner/BarcodeScanner';
@@ -16,6 +16,8 @@ import {
   InvalidBarcodeError,
   type FoodMatch,
   type FoodSourceType,
+  type BaseUnit,
+  type BarcodeResolution,
   type LocalFoodItem,
   type MealCategory,
   type NotLoggableReason,
@@ -34,7 +36,7 @@ import {
 import { useAccountTimezone } from '../hooks/useAccountTimezone';
 
 type InputMode = 'barcode' | 'voice' | 'manual';
-type PendingItem = {
+export type PendingItem = {
   sourceType: FoodSourceType;
   sourceRef: string;
   name: string;
@@ -48,6 +50,7 @@ type PendingItem = {
   packageSize?: number | null;
   packageUnit?: string | null;
   verificationStatus?: PackagedProduct['verificationStatus'] | null;
+  resolution?: BarcodeResolution;
 };
 
 type ScanStatus =
@@ -103,7 +106,129 @@ function toPackagedPendingItem(product: PackagedProduct): PendingItem {
     packageSize: product.packageSize,
     packageUnit: product.packageUnit,
     verificationStatus: product.verificationStatus,
+    resolution: product.resolution,
   };
+}
+
+function getPendingAmountUnit(item: PendingItem): BaseUnit {
+  if (item.resolution?.outcome === 'LOGGABLE') {
+    return item.resolution.effectiveNutritionBasis.basis === 'PER_100_ML'
+      ? 'ML'
+      : 'G';
+  }
+  return 'G';
+}
+
+function nutritionBasisText(item: PendingItem): string {
+  if (item.resolution?.outcome === 'LOGGABLE') {
+    return item.resolution.effectiveNutritionBasis.basis === 'PER_100_ML'
+      ? `${item.caloriesPer100g} kcal / 100 ml`
+      : `${item.caloriesPer100g} kcal / 100 g`;
+  }
+  return `${item.caloriesPer100g} kcal/100g`;
+}
+
+export function PendingAmountFields({
+  item,
+  amount,
+  onAmountChange,
+  inputRef,
+}: {
+  item: PendingItem;
+  amount: string;
+  onAmountChange: (value: string) => void;
+  inputRef?: Ref<HTMLInputElement>;
+}) {
+  const unit = getPendingAmountUnit(item);
+  const unitLabel = unit === 'ML' ? 'ml' : 'g';
+  return (
+    <>
+      <p className="text-body text-text-muted">{nutritionBasisText(item)}</p>
+      <FieldLabel>
+        Amount ({unitLabel})
+        <Input
+          ref={inputRef}
+          type="number"
+          min={0.1}
+          step={0.1}
+          value={amount}
+          onChange={(event) => onAmountChange(event.target.value)}
+        />
+      </FieldLabel>
+    </>
+  );
+}
+
+export function EditAmountField({
+  entry,
+  value,
+  onChange,
+}: {
+  entry: FoodLogEntry;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const isMillilitreEntry = entry.amountUnit === 'ML';
+  return (
+    <>
+      <FieldLabel>
+        Amount ({isMillilitreEntry ? 'ml' : 'g'})
+        <Input
+          type="number"
+          min={isMillilitreEntry ? undefined : 1}
+          step={isMillilitreEntry ? 0.1 : undefined}
+          value={value}
+          disabled={isMillilitreEntry}
+          onChange={(event) => onChange(event.target.value)}
+        />
+      </FieldLabel>
+      {isMillilitreEntry && (
+        <p className="text-body text-text-muted">
+          Amount editing is not available for millilitre entries yet.
+        </p>
+      )}
+    </>
+  );
+}
+
+const SAVE_REJECTION_MESSAGES: Record<string, string> = {
+  AMOUNT_UNIT_BASIS_MISMATCH:
+    "The amount unit does not match this product's nutrition basis.",
+  MASS_SOURCE_REQUIRES_G: 'This food can only be logged in grams.',
+  PACKAGE_PORTION_UNAVAILABLE: 'This product has no usable package size.',
+  SERVING_PORTION_UNAVAILABLE: 'This product has no usable serving size.',
+  PORTION_AMOUNT_MISMATCH:
+    'The amount does not match the selected package or serving.',
+  ML_AMOUNT_EDIT_UNAVAILABLE:
+    'Amount editing is not available for millilitre entries yet.',
+  PORTION_DIMENSION_UNKNOWN:
+    'This product does not have a usable portion unit.',
+  NUTRITION_BASIS_UNKNOWN:
+    'This product does not have a usable nutrition basis.',
+  DIMENSION_BASIS_CONFLICT:
+    "This product's portion unit conflicts with its nutrition basis.",
+  OPEN_FOOD_FACTS_CREATE_RETIRED: 'Scan this barcode again before saving it.',
+};
+
+function foodLogSaveErrorMessage(error: unknown): string {
+  if (!isAxiosError(error)) return 'Could not save this entry.';
+  const data = error.response?.data as
+    { reason?: unknown; message?: unknown } | undefined;
+  const nested =
+    typeof data?.message === 'object' && data.message !== null
+      ? (data.message as { reason?: unknown })
+      : undefined;
+  const reason =
+    typeof data?.reason === 'string'
+      ? data.reason
+      : typeof nested?.reason === 'string'
+        ? nested.reason
+        : undefined;
+  if (reason && SAVE_REJECTION_MESSAGES[reason]) {
+    return SAVE_REJECTION_MESSAGES[reason];
+  }
+  if (typeof data?.message === 'string') return data.message;
+  return 'Could not save this entry.';
 }
 
 export function PackagedProductPreview({ product }: { product: PendingItem }) {
@@ -273,9 +398,9 @@ export function FoodLog() {
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([]);
   const pendingItem = pendingItems[0] ?? null;
   const pendingCardRef = useRef<HTMLDivElement>(null);
-  const gramsInputRef = useRef<HTMLInputElement>(null);
+  const amountInputRef = useRef<HTMLInputElement>(null);
 
-  const [grams, setGrams] = useState('');
+  const [amountInput, setAmountInput] = useState('');
   const [mealCategory, setMealCategory] = useState<MealCategory>('BREAKFAST');
   const [status, setStatus] = useState<string | null>(null);
   const [entries, setEntries] = useState<FoodLogEntry[]>([]);
@@ -334,10 +459,10 @@ export function FoodLog() {
         behavior: 'smooth',
         block: 'nearest',
       });
-      // Selecting an item (scan/voice/manual) means grams is the very next
+      // Selecting an item (scan/voice/manual) means amount is the very next
       // thing to fill in — see docs/food-log-input-modes-diagnosis.md §1.6
       // item 5.
-      gramsInputRef.current?.focus();
+      amountInputRef.current?.focus();
     }
   }, [pendingItems.length]);
 
@@ -354,6 +479,18 @@ export function FoodLog() {
   }
 
   async function saveEdit(id: string) {
+    const entry = entries.find((item) => item.id === id);
+    if (entry?.amountUnit === 'ML') {
+      try {
+        await updateFoodLog(id, { mealCategory: editMeal });
+        setEditingId(null);
+        setEditError(null);
+        refreshEntries();
+      } catch (error) {
+        setEditError(foodLogSaveErrorMessage(error));
+      }
+      return;
+    }
     const gramsValue = Number(editGrams);
     if (!editGrams || !Number.isFinite(gramsValue) || gramsValue <= 0) {
       setEditError('Enter a valid gram amount greater than 0.');
@@ -371,7 +508,7 @@ export function FoodLog() {
         refreshEntries();
         return;
       }
-      setEditError('Could not save this change.');
+      setEditError(foodLogSaveErrorMessage(err));
     }
   }
 
@@ -513,16 +650,29 @@ export function FoodLog() {
 
   async function handleSaveLog() {
     const current = pendingItems[0];
-    if (!current || !grams || Number(grams) <= 0) {
-      setStatus('Choose a food item and enter a valid gram amount.');
+    const amount = Number(amountInput);
+    if (
+      !current ||
+      !amountInput ||
+      !Number.isFinite(amount) ||
+      amount <= 0 ||
+      !/^\d+(?:\.\d)?$/.test(amountInput)
+    ) {
+      setStatus(
+        'Choose a food item and enter a valid amount with at most one decimal place.',
+      );
       return;
     }
     try {
+      const amountUnit = getPendingAmountUnit(current);
       await createFoodLog({
         sourceType: current.sourceType,
         sourceRef: current.sourceRef,
         name: current.sourceType === 'CANONICAL' ? current.name : undefined,
-        grams: Number(grams),
+        amount,
+        amountUnit,
+        portionKind:
+          current.sourceType === 'PACKAGED_PRODUCT' ? 'CUSTOM' : undefined,
         mealCategory,
         loggedAtUtc: new Date().toISOString(),
       });
@@ -534,7 +684,7 @@ export function FoodLog() {
       );
       const stillQueued = remaining > 0;
       setPendingItems((prev) => prev.slice(1));
-      setGrams('');
+      setAmountInput('');
       refreshEntries();
       // A scanned item was just saved and nothing else is queued — return
       // the scan card to a ready-to-scan-again state instead of leaving the
@@ -542,8 +692,8 @@ export function FoodLog() {
       if (current.sourceType === 'PACKAGED_PRODUCT' && !stillQueued) {
         rescan();
       }
-    } catch {
-      setStatus('Could not save this entry.');
+    } catch (error) {
+      setStatus(foodLogSaveErrorMessage(error));
     }
   }
 
@@ -753,19 +903,12 @@ export function FoodLog() {
               </p>
             )}
             <p className="text-heading">{pendingItem.name}</p>
-            <p className="text-body text-text-muted">
-              {pendingItem.caloriesPer100g} kcal/100g
-            </p>
-            <FieldLabel>
-              Grams
-              <Input
-                ref={gramsInputRef}
-                type="number"
-                min={1}
-                value={grams}
-                onChange={(e) => setGrams(e.target.value)}
-              />
-            </FieldLabel>
+            <PendingAmountFields
+              item={pendingItem}
+              amount={amountInput}
+              onAmountChange={setAmountInput}
+              inputRef={amountInputRef}
+            />
             <FieldLabel>
               Meal
               <Select
@@ -815,15 +958,11 @@ export function FoodLog() {
                       <span className="truncate font-medium">
                         {item.name || 'Unnamed item'}
                       </span>
-                      <FieldLabel>
-                        Grams
-                        <Input
-                          type="number"
-                          min={1}
-                          value={editGrams}
-                          onChange={(e) => setEditGrams(e.target.value)}
-                        />
-                      </FieldLabel>
+                      <EditAmountField
+                        entry={item}
+                        value={editGrams}
+                        onChange={setEditGrams}
+                      />
                       <FieldLabel>
                         Meal
                         <Select

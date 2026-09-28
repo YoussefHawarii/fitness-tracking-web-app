@@ -362,7 +362,9 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         sourceType: 'PACKAGED_PRODUCT',
         sourceRef: productId,
-        grams: 40,
+        amount: 40,
+        amountUnit: 'G',
+        portionKind: 'CUSTOM',
         mealCategory: 'BREAKFAST',
         loggedAtUtc: '2026-01-15T08:00:00.000Z',
       })
@@ -386,6 +388,85 @@ describe('Food search + barcode reuse (e2e)', () => {
     );
 
     await prisma.packagedProduct.delete({ where: { id: productId } });
+  });
+
+  it('creates a volume log in ML and enforces validation and safety at the HTTP boundary', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500006${testSuffix}`.padEnd(12, '6').slice(0, 12),
+    );
+    const product = await prisma.packagedProduct.create({
+      data: {
+        barcode,
+        name: 'Volume logging product',
+        packageSize: 330,
+        packageUnit: 'ml',
+        packageBaseUnit: 'ML',
+        servingSize: 250,
+        servingUnit: 'ml',
+        servingBaseUnit: 'ML',
+        caloriesPer100g: 42,
+        source: ProductSource.OPEN_FOOD_FACTS,
+        verificationStatus: VerificationStatus.EXTERNAL,
+      },
+    });
+    const token = await newVerifiedUser('volume-log');
+
+    const logged = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        amount: 330,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-01-15T08:00:00.000Z',
+      })
+      .expect(201);
+
+    expect(logged.body).toMatchObject({
+      grams: null,
+      amount: '330',
+      amountUnit: 'ML',
+      portionKind: 'CUSTOM',
+      portionMultiplier: null,
+    });
+    expect(
+      Number((logged.body as { caloriesComputed: string }).caloriesComputed),
+    ).toBeCloseTo(138.6, 5);
+
+    const unsafeLegacy = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        grams: 330,
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-01-15T08:00:00.000Z',
+      })
+      .expect(422);
+    expect(unsafeLegacy.body).toMatchObject({
+      reason: 'AMOUNT_UNIT_BASIS_MISMATCH',
+    });
+
+    const malformed = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        amount: '330',
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-01-15T08:00:00.000Z',
+      })
+      .expect(400);
+    expect(malformed.body).toMatchObject({ reason: 'NOT_NUMERIC' });
+
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
   });
 
   it('returns a NOT_LOGGABLE resolution for a Not scalable cached Packaged product', async () => {

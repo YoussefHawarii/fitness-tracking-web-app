@@ -9,6 +9,23 @@ Source of truth: `spec.md` in this folder (cited as **S§x**), backed by
 spec's own hierarchy applies unchanged: where the spec and those documents
 disagree, the documents win. Tickets use the glossary's terms exactly.
 
+## Implementation progress
+
+Branch `feat/009-barcode-portion-logging`. Each ticket is implemented by Codex,
+reviewed read-only by OpenCode (Muse Spark 1.3) and then by Claude, reworked by
+Codex where the reviews found valid issues, and committed only after the
+shared DoD gates pass locally (unit, e2e against the Docker Postgres, build,
+lint).
+
+| # | Status | Version | Review notes |
+|---|---|---|---|
+| 01 | Done | 0.1.6 | Decision 9.2 recorded. |
+| 02 | Done | 0.1.10–0.1.11 | Backfill runbook tightened after review. |
+| 03 | Done | 0.1.12 | Decisions 9.1 and 9.3 recorded. |
+| 04 | Done | 0.1.13 | — |
+| 05 | Done | 0.1.14 | — |
+| 06 | Done | 0.1.15 | Rework: PACKAGE/SERVING choices rejected for non-barcode sources; a grams edit resets a structured choice to CUSTOM; tests added for persistence failure, `NUTRITION_BASIS_UNKNOWN`, `DIMENSION_BASIS_CONFLICT` and a serving larger than its package. Update-path validation and safety deferred to 08, where the ticket places them. |
+
 ## Conventions applying to every ticket
 
 - **Definition of Done (shared)**, in addition to each ticket's own list:

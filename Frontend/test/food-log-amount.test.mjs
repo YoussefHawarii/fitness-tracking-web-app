@@ -4,6 +4,7 @@ import { createServer } from 'vite';
 
 let vite;
 let foodServiceModule;
+let apiClientModule;
 
 before(async () => {
   vite = await createServer({
@@ -11,8 +12,9 @@ before(async () => {
     appType: 'custom',
     server: { middlewareMode: true },
   });
-  [foodServiceModule] = await Promise.all([
+  [foodServiceModule, apiClientModule] = await Promise.all([
     vite.ssrLoadModule('/src/services/foodService.ts'),
+    vite.ssrLoadModule('/src/services/apiClient.ts'),
   ]);
 });
 
@@ -55,10 +57,7 @@ test('formatEntryAmount renders the exact history text', () => {
     '100 g',
   );
   // Amount absent (property missing) falls back to grams.
-  assert.equal(
-    foodServiceModule.formatEntryAmount({ grams: '100' }),
-    '100 g',
-  );
+  assert.equal(foodServiceModule.formatEntryAmount({ grams: '100' }), '100 g');
   // Decimal-like string keeps today's toFixed(0) rounding.
   assert.equal(
     foodServiceModule.formatEntryAmount({ amount: '62.5', grams: '100' }),
@@ -73,6 +72,56 @@ test('formatEntryAmount renders the exact history text', () => {
     foodServiceModule.formatEntryAmount({ amount: null, grams: null }),
     '0 g',
   );
+  assert.equal(
+    foodServiceModule.formatEntryAmount({
+      amount: '330',
+      grams: null,
+      amountUnit: 'ML',
+    }),
+    '330 ml',
+  );
+  assert.equal(
+    foodServiceModule.formatEntryAmount({
+      amount: '330.5',
+      grams: null,
+      amountUnit: 'ML',
+    }),
+    '330.5 ml',
+  );
+});
+
+test('createFoodLog sends the explicit amount representation unchanged', async () => {
+  const originalPost = apiClientModule.apiClient.post;
+  let captured;
+  try {
+    apiClientModule.apiClient.post = async (url, input) => {
+      captured = { url, input };
+      return { data: { id: 'log-1' } };
+    };
+    await foodServiceModule.createFoodLog({
+      sourceType: 'PACKAGED_PRODUCT',
+      sourceRef: 'product-1',
+      amount: 330,
+      amountUnit: 'ML',
+      portionKind: 'CUSTOM',
+      mealCategory: 'LUNCH',
+      loggedAtUtc: '2026-09-28T12:00:00.000Z',
+    });
+    assert.deepEqual(captured, {
+      url: '/food/logs',
+      input: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'product-1',
+        amount: 330,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-09-28T12:00:00.000Z',
+      },
+    });
+  } finally {
+    apiClientModule.apiClient.post = originalPost;
+  }
 });
 
 test('getEditPrefill returns the exact edit-input string', () => {

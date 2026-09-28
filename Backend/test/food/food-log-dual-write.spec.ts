@@ -116,6 +116,15 @@ describe('FoodService — food log dual-write (amount/amountUnit)', () => {
           : {
               id: 'product-1',
               name: 'Chipsy Salt & Vinegar',
+              brand: null,
+              imageUrl: null,
+              source: 'OPEN_FOOD_FACTS',
+              packageSize: 150,
+              packageBaseUnit: 'G',
+              servingSize: null,
+              servingBaseUnit: null,
+              containerKey: 'PACKAGE',
+              declaredNutritionBasis: null,
               caloriesPer100g: 536,
               proteinPer100g: 6.5,
               carbsPer100g: 53,
@@ -143,7 +152,6 @@ describe('FoodService — food log dual-write (amount/amountUnit)', () => {
   } as const;
 
   it.each([
-    ['OPEN_FOOD_FACTS', { sourceRef: '3017620422003' }],
     ['USDA', { sourceRef: '123' }],
     ['LOCAL', { sourceRef: 'local-1' }],
     ['CANONICAL', { sourceRef: 'canon-1' }],
@@ -169,6 +177,21 @@ describe('FoodService — food log dual-write (amount/amountUnit)', () => {
       }
     },
   );
+
+  it('rejects a new legacy Open Food Facts create', async () => {
+    const { service, created } = buildService();
+
+    await expect(
+      service.createFoodLog(userId, {
+        sourceType: 'OPEN_FOOD_FACTS',
+        sourceRef: '3017620422003',
+        ...baseCreate,
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'OPEN_FOOD_FACTS_CREATE_RETIRED' },
+    });
+    expect(created).toHaveLength(0);
+  });
 
   it('update dual-writes amount and grams equal when the amount changes', async () => {
     const { service, updated } = buildService({

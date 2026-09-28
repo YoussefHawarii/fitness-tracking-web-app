@@ -132,6 +132,106 @@ test('Not scalable panel renders identity and safe fallbacks without logging con
   assert.doesNotMatch(html, />Grams</);
 });
 
+function loggableResolution(basis) {
+  const volume = basis === 'PER_100_ML';
+  return {
+    outcome: 'LOGGABLE',
+    portionDimension: volume ? 'VOLUME' : 'MASS',
+    effectiveNutritionBasis: {
+      basis,
+      origin: 'INFERRED',
+      source: 'OPEN_FOOD_FACTS',
+      ruleId: 'OPEN_FOOD_FACTS_PORTION_DIMENSION',
+    },
+    package: { size: volume ? 330 : 125, baseUnit: volume ? 'ML' : 'G' },
+    serving: null,
+    containerKey: volume ? 'CAN' : 'PACKAGE',
+  };
+}
+
+test('pending barcode amount fields render the effective VOLUME basis and ml input', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.PendingAmountFields, {
+      item: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'drink-1',
+        name: 'Test drink',
+        caloriesPer100g: 42,
+        resolution: loggableResolution('PER_100_ML'),
+      },
+      amount: '330',
+      onAmountChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /42 kcal \/ 100 ml/);
+  assert.match(html, /Amount \(ml\)/);
+  assert.match(html, /step="0\.1"/);
+});
+
+test('pending barcode amount fields render the effective MASS basis and g input', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.PendingAmountFields, {
+      item: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'food-1',
+        name: 'Test food',
+        caloriesPer100g: 250,
+        resolution: loggableResolution('PER_100_G'),
+      },
+      amount: '125',
+      onAmountChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /250 kcal \/ 100 g/);
+  assert.match(html, /Amount \(g\)/);
+});
+
+test('an older barcode response without resolution keeps the previous grams presentation', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.PendingAmountFields, {
+      item: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'legacy-1',
+        name: 'Legacy product',
+        caloriesPer100g: 100,
+      },
+      amount: '',
+      onAmountChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /100 kcal\/100g/);
+  assert.match(html, /Amount \(g\)/);
+});
+
+test('the edit amount field is disabled for an ML entry and explains why', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.EditAmountField, {
+      entry: {
+        id: 'log-1',
+        name: 'Test drink',
+        grams: null,
+        amount: '330',
+        amountUnit: 'ML',
+        caloriesComputed: '138.6',
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-09-28T12:00:00.000Z',
+      },
+      value: '330',
+      onChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Amount \(ml\)/);
+  assert.match(html, /disabled=""/);
+  assert.match(
+    html,
+    /Amount editing is not available for millilitre entries yet\./,
+  );
+});
+
 test('invalid barcodes stay distinct from confirmed not-found responses', async () => {
   const originalGet = apiClientModule.apiClient.get;
   try {
