@@ -25,6 +25,7 @@ lint).
 | 04 | Done | 0.1.13 | — |
 | 05 | Done | 0.1.14 | — |
 | 06 | Done | 0.1.15 | Rework: PACKAGE/SERVING choices rejected for non-barcode sources; a grams edit resets a structured choice to CUSTOM; tests added for persistence failure, `NUTRITION_BASIS_UNKNOWN`, `DIMENSION_BASIS_CONFLICT` and a serving larger than its package. Update-path validation and safety deferred to 08, where the ticket places them. |
+| 07 | Done | 0.1.16 | Rework: the next queued item keeps its scenario default after a save; stored-choice re-resolution checks the unit and keeps valid non-quick multipliers (e.g. SERVING × 1.5) for 08's edit reuse; payload and preview math extracted and tested; OFF fixtures use an INFERRED basis. Rejected: a resolved amount on the custom option's label (unknown until typed). |
 
 ## Conventions applying to every ticket
 

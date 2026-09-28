@@ -5,6 +5,19 @@ import { BarcodeScanner } from '../features/barcode-scanner/BarcodeScanner';
 import { VoiceLogger } from '../features/voice-logger/VoiceLogger';
 import { ManualFoodSearch } from '../features/manual-food-search/ManualFoodSearch';
 import { AddProductForm } from '../features/add-product/AddProductForm';
+import { PortionSelector } from '../features/portion-selector/PortionSelector';
+import {
+  buildPortionCreatePayload,
+  calculatePortionNutrition,
+  isValidPortionAmountInput,
+  type PortionNutrition,
+} from '../features/portion-selector/portionCalculations';
+import {
+  baseUnitForResolution,
+  buildPortionOptions,
+  type LoggableBarcodeResolution,
+  type PortionOptionId,
+} from '../features/portion-selector/portionOptions';
 import {
   createFoodLog,
   deleteFoodLog,
@@ -128,6 +141,19 @@ function nutritionBasisText(item: PendingItem): string {
   return `${item.caloriesPer100g} kcal/100g`;
 }
 
+function defaultPortionOptionId(
+  item: PendingItem | undefined,
+): PortionOptionId | null {
+  const resolution =
+    item?.sourceType === 'PACKAGED_PRODUCT' &&
+    item.resolution?.outcome === 'LOGGABLE'
+      ? item.resolution
+      : null;
+  return resolution
+    ? (buildPortionOptions(resolution).defaultSelection?.optionId ?? null)
+    : null;
+}
+
 export function PendingAmountFields({
   item,
   amount,
@@ -156,6 +182,50 @@ export function PendingAmountFields({
         />
       </FieldLabel>
     </>
+  );
+}
+
+function displayNutrient(value: number): string {
+  return value.toFixed(1).replace(/\.0$/, '');
+}
+
+function PortionNutritionPreview({
+  nutrition,
+}: {
+  nutrition: PortionNutrition | null;
+}) {
+  if (nutrition === null) {
+    return (
+      <p className="text-body text-text-muted">
+        Select a valid portion to preview calories and macros.
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-surface p-4">
+      <p className="mb-2 text-label text-text-muted normal-case tracking-normal">
+        This portion
+      </p>
+      <div className="grid grid-cols-2 gap-2 text-body text-text sm:grid-cols-4">
+        <span>{displayNutrient(nutrition.calories)} kcal</span>
+        <span>
+          {nutrition.protein != null
+            ? `${displayNutrient(nutrition.protein)} g protein`
+            : 'Protein: not available'}
+        </span>
+        <span>
+          {nutrition.carbs != null
+            ? `${displayNutrient(nutrition.carbs)} g carbs`
+            : 'Carbs: not available'}
+        </span>
+        <span>
+          {nutrition.fat != null
+            ? `${displayNutrient(nutrition.fat)} g fat`
+            : 'Fat: not available'}
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -401,6 +471,8 @@ export function FoodLog() {
   const amountInputRef = useRef<HTMLInputElement>(null);
 
   const [amountInput, setAmountInput] = useState('');
+  const [selectedPortionOptionId, setSelectedPortionOptionId] =
+    useState<PortionOptionId | null>(null);
   const [mealCategory, setMealCategory] = useState<MealCategory>('BREAKFAST');
   const [status, setStatus] = useState<string | null>(null);
   const [entries, setEntries] = useState<FoodLogEntry[]>([]);
@@ -433,6 +505,37 @@ export function FoodLog() {
   const [editGrams, setEditGrams] = useState('');
   const [editMeal, setEditMeal] = useState<MealCategory>('BREAKFAST');
   const [editError, setEditError] = useState<string | null>(null);
+
+  const loggableResolution: LoggableBarcodeResolution | null =
+    pendingItem?.sourceType === 'PACKAGED_PRODUCT' &&
+    pendingItem.resolution?.outcome === 'LOGGABLE'
+      ? pendingItem.resolution
+      : null;
+  const portionModel = loggableResolution
+    ? buildPortionOptions(loggableResolution)
+    : null;
+  const selectedPortionOption = portionModel?.options.find(
+    ({ id }) => id === selectedPortionOptionId,
+  );
+  const portionCreatePayload = loggableResolution
+    ? buildPortionCreatePayload(
+        loggableResolution,
+        selectedPortionOption?.choice ?? null,
+        amountInput,
+      )
+    : null;
+  const portionNutritionPreview =
+    portionCreatePayload && pendingItem
+      ? calculatePortionNutrition(pendingItem, portionCreatePayload.amount)
+      : null;
+  const packagedPortionInvalid =
+    loggableResolution !== null && portionCreatePayload === null;
+
+  function replacePendingItems(items: PendingItem[]) {
+    setPendingItems(items);
+    setAmountInput('');
+    setSelectedPortionOptionId(defaultPortionOptionId(items[0]));
+  }
 
   const refreshEntries = useCallback(() => {
     listFoodLogsForDay(date)
@@ -541,13 +644,13 @@ export function FoodLog() {
         return;
       }
       if (product.resolution?.outcome === 'NOT_LOGGABLE') {
-        setPendingItems([]);
+        replacePendingItems([]);
         setNotLoggableResolution(product.resolution);
         setScanStatus('not-loggable');
         setStatus(null);
         return;
       }
-      setPendingItems([toPackagedPendingItem(product)]);
+      replacePendingItems([toPackagedPendingItem(product)]);
       setNotLoggableResolution(null);
       setScanStatus('found');
       setStatus(null);
@@ -618,18 +721,18 @@ export function FoodLog() {
   }
 
   function handleFoodMatchSelected(match: FoodMatch) {
-    setPendingItems([toPendingItem(match)]);
+    replacePendingItems([toPendingItem(match)]);
     setStatus(null);
   }
 
   function handleFoodMatchesSelected(matches: FoodMatch[]) {
     if (matches.length === 0) return;
-    setPendingItems(matches.map(toPendingItem));
+    replacePendingItems(matches.map(toPendingItem));
     setStatus(null);
   }
 
   function handleLocalItemCreated(item: LocalFoodItem) {
-    setPendingItems([
+    replacePendingItems([
       {
         sourceType: 'LOCAL',
         sourceRef: item.id,
@@ -641,7 +744,7 @@ export function FoodLog() {
   }
 
   function handleProductCreated(product: PackagedProduct) {
-    setPendingItems([toPackagedPendingItem(product)]);
+    replacePendingItems([toPackagedPendingItem(product)]);
     setNotLoggableResolution(null);
     setShowAddProduct(false);
     setScanStatus('found');
@@ -650,29 +753,46 @@ export function FoodLog() {
 
   async function handleSaveLog() {
     const current = pendingItems[0];
-    const amount = Number(amountInput);
+    if (loggableResolution && !selectedPortionOption) {
+      setStatus('Choose a portion before saving.');
+      return;
+    }
     if (
-      !current ||
-      !amountInput ||
-      !Number.isFinite(amount) ||
-      amount <= 0 ||
-      !/^\d+(?:\.\d)?$/.test(amountInput)
+      selectedPortionOption?.choice.portionKind === 'CUSTOM' &&
+      !portionCreatePayload
     ) {
+      setStatus('Enter a valid custom amount with at most one decimal place.');
+      return;
+    }
+
+    if (!current || (loggableResolution && !portionCreatePayload)) {
+      setStatus(
+        'Choose a food item and enter a valid amount with at most one decimal place.',
+      );
+      return;
+    }
+    if (!loggableResolution && !isValidPortionAmountInput(amountInput)) {
       setStatus(
         'Choose a food item and enter a valid amount with at most one decimal place.',
       );
       return;
     }
     try {
-      const amountUnit = getPendingAmountUnit(current);
+      const amountPayload =
+        loggableResolution && portionCreatePayload
+          ? portionCreatePayload
+          : {
+              amount: Number(amountInput),
+              amountUnit: getPendingAmountUnit(current),
+              ...(current.sourceType === 'PACKAGED_PRODUCT'
+                ? ({ portionKind: 'CUSTOM' } as const)
+                : {}),
+            };
       await createFoodLog({
         sourceType: current.sourceType,
         sourceRef: current.sourceRef,
         name: current.sourceType === 'CANONICAL' ? current.name : undefined,
-        amount,
-        amountUnit,
-        portionKind:
-          current.sourceType === 'PACKAGED_PRODUCT' ? 'CUSTOM' : undefined,
+        ...amountPayload,
         mealCategory,
         loggedAtUtc: new Date().toISOString(),
       });
@@ -683,8 +803,10 @@ export function FoodLog() {
           : `Logged ${current.name} under ${mealCategory}.`,
       );
       const stillQueued = remaining > 0;
+      const nextPendingItem = pendingItems[1];
       setPendingItems((prev) => prev.slice(1));
       setAmountInput('');
+      setSelectedPortionOptionId(defaultPortionOptionId(nextPendingItem));
       refreshEntries();
       // A scanned item was just saved and nothing else is queued — return
       // the scan card to a ready-to-scan-again state instead of leaving the
@@ -903,12 +1025,33 @@ export function FoodLog() {
               </p>
             )}
             <p className="text-heading">{pendingItem.name}</p>
-            <PendingAmountFields
-              item={pendingItem}
-              amount={amountInput}
-              onAmountChange={setAmountInput}
-              inputRef={amountInputRef}
-            />
+            {portionModel && loggableResolution ? (
+              <>
+                <p className="text-body text-text-muted">
+                  {nutritionBasisText(pendingItem)}
+                </p>
+                <PortionSelector
+                  options={portionModel.options}
+                  selectedOptionId={selectedPortionOptionId}
+                  customAmount={amountInput}
+                  baseUnit={baseUnitForResolution(loggableResolution)}
+                  onSelectionChange={(optionId) => {
+                    setSelectedPortionOptionId(optionId);
+                    setStatus(null);
+                  }}
+                  onCustomAmountChange={setAmountInput}
+                  customInputRef={amountInputRef}
+                />
+                <PortionNutritionPreview nutrition={portionNutritionPreview} />
+              </>
+            ) : (
+              <PendingAmountFields
+                item={pendingItem}
+                amount={amountInput}
+                onAmountChange={setAmountInput}
+                inputRef={amountInputRef}
+              />
+            )}
             <FieldLabel>
               Meal
               <Select
@@ -923,7 +1066,11 @@ export function FoodLog() {
                 <option value="SNACKS">Snacks</option>
               </Select>
             </FieldLabel>
-            <PrimaryButton onClick={handleSaveLog} className="self-start">
+            <PrimaryButton
+              onClick={handleSaveLog}
+              disabled={packagedPortionInvalid}
+              className="self-start"
+            >
               Save entry
             </PrimaryButton>
           </Card>
