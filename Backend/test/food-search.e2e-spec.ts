@@ -270,6 +270,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       `500000${testSuffix}`.padEnd(12, '1').slice(0, 12),
     );
     offLookupByBarcode.mockResolvedValueOnce({
+      outcome: 'FOUND_WITH_NUTRITION',
       barcode,
       name: 'Test Product',
       nameAr: 'منتج اختبار',
@@ -513,11 +514,60 @@ describe('Food search + barcode reuse (e2e)', () => {
     await prisma.packagedProduct.delete({ where: { id: product.id } });
   });
 
+  it('returns and persists a distinct identified-without-nutrition result', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500009${testSuffix}`.padEnd(12, '1').slice(0, 12),
+    );
+    offLookupByBarcode.mockResolvedValueOnce({
+      outcome: 'FOUND_WITHOUT_NUTRITION',
+      identification: {
+        barcode,
+        name: 'Known product without nutrition',
+        brand: 'Known Brand',
+        imageUrl: 'https://images.example/known-no-nutrition.jpg',
+      },
+    });
+    const token = await newVerifiedUser('identified-no-nutrition');
+
+    const response = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(response.body).toEqual({
+      barcode,
+      name: 'Known product without nutrition',
+      brand: 'Known Brand',
+      imageUrl: 'https://images.example/known-no-nutrition.jpg',
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Known product without nutrition',
+          brand: 'Known Brand',
+          imageUrl: 'https://images.example/known-no-nutrition.jpg',
+        },
+        subjectKind: 'IDENTIFIED_NOT_CATALOGUED',
+        primaryReason: 'NUTRITION_MISSING',
+      },
+    });
+    await expect(
+      prisma.packagedProduct.findUnique({ where: { barcode } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.identifiedBarcode.findUnique({ where: { barcode } }),
+    ).resolves.toMatchObject({
+      displayName: 'Known product without nutrition',
+      reason: 'NUTRITION_MISSING',
+    });
+
+    await prisma.identifiedBarcode.delete({ where: { barcode } });
+  });
+
   it('returns 404 (not 500) when a barcode is unknown to both the local DB and Open Food Facts', async () => {
     const barcode = ean13WithValidCheckDigit(
       `500001${testSuffix}`.padEnd(12, '2').slice(0, 12),
     );
-    offLookupByBarcode.mockResolvedValueOnce(null);
+    offLookupByBarcode.mockResolvedValueOnce({ outcome: 'NOT_FOUND' });
     const token = await newVerifiedUser('barcode-miss');
 
     await request(app.getHttpServer())
@@ -553,7 +603,7 @@ describe('Food search + barcode reuse (e2e)', () => {
     const barcode = ean13WithValidCheckDigit(
       `500002${testSuffix}`.padEnd(12, '3').slice(0, 12),
     );
-    offLookupByBarcode.mockResolvedValueOnce(null); // Open Food Facts doesn't know it either
+    offLookupByBarcode.mockResolvedValueOnce({ outcome: 'NOT_FOUND' });
     const token = await newVerifiedUser('user-submit');
 
     await request(app.getHttpServer())

@@ -7,7 +7,7 @@ import {
   VerificationStatus,
 } from '@prisma/client';
 import { PackagedProductService } from '../../src/modules/food/packaged-product.service';
-import type { ProductLookupResult } from '../../src/modules/food/providers/product-provider.interface';
+import type { CataloguableProductLookup } from '../../src/modules/food/providers/product-provider.interface';
 
 function uniqueBarcodeViolation(): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -19,7 +19,7 @@ function uniqueBarcodeViolation(): Prisma.PrismaClientKnownRequestError {
 
 describe('PackagedProductService', () => {
   const barcode = '3017620422003';
-  const providerResult: ProductLookupResult = {
+  const providerResult: CataloguableProductLookup = {
     name: 'Nutella',
     caloriesPer100g: 539,
     proteinPer100g: 6.3,
@@ -52,6 +52,22 @@ describe('PackagedProductService', () => {
   }
 
   describe('upsertFromProvider', () => {
+    it.each([0, -1, Number.NaN])(
+      'refuses to persist unusable provider calories (%s)',
+      async (caloriesPer100g) => {
+        const { service, prisma } = buildService();
+
+        await expect(
+          service.upsertFromProvider(
+            barcode,
+            { ...providerResult, caloriesPer100g },
+            ProductSource.OPEN_FOOD_FACTS,
+          ),
+        ).rejects.toThrow('does not have usable calories');
+        expect(prisma.packagedProduct.create).not.toHaveBeenCalled();
+      },
+    );
+
     it('creates a new row tagged EXTERNAL with the given source', async () => {
       const { service, prisma } = buildService();
       const created = { id: 'row-1', barcode };

@@ -13,11 +13,11 @@ import {
 import type { PackagedProduct } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizeBarcode } from './barcode-normalizer';
-import type { ProductLookupResult } from './providers/product-provider.interface';
+import type { CataloguableProductLookup } from './providers/product-provider.interface';
 import { CreatePackagedProductDto } from './dto/create-packaged-product.dto';
 import { legacyUnitForBaseUnit, normalizeMeasurement } from './unit-normalizer';
 
-function isUniqueBarcodeViolation(err: unknown): boolean {
+export function isUniqueBarcodeViolation(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError &&
     err.code === 'P2002' &&
@@ -52,46 +52,16 @@ export class PackagedProductService {
   // prevented upstream).
   async upsertFromProvider(
     barcode: string,
-    data: ProductLookupResult,
+    data: CataloguableProductLookup,
     source: ProductSource,
   ): Promise<PackagedProduct> {
-    const serving = normalizeMeasurement(
-      data.servingSize,
-      legacyUnitForBaseUnit(data.servingBaseUnit),
-    );
-    const packageMeasurement = normalizeMeasurement(
-      data.packageSize,
-      legacyUnitForBaseUnit(data.packageBaseUnit),
-    );
     try {
-      const created = await this.prisma.packagedProduct.create({
-        data: {
-          barcode,
-          name: data.name,
-          nameAr: data.nameAr,
-          brand: data.brand,
-          category: data.category,
-          servingSize: serving?.value ?? null,
-          servingUnit: serving?.legacyUnit ?? null,
-          servingBaseUnit: serving?.baseUnit ?? null,
-          packageSize: packageMeasurement?.value ?? null,
-          packageUnit: packageMeasurement?.legacyUnit ?? null,
-          packageBaseUnit: packageMeasurement?.baseUnit ?? null,
-          containerKey: data.containerKey ?? ContainerKey.PACKAGE,
-          caloriesPer100g: data.caloriesPer100g,
-          proteinPer100g: data.proteinPer100g,
-          carbsPer100g: data.carbsPer100g,
-          fatPer100g: data.fatPer100g,
-          fiberPer100g: data.fiberPer100g,
-          sugarPer100g: data.sugarPer100g,
-          sodiumPer100g: data.sodiumPer100g,
-          imageUrl: data.imageUrl,
-          country: data.country,
-          source,
-          sourceId: data.sourceId ?? barcode,
-          verificationStatus: VerificationStatus.EXTERNAL,
-        },
-      });
+      const created = await this.createFromProvider(
+        barcode,
+        data,
+        source,
+        this.prisma,
+      );
       this.logger.log(`product cached: ${barcode} (source=${source})`);
       return created;
     } catch (err) {
@@ -105,6 +75,53 @@ export class PackagedProductService {
       }
       throw err;
     }
+  }
+
+  async createFromProvider(
+    barcode: string,
+    data: CataloguableProductLookup,
+    source: ProductSource,
+    db: Pick<Prisma.TransactionClient, 'packagedProduct'>,
+  ): Promise<PackagedProduct> {
+    if (!Number.isFinite(data.caloriesPer100g) || data.caloriesPer100g <= 0) {
+      throw new Error('Provider product does not have usable calories.');
+    }
+    const serving = normalizeMeasurement(
+      data.servingSize,
+      legacyUnitForBaseUnit(data.servingBaseUnit),
+    );
+    const packageMeasurement = normalizeMeasurement(
+      data.packageSize,
+      legacyUnitForBaseUnit(data.packageBaseUnit),
+    );
+    return db.packagedProduct.create({
+      data: {
+        barcode,
+        name: data.name,
+        nameAr: data.nameAr,
+        brand: data.brand,
+        category: data.category,
+        servingSize: serving?.value ?? null,
+        servingUnit: serving?.legacyUnit ?? null,
+        servingBaseUnit: serving?.baseUnit ?? null,
+        packageSize: packageMeasurement?.value ?? null,
+        packageUnit: packageMeasurement?.legacyUnit ?? null,
+        packageBaseUnit: packageMeasurement?.baseUnit ?? null,
+        containerKey: data.containerKey ?? ContainerKey.PACKAGE,
+        caloriesPer100g: data.caloriesPer100g,
+        proteinPer100g: data.proteinPer100g,
+        carbsPer100g: data.carbsPer100g,
+        fatPer100g: data.fatPer100g,
+        fiberPer100g: data.fiberPer100g,
+        sugarPer100g: data.sugarPer100g,
+        sodiumPer100g: data.sodiumPer100g,
+        imageUrl: data.imageUrl,
+        country: data.country,
+        source,
+        sourceId: data.sourceId ?? barcode,
+        verificationStatus: VerificationStatus.EXTERNAL,
+      },
+    });
   }
 
   async createUserSubmitted(

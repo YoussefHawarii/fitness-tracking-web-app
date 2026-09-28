@@ -60,6 +60,21 @@ export interface OpenFoodFactsProduct extends NutrientsPer100g {
   country?: string | null;
 }
 
+export interface OpenFoodFactsIdentification {
+  barcode: string;
+  name: string;
+  brand: string | null;
+  imageUrl: string | null;
+}
+
+export type OpenFoodFactsLookupResult =
+  | ({ outcome: 'FOUND_WITH_NUTRITION' } & OpenFoodFactsProduct)
+  | {
+      outcome: 'FOUND_WITHOUT_NUTRITION';
+      identification: OpenFoodFactsIdentification;
+    }
+  | { outcome: 'NOT_FOUND' };
+
 // OFF's `categories`/`countries` are comma-separated tag lists (broadest or
 // most-recently-added first, depending on the field) — take the first
 // segment as a short, displayable value rather than dumping the whole list.
@@ -73,7 +88,7 @@ function firstSegment(text: string | undefined): string | null {
 export class OpenFoodFactsClient {
   private readonly baseUrl = 'https://world.openfoodfacts.org/api/v2/product';
 
-  async lookupByBarcode(barcode: string): Promise<OpenFoodFactsProduct | null> {
+  async lookupByBarcode(barcode: string): Promise<OpenFoodFactsLookupResult> {
     const abortController = new AbortController();
     const timeout = setTimeout(
       () => abortController.abort(),
@@ -108,7 +123,7 @@ export class OpenFoodFactsClient {
     // (5xx, etc.) as an outage.
     if (response.status === 404) {
       clearTimeout(timeout);
-      return null;
+      return { outcome: 'NOT_FOUND' };
     }
     if (!response.ok) {
       clearTimeout(timeout);
@@ -130,17 +145,24 @@ export class OpenFoodFactsClient {
     // Open Food Facts returns HTTP 200 even with no data for the barcode —
     // the body's own `status` field is the real signal (docs/business-logic.md §5).
     if (body.status !== 1 || !body.product) {
-      return null;
+      return { outcome: 'NOT_FOUND' };
     }
 
     const nutriments = body.product.nutriments ?? {};
     const caloriesPer100g = nutriments['energy-kcal_100g'];
-    // Open Food Facts is crowd-sourced — a product can exist with no
-    // nutrition facts submitted at all. Silently showing 0 kcal would be
-    // worse than not offering it; treat it the same as "not found" so the
-    // caller falls back to the existing not-found/manual-search flow.
-    if (caloriesPer100g === undefined) {
-      return null;
+    const name = body.product.product_name ?? 'Unknown product';
+    const brand = body.product.brands?.trim() || null;
+    const imageUrl =
+      body.product.image_front_url ?? body.product.image_url ?? null;
+    if (
+      typeof caloriesPer100g !== 'number' ||
+      !Number.isFinite(caloriesPer100g) ||
+      caloriesPer100g <= 0
+    ) {
+      return {
+        outcome: 'FOUND_WITHOUT_NUTRITION',
+        identification: { barcode, name, brand, imageUrl },
+      };
     }
     const serving = normalizeMeasurement(
       body.product.serving_quantity,
@@ -151,14 +173,15 @@ export class OpenFoodFactsClient {
       body.product.product_quantity_unit,
     );
     return {
+      outcome: 'FOUND_WITH_NUTRITION',
       barcode,
-      name: body.product.product_name ?? 'Unknown product',
+      name,
       caloriesPer100g,
       proteinPer100g: nutriments.proteins_100g ?? null,
       carbsPer100g: nutriments.carbohydrates_100g ?? null,
       fatPer100g: nutriments.fat_100g ?? null,
       nameAr: body.product.product_name_ar ?? null,
-      brand: body.product.brands?.trim() || null,
+      brand,
       category: firstSegment(body.product.categories),
       servingSize: serving?.value ?? null,
       servingUnit: serving?.legacyUnit ?? null,
@@ -170,7 +193,7 @@ export class OpenFoodFactsClient {
       fiberPer100g: nutriments.fiber_100g ?? null,
       sugarPer100g: nutriments.sugars_100g ?? null,
       sodiumPer100g: nutriments.sodium_100g ?? null,
-      imageUrl: body.product.image_front_url ?? body.product.image_url ?? null,
+      imageUrl,
       country: firstSegment(body.product.countries),
     };
   }

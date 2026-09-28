@@ -4,7 +4,7 @@ import type { BaseUnit, ContainerKey, ProductSource } from '@prisma/client';
 // mapped into this app's own field names, so the resolver never needs to
 // know which provider a result came from beyond the `source` tag it attaches
 // itself (see OpenFoodFactsProvider.source).
-export interface ProductLookupResult {
+export interface CataloguableProductLookup {
   name: string;
   nameAr?: string | null;
   brand?: string | null;
@@ -34,13 +34,25 @@ export interface ProductLookupResult {
   sourceId?: string | null;
 }
 
+export interface IdentifiedProductLookup {
+  name: string;
+  brand: string | null;
+  imageUrl: string | null;
+}
+
+export type ProductLookupResult =
+  | { outcome: 'FOUND_WITH_NUTRITION'; product: CataloguableProductLookup }
+  | {
+      outcome: 'FOUND_WITHOUT_NUTRITION';
+      identification: IdentifiedProductLookup;
+    }
+  | { outcome: 'NOT_FOUND' };
+
 // A barcode-lookup data source, deliberately narrow (this is the only
 // operation ProductResolverService needs). Implement this for any future
 // Egyptian product source with legitimate API access — GS1 Egypt, a licensed
 // FMCG database, etc. — without touching the resolver or the controller.
 export interface ProductProvider {
   readonly source: ProductSource;
-  lookupByBarcode(
-    canonicalBarcode: string,
-  ): Promise<ProductLookupResult | null>;
+  lookupByBarcode(canonicalBarcode: string): Promise<ProductLookupResult>;
 }

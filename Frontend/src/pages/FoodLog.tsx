@@ -80,6 +80,7 @@ type ScanStatus =
   | 'idle'
   | 'looking-up'
   | 'found'
+  | 'identified-no-nutrition'
   | 'not-loggable'
   | 'not-found'
   | 'invalid'
@@ -399,6 +400,8 @@ export function BarcodeNotFoundActions({
 }
 
 const NOT_LOGGABLE_EXPLANATIONS: Record<NotLoggableReason, string> = {
+  NUTRITION_MISSING:
+    "This barcode was identified, but no usable nutrition data is available, so it can't be logged safely.",
   DIMENSION_BASIS_CONFLICT:
     "This product's portion unit conflicts with its nutrition basis, so it can't be logged safely.",
   PORTION_DIMENSION_UNKNOWN:
@@ -780,8 +783,16 @@ export function FoodLog() {
       if (product.resolution?.outcome === 'NOT_LOGGABLE') {
         replacePendingItems([]);
         setNotLoggableResolution(product.resolution);
-        setScanStatus('not-loggable');
+        setScanStatus(
+          product.resolution.subjectKind === 'IDENTIFIED_NOT_CATALOGUED'
+            ? 'identified-no-nutrition'
+            : 'not-loggable',
+        );
         setStatus(null);
+        return;
+      }
+      if (!('id' in product)) {
+        setScanStatus('unavailable');
         return;
       }
       replacePendingItems([toPackagedPendingItem(product)]);
@@ -999,6 +1010,7 @@ export function FoodLog() {
                 )}
               {(scanStatus === 'not-found' ||
                 scanStatus === 'not-loggable' ||
+                scanStatus === 'identified-no-nutrition' ||
                 scanStatus === 'invalid' ||
                 scanStatus === 'unavailable' ||
                 scanStatus === 'scanner-failed') && (
@@ -1021,7 +1033,8 @@ export function FoodLog() {
               pendingItem?.sourceType === 'PACKAGED_PRODUCT' && (
                 <PackagedProductPreview product={pendingItem} />
               )}
-            {scanStatus === 'not-loggable' &&
+            {(scanStatus === 'not-loggable' ||
+              scanStatus === 'identified-no-nutrition') &&
               notLoggableResolution &&
               !showAddProduct && (
                 <NotLoggableProductPanel
@@ -1055,7 +1068,9 @@ export function FoodLog() {
                 onRescan={rescan}
               />
             )}
-            {(scanStatus === 'not-found' || scanStatus === 'not-loggable') &&
+            {(scanStatus === 'not-found' ||
+              scanStatus === 'not-loggable' ||
+              scanStatus === 'identified-no-nutrition') &&
               showAddProduct && (
                 <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
                   <AddProductForm

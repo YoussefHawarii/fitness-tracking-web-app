@@ -39,6 +39,10 @@ enum ProductSource {
   ADMIN
 }
 
+enum IdentifiedBarcodeReason {
+  NUTRITION_MISSING
+}
+
 // Data-quality state for a PackagedProduct, independent of ProductSource — an
 // Open Food Facts import is EXTERNAL (structured but not hand-checked), a
 // fresh user submission is UNVERIFIED, and VERIFIED is reserved for
@@ -367,10 +371,8 @@ model PackagedProduct {
   // Per 100 Base units: 100 g for MASS or 100 ml for VOLUME (ADR 0006).
   // The existing column names remain unchanged, and Open Food Facts' `_100g`
   // fields are interpreted using its documented provider-specific rule.
-  // caloriesPer100g is required: a product
-  // without usable calorie data is treated as "not found" at resolution time
-  // (see ProductResolverService), the same data-quality bar Open Food
-  // Facts/USDA lookups already enforce elsewhere in this module.
+  // caloriesPer100g is required: a product without usable calorie data is
+  // retained only as an IdentifiedBarcode and cannot reach nutrition math.
   caloriesPer100g     Decimal
   proteinPer100g      Decimal?
   carbsPer100g        Decimal?
@@ -401,6 +403,25 @@ model PackagedProduct {
   @@index([brand])
   @@index([sourceId])
   @@map("packaged_products")
+}
+
+// Provider-confirmed barcode identity that cannot enter PackagedProduct
+// because usable calorie data is absent. This model intentionally has no
+// nutrition fields and no relation from FoodLogEntry.
+model IdentifiedBarcode {
+  id                  String                  @id @default(uuid())
+  barcode             String                  @unique
+  displayName         String
+  brand               String?
+  imageUrl            String?
+  reason              IdentifiedBarcodeReason
+  source              ProductSource
+  lastProviderCheckAt DateTime
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@index([source, lastProviderCheckAt])
+  @@map("identified_barcodes")
 }
 
 model ExerciseLogEntry {

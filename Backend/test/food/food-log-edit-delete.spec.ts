@@ -56,9 +56,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     const openFoodFacts = {
       lookupByBarcode: jest.fn().mockResolvedValue(
         overrides.openFoodFactsProduct === null
-          ? null
+          ? { outcome: 'NOT_FOUND' }
           : overrides.openFoodFactsProduct
             ? {
+                outcome: 'FOUND_WITH_NUTRITION',
                 name: 'Legacy barcode product',
                 caloriesPer100g: 250,
                 proteinPer100g: 5,

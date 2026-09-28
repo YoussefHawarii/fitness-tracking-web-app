@@ -39,7 +39,7 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
     mockFetch({ ok: true, status: 200, body });
   }
 
-  it('returns null on a genuine HTTP 404 (well-formed barcode, no product)', async () => {
+  it('returns not found on a genuine HTTP 404', async () => {
     mockFetch({
       ok: false,
       status: 404,
@@ -47,14 +47,18 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
     });
     const client = new OpenFoodFactsClient();
 
-    await expect(client.lookupByBarcode('9999999999993')).resolves.toBeNull();
+    await expect(client.lookupByBarcode('9999999999993')).resolves.toEqual({
+      outcome: 'NOT_FOUND',
+    });
   });
 
-  it('returns null on HTTP 200 with body.status 0 (malformed barcode)', async () => {
+  it('returns not found on HTTP 200 with body.status 0', async () => {
     mockFetch({ ok: true, status: 200, body: { status: 0 } });
     const client = new OpenFoodFactsClient();
 
-    await expect(client.lookupByBarcode('0000000000000')).resolves.toBeNull();
+    await expect(client.lookupByBarcode('0000000000000')).resolves.toEqual({
+      outcome: 'NOT_FOUND',
+    });
   });
 
   it('returns the product on a real match', async () => {
@@ -77,6 +81,7 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
     const client = new OpenFoodFactsClient();
 
     await expect(client.lookupByBarcode('123456')).resolves.toEqual({
+      outcome: 'FOUND_WITH_NUTRITION',
       barcode: '123456',
       name: 'Cheerios',
       caloriesPer100g: 375,
@@ -264,17 +269,20 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
     );
   });
 
-  it('normalizes a recorded multipack to its total Base-unit volume', async () => {
+  it('does not catalogue a recorded zero-calorie product', async () => {
     mockRecordedFixture('7613035833289');
     const client = new OpenFoodFactsClient();
 
     const result = await client.lookupByBarcode('7613035833289');
 
-    expect(result).toMatchObject({
-      packageSize: 6000,
-      packageUnit: 'ml',
-      packageBaseUnit: BaseUnit.ML,
-      containerKey: ContainerKey.BOTTLE,
+    expect(result).toEqual({
+      outcome: 'FOUND_WITHOUT_NUTRITION',
+      identification: {
+        barcode: '7613035833289',
+        name: 'Eau minérale naturelle gazeuse',
+        brand: 'Perrier',
+        imageUrl: null,
+      },
     });
   });
 
@@ -309,19 +317,54 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
     },
   );
 
-  it('returns null when the product exists but has no calorie data', async () => {
+  it('returns identity data when the product exists without usable calories', async () => {
     mockFetch({
       ok: true,
       status: 200,
       body: {
         status: 1,
-        product: { product_name: 'Some Regional Snack', nutriments: {} },
+        product: {
+          product_name: 'Some Regional Snack',
+          brands: 'Regional Foods',
+          image_front_url: 'https://images.example/regional-snack.jpg',
+          nutriments: {},
+        },
       },
     });
     const client = new OpenFoodFactsClient();
 
-    await expect(client.lookupByBarcode('123456')).resolves.toBeNull();
+    await expect(client.lookupByBarcode('123456')).resolves.toEqual({
+      outcome: 'FOUND_WITHOUT_NUTRITION',
+      identification: {
+        barcode: '123456',
+        name: 'Some Regional Snack',
+        brand: 'Regional Foods',
+        imageUrl: 'https://images.example/regional-snack.jpg',
+      },
+    });
   });
+
+  it.each([0, -1, Number.NaN])(
+    'never treats %s calories as usable nutrition',
+    async (calories) => {
+      mockFetch({
+        ok: true,
+        status: 200,
+        body: {
+          status: 1,
+          product: {
+            product_name: 'Unusable calories',
+            nutriments: { 'energy-kcal_100g': calories },
+          },
+        },
+      });
+      const client = new OpenFoodFactsClient();
+
+      await expect(client.lookupByBarcode('123456')).resolves.toMatchObject({
+        outcome: 'FOUND_WITHOUT_NUTRITION',
+      });
+    },
+  );
 
   it('throws ServiceUnavailableException on a genuine outage (5xx)', async () => {
     mockFetch({ ok: false, status: 503 });
@@ -334,6 +377,19 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
 
   it('maps a network failure to ServiceUnavailableException', async () => {
     global.fetch = jest.fn().mockRejectedValue(new TypeError('fetch failed'));
+    const client = new OpenFoodFactsClient();
+
+    await expect(client.lookupByBarcode('123456')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+  });
+
+  it('maps an unparseable successful response to ServiceUnavailableException', async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('invalid JSON')),
+    });
     const client = new OpenFoodFactsClient();
 
     await expect(client.lookupByBarcode('123456')).rejects.toBeInstanceOf(

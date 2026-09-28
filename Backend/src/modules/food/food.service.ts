@@ -18,7 +18,10 @@ import { CreateFoodLogDto } from './dto/create-food-log.dto';
 import { UpdateFoodLogDto } from './dto/update-food-log.dto';
 import { ProductResolverService } from './product-resolver.service';
 import { PackagedProductService } from './packaged-product.service';
-import { serializePackagedProduct } from './product-mapper';
+import {
+  serializeIdentifiedBarcode,
+  serializePackagedProduct,
+} from './product-mapper';
 import { resolvePackagedProductPortion } from './portion-resolution';
 import {
   FOOD_LOG_REJECTION_MESSAGES,
@@ -163,9 +166,10 @@ export class FoodService {
   private async getOpenFoodFactsProduct(barcode: string) {
     const cached = this.barcodeCache.get(barcode);
     if (cached) return cached;
-    const product = await this.openFoodFacts.lookupByBarcode(barcode);
-    if (product) this.barcodeCache.set(barcode, product);
-    return product;
+    const result = await this.openFoodFacts.lookupByBarcode(barcode);
+    if (result.outcome !== 'FOUND_WITH_NUTRITION') return null;
+    this.barcodeCache.set(barcode, result);
+    return result;
   }
 
   async lookupBarcode(barcode: string) {
@@ -183,6 +187,9 @@ export class FoodService {
       throw new ServiceUnavailableException(
         'Barcode lookup is temporarily unavailable.',
       );
+    }
+    if (result.status === 'identified') {
+      return serializeIdentifiedBarcode(result.identification);
     }
     return serializePackagedProduct(result.product, result.resolution);
   }

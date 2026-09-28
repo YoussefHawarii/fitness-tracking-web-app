@@ -139,6 +139,35 @@ test('Not scalable panel renders identity and safe fallbacks without logging con
   assert.doesNotMatch(html, />Grams</);
 });
 
+test('identified-without-nutrition panel is distinct and offers both fallbacks', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.NotLoggableProductPanel, {
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Known Regional Snack',
+          brand: 'Regional Foods',
+          imageUrl: 'https://images.example/known-regional-snack.jpg',
+        },
+        subjectKind: 'IDENTIFIED_NOT_CATALOGUED',
+        primaryReason: 'NUTRITION_MISSING',
+      },
+      onAdd: () => undefined,
+      onSearch: () => undefined,
+      onRescan: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Known Regional Snack/);
+  assert.match(html, /Regional Foods/);
+  assert.match(html, /https:\/\/images\.example\/known-regional-snack\.jpg/);
+  assert.match(html, /identified, but no usable nutrition data is available/);
+  assert.match(html, /Add this product/);
+  assert.match(html, /Search manually instead/);
+  assert.match(html, /Scan again/);
+  assert.doesNotMatch(html, /Save entry/);
+});
+
 function loggableResolution(basis) {
   const volume = basis === 'PER_100_ML';
   return {

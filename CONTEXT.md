@@ -57,6 +57,10 @@ A Set logged with no weight value (weight left blank), as opposed to a Set with 
 A barcode-identified branded/retail item (e.g. a specific size of Chipsy or Pepsi), distinct from a Canonical food (a generic, unbranded food matched by name, e.g. "rice") because two different package sizes of the same product are different Packaged products even though a Canonical food is deduplicated by name.
 _Avoid_: Product, Food item (ambiguous with the pre-existing LocalFoodItem/CanonicalFood concepts already in this glossary)
 
+**Identified barcode**:
+A provider-confirmed barcode identity that cannot enter the Packaged product catalog because required catalog data is absent — in v1, usable calories. It may retain a display name, brand, image, provider, reason, and provider-check time, but has no nutrition fields and cannot be referenced by a Food log entry. It is distinct from not found (identity is known) and from a Not scalable Packaged product (no Packaged product exists). The persisted model is `IdentifiedBarcode`; its API subject kind is `IDENTIFIED_NOT_CATALOGUED`.
+_Avoid_: Unloggable product (too broad), incomplete Packaged product (it is not in that catalog)
+
 **Product source**:
 Where a Packaged product's data originated — OPEN_FOOD_FACTS, USER_SUBMITTED, or ADMIN. Never changes after creation.
 _Avoid_: Provider (reserved for the resolution-order concept, not the stored provenance tag)

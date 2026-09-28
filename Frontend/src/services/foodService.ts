@@ -19,6 +19,7 @@ export type ContainerKey = 'PACKAGE' | 'CAN' | 'BOTTLE' | 'JAR' | 'BOX' | 'BAG';
 export type PortionDimension = 'MASS' | 'VOLUME' | 'UNKNOWN';
 export type NutritionBasis = 'PER_100_G' | 'PER_100_ML';
 export type NotLoggableReason =
+  | 'NUTRITION_MISSING'
   | 'DIMENSION_BASIS_CONFLICT'
   | 'PORTION_DIMENSION_UNKNOWN'
   | 'NUTRITION_BASIS_UNKNOWN';
@@ -51,7 +52,7 @@ export type BarcodeResolution =
         brand: string | null;
         imageUrl: string | null;
       };
-      subjectKind: 'PACKAGED_PRODUCT';
+      subjectKind: 'PACKAGED_PRODUCT' | 'IDENTIFIED_NOT_CATALOGUED';
       primaryReason: NotLoggableReason;
     };
 
@@ -94,6 +95,19 @@ export interface PackagedProduct {
   verificationStatus: 'UNVERIFIED' | 'EXTERNAL' | 'VERIFIED';
   resolution?: BarcodeResolution;
 }
+
+export interface IdentifiedBarcodeLookup {
+  barcode: string;
+  name: string;
+  brand: string | null;
+  imageUrl: string | null;
+  resolution: Extract<BarcodeResolution, { outcome: 'NOT_LOGGABLE' }> & {
+    subjectKind: 'IDENTIFIED_NOT_CATALOGUED';
+    primaryReason: 'NUTRITION_MISSING';
+  };
+}
+
+export type BarcodeLookupResult = PackagedProduct | IdentifiedBarcodeLookup;
 
 export interface LocalFoodItem extends NutrientsPer100g {
   id: string;
@@ -144,7 +158,7 @@ export class InvalidBarcodeError extends Error {
 
 export async function lookupBarcode(
   barcode: string,
-): Promise<PackagedProduct | null> {
+): Promise<BarcodeLookupResult | null> {
   try {
     const { data } = await apiClient.get(
       `/food/barcode/${encodeURIComponent(barcode)}`,

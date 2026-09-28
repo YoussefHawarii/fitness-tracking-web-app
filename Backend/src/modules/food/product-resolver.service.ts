@@ -1,9 +1,29 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import type { PackagedProduct } from '@prisma/client';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import type {
+  IdentifiedBarcode,
+  PackagedProduct,
+  ProductSource,
+} from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
 import { normalizeBarcode } from './barcode-normalizer';
-import { PackagedProductService } from './packaged-product.service';
+import { IdentifiedBarcodeService } from './identified-barcode.service';
+import {
+  isUniqueBarcodeViolation,
+  PackagedProductService,
+} from './packaged-product.service';
+import {
+  classifyProviderCheck,
+  isProviderRecheckDue,
+  TransientProviderBackoff,
+} from './provider-retry-policy';
 import { OpenFoodFactsProvider } from './providers/open-food-facts.provider';
 import type {
+  CataloguableProductLookup,
   ProductLookupResult,
   ProductProvider,
 } from './providers/product-provider.interface';
@@ -19,25 +39,20 @@ export type ResolveBarcodeResult =
       product: PackagedProduct;
       resolution: PortionResolution;
     }
+  | { status: 'identified'; identification: IdentifiedBarcode }
   | { status: 'not_found' }
-  // A configured provider errored (timeout/outage) and no other provider (nor
-  // the local DB) resolved the barcode — distinct from a clean "not found" so
-  // the caller doesn't tell the user a product genuinely doesn't exist when
-  // the truth is just "couldn't check right now".
   | { status: 'unavailable' };
 
-// Orchestrates barcode -> product resolution: local DB first, then each
-// configured provider in order, persisting the first hit. Adding a future
-// Egyptian provider (GS1 Egypt, a licensed FMCG database, ...) means adding
-// it to `providers` below — this class, the controller, and the DTOs are
-// otherwise untouched.
 @Injectable()
 export class ProductResolverService {
   private readonly logger = new Logger(ProductResolverService.name);
   private readonly providers: ProductProvider[];
 
   constructor(
+    private readonly prisma: PrismaService,
     private readonly packagedProducts: PackagedProductService,
+    private readonly identifiedBarcodes: IdentifiedBarcodeService,
+    private readonly transientBackoff: TransientProviderBackoff,
     openFoodFacts: OpenFoodFactsProvider,
   ) {
     this.providers = [openFoodFacts];
@@ -50,6 +65,12 @@ export class ProductResolverService {
     const { resolution, diagnostics } = resolvePackagedProductPortion(product);
     this.logDiagnostics(barcode, diagnostics);
     return { status: 'found', product, resolution };
+  }
+
+  private identified(
+    identification: IdentifiedBarcode,
+  ): Extract<ResolveBarcodeResult, { status: 'identified' }> {
+    return { status: 'identified', identification };
   }
 
   private logDiagnostics(
@@ -68,6 +89,125 @@ export class ProductResolverService {
     }
   }
 
+  private async checkProvider(
+    provider: ProductProvider,
+    barcode: string,
+  ): Promise<ReturnType<typeof classifyProviderCheck>> {
+    if (this.transientBackoff.isBlocked(provider.source, barcode)) {
+      return classifyProviderCheck({
+        error: new ServiceUnavailableException(
+          'Provider retry is temporarily backed off.',
+        ),
+      });
+    }
+    try {
+      const result = await provider.lookupByBarcode(barcode);
+      this.transientBackoff.clear(provider.source, barcode);
+      return classifyProviderCheck({ result });
+    } catch (error) {
+      const classified = classifyProviderCheck({ error });
+      if (classified.kind === 'TRANSIENT_FAILURE') {
+        this.transientBackoff.recordFailure(provider.source, barcode);
+      }
+      return classified;
+    }
+  }
+
+  private logProviderFailure(
+    source: ProductSource,
+    barcode: string,
+    check: Exclude<
+      ReturnType<typeof classifyProviderCheck>,
+      { kind: 'COMPLETED_CHECK' }
+    >,
+  ): void {
+    const message = `provider error (${source}) for ${barcode}: ${String(check.error)}`;
+    if (check.kind === 'TRANSIENT_FAILURE') {
+      this.logger.warn(message);
+      return;
+    }
+    this.logger.error(message);
+  }
+
+  private providerFor(source: ProductSource): ProductProvider | undefined {
+    return this.providers.find((provider) => provider.source === source);
+  }
+
+  private async supersedeIdentification(
+    barcode: string,
+    data: CataloguableProductLookup,
+    source: ProductSource,
+  ): Promise<PackagedProduct> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const product = await this.packagedProducts.createFromProvider(
+          barcode,
+          data,
+          source,
+          tx,
+        );
+        await tx.identifiedBarcode.deleteMany({ where: { barcode } });
+        return product;
+      });
+    } catch (error) {
+      if (!isUniqueBarcodeViolation(error)) throw error;
+      return this.prisma.$transaction(async (tx) => {
+        const product = await tx.packagedProduct.findUniqueOrThrow({
+          where: { barcode },
+        });
+        await tx.identifiedBarcode.deleteMany({ where: { barcode } });
+        return product;
+      });
+    }
+  }
+
+  private async recheckIdentification(
+    barcode: string,
+    existing: IdentifiedBarcode,
+    now: Date,
+  ): Promise<ResolveBarcodeResult> {
+    const provider = this.providerFor(existing.source);
+    if (!provider) return this.identified(existing);
+
+    const check = await this.checkProvider(provider, barcode);
+    if (check.kind !== 'COMPLETED_CHECK') {
+      this.logProviderFailure(provider.source, barcode, check);
+      return this.identified(existing);
+    }
+
+    return this.applyRecheckResult(barcode, provider, check.result, now);
+  }
+
+  private async applyRecheckResult(
+    barcode: string,
+    provider: ProductProvider,
+    result: ProductLookupResult,
+    now: Date,
+  ): Promise<ResolveBarcodeResult> {
+    if (result.outcome === 'FOUND_WITH_NUTRITION') {
+      const product = await this.supersedeIdentification(
+        barcode,
+        result.product,
+        provider.source,
+      );
+      return this.resolvedProduct(barcode, product);
+    }
+    if (result.outcome === 'FOUND_WITHOUT_NUTRITION') {
+      const refreshed = await this.identifiedBarcodes.upsertNutritionMissing(
+        barcode,
+        result.identification,
+        provider.source,
+        now,
+      );
+      return this.identified(refreshed);
+    }
+    const refreshed = await this.identifiedBarcodes.advanceProviderCheck(
+      barcode,
+      now,
+    );
+    return this.identified(refreshed);
+  }
+
   async resolveBarcode(rawBarcode: string): Promise<ResolveBarcodeResult> {
     const normalized = normalizeBarcode(rawBarcode);
     if (!normalized) {
@@ -82,33 +222,38 @@ export class ProductResolverService {
       this.logger.log(`barcode local hit: ${barcode}`);
       return this.resolvedProduct(barcode, local);
     }
-    this.logger.log(`barcode local miss: ${barcode}`);
+
+    const identification = await this.identifiedBarcodes.findByBarcode(barcode);
+    if (identification) {
+      const now = new Date();
+      if (!isProviderRecheckDue(identification.lastProviderCheckAt, now)) {
+        return this.identified(identification);
+      }
+      return this.recheckIdentification(barcode, identification, now);
+    }
 
     let providerErrored = false;
     for (const provider of this.providers) {
-      let result: ProductLookupResult | null;
-      try {
-        result = await provider.lookupByBarcode(barcode);
-      } catch (err) {
-        // Isolate the failure — one slow/unavailable provider must not
-        // surface as a 500, and must not block trying the next provider.
+      const check = await this.checkProvider(provider, barcode);
+      if (check.kind !== 'COMPLETED_CHECK') {
         providerErrored = true;
-        this.logger.warn(
-          `provider error (${provider.source}) for ${barcode}: ${(err as Error).message}`,
+        this.logProviderFailure(provider.source, barcode, check);
+        continue;
+      }
+      const result = check.result;
+      if (result.outcome === 'NOT_FOUND') continue;
+      if (result.outcome === 'FOUND_WITHOUT_NUTRITION') {
+        const saved = await this.identifiedBarcodes.upsertNutritionMissing(
+          barcode,
+          result.identification,
+          provider.source,
+          new Date(),
         );
-        continue;
+        return this.identified(saved);
       }
-      if (!result) {
-        this.logger.log(`${provider.source} miss: ${barcode}`);
-        continue;
-      }
-      this.logger.log(`${provider.source} hit: ${barcode}`);
-      // Catalog failures are internal persistence errors, not provider
-      // outages. Keep this write outside the provider-isolation catch so a
-      // database failure is not mislabeled as a temporary OFF problem.
-      const saved = await this.packagedProducts.upsertFromProvider(
+      const saved = await this.supersedeIdentification(
         barcode,
-        result,
+        result.product,
         provider.source,
       );
       return this.resolvedProduct(barcode, saved);

@@ -10,6 +10,8 @@ import { OpenFoodFactsProvider } from './providers/open-food-facts.provider';
 import { ProductResolverService } from './product-resolver.service';
 import { PackagedProductService } from './packaged-product.service';
 import { NutritionLabelExtractionService } from './nutrition-label-extraction.service';
+import { IdentifiedBarcodeService } from './identified-barcode.service';
+import { TransientProviderBackoff } from './provider-retry-policy';
 
 @Module({
   imports: [AuthModule],
@@ -23,6 +25,8 @@ import { NutritionLabelExtractionService } from './nutrition-label-extraction.se
     OpenFoodFactsProvider,
     ProductResolverService,
     PackagedProductService,
+    IdentifiedBarcodeService,
+    TransientProviderBackoff,
     NutritionLabelExtractionService,
   ],
 })

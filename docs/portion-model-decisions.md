@@ -83,11 +83,13 @@ dimension/basis conflict, nutrition missing.
 scaled safely; its non-null calorie invariant stays intact.
 
 3.2 A barcode that is identified but cannot become a loggable product keeps a
-lightweight record — identification, diagnostics, retry state, and enough to
-explain itself to the user. An identified product is not automatically a
-loggable one, and a nutrition-less one is structurally unable to reach the
-calculator. Missing nutrients are never represented as zero, and package or
-serving metadata never makes such a product loggable.
+lightweight `IdentifiedBarcode` record — identification, diagnostics, retry
+state, and enough to explain itself to the user. The name describes the known
+identity without presenting the row as a catalogued product. An identified
+product is not automatically a loggable one, and a nutrition-less one is
+structurally unable to reach the calculator. Missing nutrients are never
+represented as zero, and package or serving metadata never makes such a
+product loggable.
 
 3.3 Lazy re-hydration fills gaps only, never overwrites, and never touches
 `USER_SUBMITTED` or `VERIFIED` rows. Nutrition refresh is explicitly out of
@@ -486,4 +488,25 @@ fallback beneath the structured numeric fields (spec E1). Decided in ticket 03.
 provider calls during an outage need limiting (3.4) — whether one is needed,
 its mechanism and its duration. It must never reuse or advance the 30-day
 completed-check timestamp. Decided in ticket 10, and reused by ticket 11.
-*Pending.*
+**Decided (2026-09-28):** Apply a 60-second in-memory backoff per provider and
+canonical barcode after a transient failure.
+
+- *Evidence.* Open Food Facts publishes a limit of 15 product-read requests
+  per minute per IP and may return HTTP 503 when global limits are exceeded
+  (https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/).
+  Calls from this backend share its outbound IP. Its 50-request rolling
+  five-minute user/IP throttle does not cap the aggregate from different
+  authenticated users below OFF's limit, and each failed provider call can
+  occupy the existing client timeout for up to 8 seconds. Because transient
+  failures deliberately do not advance the 30-day timestamp, repeated scans
+  of one stale barcode would otherwise each call the unavailable provider.
+- *Mechanism.* Record only an ephemeral failure deadline keyed by provider and
+  canonical barcode. Until 60 seconds have elapsed, return the cached
+  identification result unchanged; where there is no cached subject, retain
+  the existing unavailable outcome. A completed response clears the backoff.
+  The state is deliberately per process: it needs no database table or
+  distributed cache, and a restart merely loses a short-lived optimization.
+- *Separation.* The backoff has its own clock and stores no completed-check
+  timestamp. It never writes or advances `lastProviderCheckAt`; after it
+  expires, the same 30-day eligibility decision still applies. Ticket 11 uses
+  the same mechanism for portion re-hydration.
