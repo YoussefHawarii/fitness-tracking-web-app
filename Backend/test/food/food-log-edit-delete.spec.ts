@@ -98,12 +98,58 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
   });
 
   it('updates mealCategory without requiring grams', async () => {
-    const { service, updateCalls } = buildService();
+    const { service, updateCalls, prisma } = buildService();
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'DINNER' });
 
-    expect(updateCalls[0].mealCategory).toBe('DINNER');
-    expect(updateCalls[0].grams).toBe(100); // unchanged, from existing entry
+    expect(updateCalls[0]).toEqual({ mealCategory: 'DINNER' });
+    expect(prisma.localFoodItem.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('accepts the explicit G update shape for a mass source', async () => {
+    const { service, updateCalls } = buildService();
+
+    await service.updateFoodLog(userId, 'log-1', {
+      amount: 80,
+      amountUnit: 'G',
+      portionKind: 'CUSTOM',
+      mealCategory: 'DINNER',
+    });
+
+    expect(updateCalls[0]).toMatchObject({
+      grams: 80,
+      amount: 80,
+      amountUnit: 'G',
+      portionKind: 'CUSTOM',
+      portionMultiplier: null,
+      caloriesComputed: 160,
+      mealCategory: 'DINNER',
+    });
+  });
+
+  it('rejects ML and structured package choices for mass sources', async () => {
+    const { service, prisma } = buildService();
+
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'MASS_SOURCE_REQUIRES_G' },
+    });
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'G',
+        portionKind: 'PACKAGE',
+        portionMultiplier: 1,
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'PACKAGE_PORTION_UNAVAILABLE' },
+    });
+    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
   });
 
   it('still edits a pre-feature OPEN_FOOD_FACTS log without a PackagedProduct relation', async () => {
@@ -123,6 +169,53 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledWith('3017620422003');
     expect(packagedProducts.findById).not.toHaveBeenCalled();
     expect(updateCalls[0].caloriesComputed).toBe(100);
+  });
+
+  it('rejects an ML amount for a legacy OPEN_FOOD_FACTS entry', async () => {
+    const { service, prisma, openFoodFacts } = buildService({
+      existing: {
+        sourceType: 'OPEN_FOOD_FACTS',
+        sourceRef: '3017620422003',
+        localFoodItemId: null,
+        packagedProductId: null,
+      },
+    });
+
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'MASS_SOURCE_REQUIRES_G' },
+    });
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a structured package choice for a legacy OPEN_FOOD_FACTS entry', async () => {
+    const { service, prisma, openFoodFacts } = buildService({
+      existing: {
+        sourceType: 'OPEN_FOOD_FACTS',
+        sourceRef: '3017620422003',
+        localFoodItemId: null,
+        packagedProductId: null,
+      },
+    });
+
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'G',
+        portionKind: 'PACKAGE',
+        portionMultiplier: 1,
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'PACKAGE_PORTION_UNAVAILABLE' },
+    });
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
   });
 
   it('throws NotFoundException when updating an entry not owned by the user', async () => {

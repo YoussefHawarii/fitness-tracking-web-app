@@ -124,6 +124,52 @@ test('createFoodLog sends the explicit amount representation unchanged', async (
   }
 });
 
+test('updateFoodLog sends the explicit amount and portion representation unchanged', async () => {
+  const originalPatch = apiClientModule.apiClient.patch;
+  let captured;
+  try {
+    apiClientModule.apiClient.patch = async (url, input) => {
+      captured = { url, input };
+      return { data: { id: 'log-1' } };
+    };
+    await foodServiceModule.updateFoodLog('log-1', {
+      amount: 500,
+      amountUnit: 'ML',
+      portionKind: 'SERVING',
+      portionMultiplier: 2,
+      mealCategory: 'DINNER',
+    });
+    assert.deepEqual(captured, {
+      url: '/food/logs/log-1',
+      input: {
+        amount: 500,
+        amountUnit: 'ML',
+        portionKind: 'SERVING',
+        portionMultiplier: 2,
+        mealCategory: 'DINNER',
+      },
+    });
+  } finally {
+    apiClientModule.apiClient.patch = originalPatch;
+  }
+});
+
+test('getPackagedProduct requests current resolution by product id', async () => {
+  const originalGet = apiClientModule.apiClient.get;
+  let requestedUrl;
+  try {
+    apiClientModule.apiClient.get = async (url) => {
+      requestedUrl = url;
+      return { data: { id: 'product/1', resolution: { outcome: 'LOGGABLE' } } };
+    };
+    const product = await foodServiceModule.getPackagedProduct('product/1');
+    assert.equal(requestedUrl, '/food/products/product%2F1');
+    assert.equal(product.id, 'product/1');
+  } finally {
+    apiClientModule.apiClient.get = originalGet;
+  }
+});
+
 test('getEditPrefill returns the exact edit-input string', () => {
   // Amount present wins over grams.
   assert.equal(

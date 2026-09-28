@@ -161,6 +161,13 @@ export async function lookupBarcode(
   }
 }
 
+export async function getPackagedProduct(id: string): Promise<PackagedProduct> {
+  const { data } = await apiClient.get(
+    `/food/products/${encodeURIComponent(id)}`,
+  );
+  return data;
+}
+
 export async function searchFood(term: string): Promise<FoodSearchResult> {
   const { data } = await apiClient.get('/food/search', {
     params: { term },
@@ -231,6 +238,7 @@ export interface FoodLogEntry {
   sourceType: FoodSourceType;
   sourceRef: string;
   localFoodItemId: string | null;
+  packagedProductId?: string | null;
   name: string;
   grams: string | null;
   // Explicit consumed amount, dual-written by the backend alongside grams
@@ -292,12 +300,16 @@ export async function listFoodLogsForDay(
 
 export async function updateFoodLog(
   id: string,
-  input: {
-    grams?: number;
-    amount?: number;
-    amountUnit?: BaseUnit;
-    mealCategory?: MealCategory;
-  },
+  input:
+    | { mealCategory: MealCategory }
+    | {
+        amount: number;
+        amountUnit: BaseUnit;
+        portionKind?: PortionKind;
+        portionMultiplier?: number;
+        mealCategory: MealCategory;
+      }
+    | { grams: number; mealCategory?: MealCategory },
 ): Promise<FoodLogEntry> {
   const { data } = await apiClient.patch(`/food/logs/${id}`, input);
   return data;

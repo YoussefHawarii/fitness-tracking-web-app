@@ -54,6 +54,11 @@ export class FoodController {
     return this.foodService.lookupBarcode(code);
   }
 
+  @Get('products/:id')
+  getProduct(@Param('id') id: string) {
+    return this.foodService.getPackagedProduct(id);
+  }
+
   // Unknown-barcode fallback (section 14 of the Egyptian-catalog spec): once
   // a scan misses everywhere, the user can submit the product themselves.
   // Requires auth like every other /food route — same trust model as

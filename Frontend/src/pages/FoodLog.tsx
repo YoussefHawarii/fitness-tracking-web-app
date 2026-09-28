@@ -6,6 +6,7 @@ import { VoiceLogger } from '../features/voice-logger/VoiceLogger';
 import { ManualFoodSearch } from '../features/manual-food-search/ManualFoodSearch';
 import { AddProductForm } from '../features/add-product/AddProductForm';
 import { PortionSelector } from '../features/portion-selector/PortionSelector';
+import { buildEditPortionOptions } from '../features/portion-selector/editPortionOptions';
 import {
   buildPortionCreatePayload,
   calculatePortionNutrition,
@@ -17,11 +18,13 @@ import {
   buildPortionOptions,
   type LoggableBarcodeResolution,
   type PortionOptionId,
+  type PortionOptionsResult,
 } from '../features/portion-selector/portionOptions';
 import {
   createFoodLog,
   deleteFoodLog,
   formatEntryAmount,
+  getPackagedProduct,
   getEditPrefill,
   listFoodLogsForDay,
   lookupBarcode,
@@ -78,10 +81,15 @@ type ScanStatus =
 
 interface FoodLogEntry {
   id: string;
+  sourceType: FoodSourceType;
+  sourceRef: string;
+  packagedProductId?: string | null;
   name: string;
   grams: string | null;
   amount?: string | null;
   amountUnit?: 'G' | 'ML' | null;
+  portionKind?: 'PACKAGE' | 'SERVING' | 'CUSTOM' | null;
+  portionMultiplier?: string | null;
   caloriesComputed: string;
   mealCategory: MealCategory;
   loggedAtUtc: string;
@@ -240,25 +248,21 @@ export function EditAmountField({
 }) {
   const isMillilitreEntry = entry.amountUnit === 'ML';
   return (
-    <>
-      <FieldLabel>
-        Amount ({isMillilitreEntry ? 'ml' : 'g'})
-        <Input
-          type="number"
-          min={isMillilitreEntry ? undefined : 1}
-          step={isMillilitreEntry ? 0.1 : undefined}
-          value={value}
-          disabled={isMillilitreEntry}
-          onChange={(event) => onChange(event.target.value)}
-        />
-      </FieldLabel>
-      {isMillilitreEntry && (
-        <p className="text-body text-text-muted">
-          Amount editing is not available for millilitre entries yet.
-        </p>
-      )}
-    </>
+    <FieldLabel>
+      Amount ({isMillilitreEntry ? 'ml' : 'g'})
+      <Input
+        type="number"
+        min={0.1}
+        step={0.1}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </FieldLabel>
   );
+}
+
+export function HistoryAmount({ entry }: { entry: FoodLogEntry }) {
+  return <>{formatEntryAmount(entry)}</>;
 }
 
 const SAVE_REJECTION_MESSAGES: Record<string, string> = {
@@ -269,8 +273,6 @@ const SAVE_REJECTION_MESSAGES: Record<string, string> = {
   SERVING_PORTION_UNAVAILABLE: 'This product has no usable serving size.',
   PORTION_AMOUNT_MISMATCH:
     'The amount does not match the selected package or serving.',
-  ML_AMOUNT_EDIT_UNAVAILABLE:
-    'Amount editing is not available for millilitre entries yet.',
   PORTION_DIMENSION_UNKNOWN:
     'This product does not have a usable portion unit.',
   NUTRITION_BASIS_UNKNOWN:
@@ -505,6 +507,14 @@ export function FoodLog() {
   const [editGrams, setEditGrams] = useState('');
   const [editMeal, setEditMeal] = useState<MealCategory>('BREAKFAST');
   const [editError, setEditError] = useState<string | null>(null);
+  const [editProduct, setEditProduct] = useState<PackagedProduct | null>(null);
+  const [editProductLoading, setEditProductLoading] = useState(false);
+  const [editPortionModel, setEditPortionModel] =
+    useState<PortionOptionsResult | null>(null);
+  const [editPortionOptionId, setEditPortionOptionId] =
+    useState<PortionOptionId | null>(null);
+  const [editAmountDirty, setEditAmountDirty] = useState(false);
+  const editProductRequestIdRef = useRef(0);
 
   const loggableResolution: LoggableBarcodeResolution | null =
     pendingItem?.sourceType === 'PACKAGED_PRODUCT' &&
@@ -530,6 +540,24 @@ export function FoodLog() {
       : null;
   const packagedPortionInvalid =
     loggableResolution !== null && portionCreatePayload === null;
+  const editResolution: LoggableBarcodeResolution | null =
+    editProduct?.resolution?.outcome === 'LOGGABLE'
+      ? editProduct.resolution
+      : null;
+  const editPortionOption = editPortionModel?.options.find(
+    ({ id }) => id === editPortionOptionId,
+  );
+  const editPortionPayload = editResolution
+    ? buildPortionCreatePayload(
+        editResolution,
+        editPortionOption?.choice ?? null,
+        editGrams,
+      )
+    : null;
+  const editNutritionPreview =
+    editProduct && editPortionPayload
+      ? calculatePortionNutrition(editProduct, editPortionPayload.amount)
+      : null;
 
   function replacePendingItems(items: PendingItem[]) {
     setPendingItems(items);
@@ -570,20 +598,49 @@ export function FoodLog() {
   }, [pendingItems.length]);
 
   function startEdit(entry: FoodLogEntry) {
+    const requestId = ++editProductRequestIdRef.current;
     setEditingId(entry.id);
     setEditGrams(getEditPrefill(entry));
     setEditMeal(entry.mealCategory);
     setEditError(null);
+    setEditProduct(null);
+    setEditProductLoading(entry.sourceType === 'PACKAGED_PRODUCT');
+    setEditPortionModel(null);
+    setEditPortionOptionId(null);
+    setEditAmountDirty(false);
+
+    if (entry.sourceType !== 'PACKAGED_PRODUCT') return;
+    getPackagedProduct(entry.packagedProductId ?? entry.sourceRef)
+      .then((product) => {
+        if (editProductRequestIdRef.current !== requestId) return;
+        setEditProductLoading(false);
+        setEditProduct(product);
+        if (product.resolution?.outcome !== 'LOGGABLE') return;
+        const model = buildEditPortionOptions(entry, product.resolution);
+        setEditPortionModel(model);
+        setEditPortionOptionId(model.defaultSelection?.optionId ?? null);
+      })
+      .catch(() => {
+        if (editProductRequestIdRef.current !== requestId) return;
+        setEditProductLoading(false);
+        setEditError('This product is no longer available for editing.');
+      });
   }
 
   function cancelEdit() {
+    editProductRequestIdRef.current += 1;
     setEditingId(null);
     setEditError(null);
+    setEditProduct(null);
+    setEditProductLoading(false);
+    setEditPortionModel(null);
+    setEditPortionOptionId(null);
   }
 
   async function saveEdit(id: string) {
     const entry = entries.find((item) => item.id === id);
-    if (entry?.amountUnit === 'ML') {
+    if (!entry) return;
+    if (!editAmountDirty) {
       try {
         await updateFoodLog(id, { mealCategory: editMeal });
         setEditingId(null);
@@ -594,13 +651,47 @@ export function FoodLog() {
       }
       return;
     }
-    const gramsValue = Number(editGrams);
-    if (!editGrams || !Number.isFinite(gramsValue) || gramsValue <= 0) {
-      setEditError('Enter a valid gram amount greater than 0.');
+
+    let amountPayload:
+      | {
+          amount: number;
+          amountUnit: BaseUnit;
+          portionKind: 'PACKAGE' | 'SERVING';
+          portionMultiplier: number;
+        }
+      | {
+          amount: number;
+          amountUnit: BaseUnit;
+          portionKind: 'CUSTOM';
+        };
+    if (editResolution) {
+      if (!editPortionPayload) {
+        setEditError(
+          'Choose a portion and enter a valid amount with at most one decimal place.',
+        );
+        return;
+      }
+      amountPayload = editPortionPayload;
+    } else {
+      if (!isValidPortionAmountInput(editGrams)) {
+        setEditError(
+          'Enter a valid amount greater than 0 with at most one decimal place.',
+        );
+        return;
+      }
+      amountPayload = {
+        amount: Number(editGrams),
+        amountUnit: entry.amountUnit ?? 'G',
+        portionKind: 'CUSTOM',
+      };
+    }
+
+    if (!Number.isFinite(amountPayload.amount) || amountPayload.amount <= 0) {
+      setEditError('Enter a valid amount greater than 0.');
       return;
     }
     try {
-      await updateFoodLog(id, { grams: gramsValue, mealCategory: editMeal });
+      await updateFoodLog(id, { ...amountPayload, mealCategory: editMeal });
       setEditingId(null);
       setEditError(null);
       refreshEntries();
@@ -1105,11 +1196,41 @@ export function FoodLog() {
                       <span className="truncate font-medium">
                         {item.name || 'Unnamed item'}
                       </span>
-                      <EditAmountField
-                        entry={item}
-                        value={editGrams}
-                        onChange={setEditGrams}
-                      />
+                      {editProductLoading ? (
+                        <p className="text-body text-text-muted">
+                          Loading current portion options…
+                        </p>
+                      ) : editPortionModel && editResolution ? (
+                        <>
+                          <PortionSelector
+                            options={editPortionModel.options}
+                            selectedOptionId={editPortionOptionId}
+                            customAmount={editGrams}
+                            baseUnit={baseUnitForResolution(editResolution)}
+                            onSelectionChange={(optionId) => {
+                              setEditPortionOptionId(optionId);
+                              setEditAmountDirty(true);
+                              setEditError(null);
+                            }}
+                            onCustomAmountChange={(value) => {
+                              setEditGrams(value);
+                              setEditAmountDirty(true);
+                            }}
+                          />
+                          <PortionNutritionPreview
+                            nutrition={editNutritionPreview}
+                          />
+                        </>
+                      ) : (
+                        <EditAmountField
+                          entry={item}
+                          value={editGrams}
+                          onChange={(value) => {
+                            setEditGrams(value);
+                            setEditAmountDirty(true);
+                          }}
+                        />
+                      )}
                       <FieldLabel>
                         Meal
                         <Select
@@ -1148,7 +1269,9 @@ export function FoodLog() {
                         {item.name || 'Unnamed item'}
                       </span>
                       <span className="flex shrink-0 items-center gap-3 text-readout">
-                        <span>{formatEntryAmount(item)}</span>
+                        <span>
+                          <HistoryAmount entry={item} />
+                        </span>
                         <span>
                           {Number(item.caloriesComputed).toFixed(0)} kcal
                         </span>

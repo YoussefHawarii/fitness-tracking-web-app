@@ -1,4 +1,3 @@
-import { Prisma } from '@prisma/client';
 import { FoodService } from '../../src/modules/food/food.service';
 
 // specs/009-barcode-portion-logging ticket 01 (expand step): every
@@ -207,19 +206,14 @@ describe('FoodService — food log dual-write (amount/amountUnit)', () => {
     expect(updated[0].caloriesComputed).toBe(500);
   });
 
-  it('update reads amount ?? grams: a row with amount null recalculates from grams', async () => {
+  it('a meal-only update on a row with amount null changes no stored quantity', async () => {
     const { service, updated } = buildService({
       existing: { grams: 100, amount: null, amountUnit: null },
     });
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'DINNER' });
 
-    expect(updated[0].grams).toBe(100);
-    expect(updated[0].amount).toBe(100);
-    expect(updated[0].amountUnit).toBe('G');
-    expect(updated[0].mealCategory).toBe('DINNER');
-    // 200 cal/100g * 100g = 200 — unchanged quantity, unchanged nutrition.
-    expect(updated[0].caloriesComputed).toBe(200);
+    expect(updated[0]).toEqual({ mealCategory: 'DINNER' });
   });
 
   it('a meal-only update on a dual-written row keeps the quantity', async () => {
@@ -229,48 +223,34 @@ describe('FoodService — food log dual-write (amount/amountUnit)', () => {
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'SNACKS' });
 
-    expect(updated[0].grams).toBe(150);
-    expect(updated[0].amount).toBe(150);
-    expect(updated[0].mealCategory).toBe('SNACKS');
+    expect(updated[0]).toEqual({ mealCategory: 'SNACKS' });
   });
 
-  it('a meal-only update prefers amount over grams and handles Prisma Decimal', async () => {
+  it('a meal-only update does not normalize mismatched Decimal quantities', async () => {
     const { service, updated } = buildService({
       existing: {
-        grams: new Prisma.Decimal('100'),
-        amount: new Prisma.Decimal('150.5'),
+        grams: 100,
+        amount: 150.5,
         amountUnit: 'G',
       },
     });
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'DINNER' });
 
-    expect(updated[0].grams).toBe(150.5);
-    expect(updated[0].amount).toBe(150.5);
-    expect(updated[0].amountUnit).toBe('G');
-    // 200 cal/100g * 150.5g = 301 — proves the recalculation read amount,
-    // not grams (which would give 200).
-    expect(updated[0].caloriesComputed).toBe(301);
+    expect(updated[0]).toEqual({ mealCategory: 'DINNER' });
   });
 
-  it('a meal-only update with null grams recalculates from Decimal amount without NaN', async () => {
+  it('a meal-only update with null grams preserves the stored Decimal amount', async () => {
     const { service, updated } = buildService({
       existing: {
         grams: null,
-        amount: new Prisma.Decimal('80'),
+        amount: 80,
         amountUnit: 'G',
       },
     });
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'DINNER' });
 
-    expect(updated[0].grams).toBe(80);
-    expect(updated[0].amount).toBe(80);
-    expect(updated[0].amountUnit).toBe('G');
-    // 200 cal/100g * 80g = 160 — must not be NaN (which reading grams
-    // alone would produce via Number(null)).
-    expect(Number.isNaN(updated[0].grams as number)).toBe(false);
-    expect(Number.isNaN(updated[0].caloriesComputed as number)).toBe(false);
-    expect(updated[0].caloriesComputed).toBe(160);
+    expect(updated[0]).toEqual({ mealCategory: 'DINNER' });
   });
 });

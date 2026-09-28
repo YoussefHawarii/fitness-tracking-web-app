@@ -1,27 +1,40 @@
 import { MealCategory } from '@prisma/client';
+import { IsEnum, IsIn, IsOptional, ValidateIf } from 'class-validator';
 import {
-  IsEnum,
-  IsIn,
-  IsOptional,
-  IsPositive,
-  ValidateIf,
-} from 'class-validator';
-import { IsConsumedAmount } from './food-log-input.validators';
+  HasValidFoodLogUpdateShape,
+  IsConsumedAmount,
+  IsPortionMultiplier,
+} from './food-log-input.validators';
+import { FOOD_LOG_REJECTION_REASONS } from '../food-log-rejection-reasons';
+import type {
+  FoodLogAmountUnit,
+  FoodLogPortionKind,
+} from './create-food-log.dto';
 
 export class UpdateFoodLogDto {
-  @IsOptional()
-  @IsPositive()
+  @HasValidFoodLogUpdateShape()
+  @IsConsumedAmount()
   grams?: number;
 
-  // Accepted so an independently deployed client receives the explicit ML
-  // edit guard instead of a generic non-whitelisted-field response.
   @ValidateIf((_object, value) => value !== undefined)
   @IsConsumedAmount()
   amount?: number;
 
-  @IsOptional()
-  @IsIn(['G', 'ML'])
-  amountUnit?: 'G' | 'ML';
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsIn(['G', 'ML'], {
+    message: FOOD_LOG_REJECTION_REASONS.INVALID_AMOUNT_UNIT,
+  })
+  amountUnit?: FoodLogAmountUnit;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsIn(['PACKAGE', 'SERVING', 'CUSTOM'], {
+    message: FOOD_LOG_REJECTION_REASONS.INVALID_PORTION_KIND,
+  })
+  portionKind?: FoodLogPortionKind;
+
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsPortionMultiplier()
+  portionMultiplier?: number;
 
   @IsOptional()
   @IsEnum(MealCategory)

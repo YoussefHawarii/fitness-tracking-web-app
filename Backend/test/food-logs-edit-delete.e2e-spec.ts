@@ -5,11 +5,14 @@ import { App } from 'supertest/types';
 import { AppModule } from '../src/app.module';
 import { MailService } from '../src/modules/mail/mail.service';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
+import { PrismaService } from '../src/prisma/prisma.service';
+import { ProductSource, VerificationStatus } from '@prisma/client';
 
 // Covers specs/007-date-picker-food-log-edit/contracts/food-logs-edit-delete.md:
 // PATCH/DELETE /food/logs/:id.
 describe('Food logs edit/delete (e2e)', () => {
   let app: INestApplication<App>;
+  let prisma: PrismaService;
   const sentOtpEmails: { to: string; code: string }[] = [];
 
   beforeAll(async () => {
@@ -29,6 +32,7 @@ describe('Food logs edit/delete (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(globalValidationPipe);
     await app.init();
+    prisma = app.get(PrismaService);
   });
 
   afterAll(async () => {
@@ -72,13 +76,14 @@ describe('Food logs edit/delete (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ name: 'Grilled chicken breast', caloriesPer100g: 165 })
       .expect(201);
+    const localItemBody = localItem.body as { id: string };
 
     const created = await request(app.getHttpServer())
       .post('/food/logs')
       .set('Authorization', `Bearer ${accessToken}`)
       .send({
         sourceType: 'LOCAL',
-        sourceRef: localItem.body.id,
+        sourceRef: localItemBody.id,
         grams: overrides.grams ?? 100,
         mealCategory: overrides.mealCategory ?? 'LUNCH',
         loggedAtUtc: '2026-01-15T12:00:00.000Z',
@@ -86,6 +91,39 @@ describe('Food logs edit/delete (e2e)', () => {
       .expect(201);
 
     return created.body as { id: string; caloriesComputed: string };
+  }
+
+  async function createVolumeEntry(accessToken: string, tag: string) {
+    const product = await prisma.packagedProduct.create({
+      data: {
+        barcode: `edit-volume-${tag}-${Date.now()}-${Math.random()}`,
+        name: 'Editable drink',
+        packageSize: 600,
+        packageUnit: 'ml',
+        packageBaseUnit: 'ML',
+        servingSize: 250,
+        servingUnit: 'ml',
+        servingBaseUnit: 'ML',
+        caloriesPer100g: 42,
+        source: ProductSource.OPEN_FOOD_FACTS,
+        verificationStatus: VerificationStatus.EXTERNAL,
+      },
+    });
+    const logged = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        amount: 250,
+        amountUnit: 'ML',
+        portionKind: 'SERVING',
+        portionMultiplier: 1,
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-01-15T12:00:00.000Z',
+      })
+      .expect(201);
+    return { product, entry: logged.body as { id: string } };
   }
 
   it('PATCH /food/logs/:id recalculates calories when grams change', async () => {
@@ -98,12 +136,153 @@ describe('Food logs edit/delete (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ grams: 200 })
       .expect(200);
+    const editedBody = edited.body as {
+      grams: string;
+      caloriesComputed: string;
+    };
 
-    expect(Number(edited.body.grams)).toBe(200);
-    expect(Number(edited.body.caloriesComputed)).toBeCloseTo(
+    expect(Number(editedBody.grams)).toBe(200);
+    expect(Number(editedBody.caloriesComputed)).toBeCloseTo(
       originalCalories * 2,
       5,
     );
+  });
+
+  it('PATCH /food/logs/:id edits an ML amount with the new transport', async () => {
+    const accessToken = await newVerifiedUser('edit-ml');
+    const { product, entry } = await createVolumeEntry(accessToken, 'edit');
+
+    const edited = await request(app.getHttpServer())
+      .patch(`/food/logs/${entry.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        amount: 500,
+        amountUnit: 'ML',
+        portionKind: 'SERVING',
+        portionMultiplier: 2,
+        mealCategory: 'DINNER',
+      })
+      .expect(200);
+
+    expect(edited.body).toMatchObject({
+      grams: null,
+      amount: '500',
+      amountUnit: 'ML',
+      portionKind: 'SERVING',
+      portionMultiplier: '2',
+      mealCategory: 'DINNER',
+    });
+    await prisma.foodLogEntry.delete({ where: { id: entry.id } });
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
+  });
+
+  it('allows meal-only but rejects amount edits after a product becomes Not scalable', async () => {
+    const accessToken = await newVerifiedUser('edit-not-scalable');
+    const { product, entry } = await createVolumeEntry(
+      accessToken,
+      'not-scalable',
+    );
+    await prisma.packagedProduct.update({
+      where: { id: product.id },
+      data: { source: ProductSource.ADMIN },
+    });
+
+    const rejected = await request(app.getHttpServer())
+      .patch(`/food/logs/${entry.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        amount: 300,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+        mealCategory: 'LUNCH',
+      })
+      .expect(422);
+    expect(rejected.body).toMatchObject({ reason: 'NUTRITION_BASIS_UNKNOWN' });
+
+    const mealOnly = await request(app.getHttpServer())
+      .patch(`/food/logs/${entry.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ mealCategory: 'DINNER' })
+      .expect(200);
+    expect(mealOnly.body).toMatchObject({
+      amount: '250',
+      amountUnit: 'ML',
+      portionKind: 'SERVING',
+      mealCategory: 'DINNER',
+    });
+    await prisma.foodLogEntry.delete({ where: { id: entry.id } });
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
+  });
+
+  it('treats unchanged legacy grams as meal-only when a product becomes Not scalable', async () => {
+    const accessToken = await newVerifiedUser('edit-legacy-unchanged');
+    const product = await prisma.packagedProduct.create({
+      data: {
+        barcode: `edit-mass-${Date.now()}-${Math.random()}`,
+        name: 'Legacy grams product',
+        packageSize: 300,
+        packageUnit: 'g',
+        packageBaseUnit: 'G',
+        caloriesPer100g: 200,
+        source: ProductSource.OPEN_FOOD_FACTS,
+        verificationStatus: VerificationStatus.EXTERNAL,
+      },
+    });
+    const logged = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        amount: 100,
+        amountUnit: 'G',
+        portionKind: 'CUSTOM',
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-01-15T12:00:00.000Z',
+      })
+      .expect(201);
+    const entry = logged.body as {
+      id: string;
+      caloriesComputed: string;
+    };
+    await prisma.packagedProduct.update({
+      where: { id: product.id },
+      data: { source: ProductSource.ADMIN },
+    });
+
+    const edited = await request(app.getHttpServer())
+      .patch(`/food/logs/${entry.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ grams: 100, mealCategory: 'DINNER' })
+      .expect(200);
+    const editedBody = edited.body as {
+      amount: string;
+      amountUnit: string;
+      caloriesComputed: string;
+      mealCategory: string;
+    };
+
+    expect(editedBody).toMatchObject({
+      amount: '100',
+      amountUnit: 'G',
+      caloriesComputed: entry.caloriesComputed,
+      mealCategory: 'DINNER',
+    });
+    await prisma.foodLogEntry.delete({ where: { id: entry.id } });
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
+  });
+
+  it('keeps an orphaned packaged-product entry uneditable', async () => {
+    const accessToken = await newVerifiedUser('edit-orphan');
+    const { product, entry } = await createVolumeEntry(accessToken, 'orphan');
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
+
+    await request(app.getHttpServer())
+      .patch(`/food/logs/${entry.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ mealCategory: 'DINNER' })
+      .expect(404);
+    await prisma.foodLogEntry.delete({ where: { id: entry.id } });
   });
 
   it('PATCH /food/logs/:id updates mealCategory independently of grams', async () => {
@@ -117,9 +296,13 @@ describe('Food logs edit/delete (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .send({ mealCategory: 'DINNER' })
       .expect(200);
+    const editedBody = edited.body as {
+      mealCategory: string;
+      caloriesComputed: string;
+    };
 
-    expect(edited.body.mealCategory).toBe('DINNER');
-    expect(Number(edited.body.caloriesComputed)).toBeCloseTo(
+    expect(editedBody.mealCategory).toBe('DINNER');
+    expect(Number(editedBody.caloriesComputed)).toBeCloseTo(
       Number(entry.caloriesComputed),
       5,
     );

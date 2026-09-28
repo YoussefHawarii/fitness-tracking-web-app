@@ -9,6 +9,7 @@ let foodLogModule;
 let addProductModule;
 let foodServiceModule;
 let apiClientModule;
+let editPortionOptionsModule;
 
 before(async () => {
   vite = await createServer({
@@ -17,13 +18,19 @@ before(async () => {
     server: { middlewareMode: true },
     ssr: { noExternal: ['@zxing/browser', '@zxing/library'] },
   });
-  [foodLogModule, addProductModule, foodServiceModule, apiClientModule] =
-    await Promise.all([
-      vite.ssrLoadModule('/src/pages/FoodLog.tsx'),
-      vite.ssrLoadModule('/src/features/add-product/AddProductForm.tsx'),
-      vite.ssrLoadModule('/src/services/foodService.ts'),
-      vite.ssrLoadModule('/src/services/apiClient.ts'),
-    ]);
+  [
+    foodLogModule,
+    addProductModule,
+    foodServiceModule,
+    apiClientModule,
+    editPortionOptionsModule,
+  ] = await Promise.all([
+    vite.ssrLoadModule('/src/pages/FoodLog.tsx'),
+    vite.ssrLoadModule('/src/features/add-product/AddProductForm.tsx'),
+    vite.ssrLoadModule('/src/services/foodService.ts'),
+    vite.ssrLoadModule('/src/services/apiClient.ts'),
+    vite.ssrLoadModule('/src/features/portion-selector/editPortionOptions.ts'),
+  ]);
 });
 
 after(async () => {
@@ -206,11 +213,13 @@ test('an older barcode response without resolution keeps the previous grams pres
   assert.match(html, /Amount \(g\)/);
 });
 
-test('the edit amount field is disabled for an ML entry and explains why', () => {
+test('the edit amount field keeps ML amounts editable with their unit', () => {
   const html = renderToStaticMarkup(
     React.createElement(foodLogModule.EditAmountField, {
       entry: {
         id: 'log-1',
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'product-1',
         name: 'Test drink',
         grams: null,
         amount: '330',
@@ -225,11 +234,58 @@ test('the edit amount field is disabled for an ML entry and explains why', () =>
   );
 
   assert.match(html, /Amount \(ml\)/);
-  assert.match(html, /disabled=""/);
-  assert.match(
-    html,
-    /Amount editing is not available for millilitre entries yet\./,
+  assert.doesNotMatch(html, /disabled=""/);
+});
+
+test('packaged-product edit offers create options and falls back to CUSTOM after serving metadata changes', () => {
+  const currentResolution = {
+    ...loggableResolution('PER_100_ML'),
+    package: { size: 600, baseUnit: 'ML' },
+    serving: { size: 300, baseUnit: 'ML' },
+    containerKey: 'BOTTLE',
+  };
+  const model = editPortionOptionsModule.buildEditPortionOptions(
+    {
+      id: 'log-1',
+      sourceType: 'PACKAGED_PRODUCT',
+      sourceRef: 'product-1',
+      name: 'Test drink',
+      grams: null,
+      amount: '250',
+      amountUnit: 'ML',
+      portionKind: 'SERVING',
+      portionMultiplier: '1',
+      caloriesComputed: '105',
+      mealCategory: 'LUNCH',
+      loggedAtUtc: '2026-09-28T12:00:00.000Z',
+    },
+    currentResolution,
   );
+
+  assert.deepEqual(
+    model.options.map(({ id }) => id),
+    ['SERVING_HALF', 'SERVING_ONE', 'SERVING_TWO', 'PACKAGE_ONE', 'CUSTOM'],
+  );
+  assert.deepEqual(model.defaultSelection, {
+    optionId: 'CUSTOM',
+    choice: { portionKind: 'CUSTOM', amount: 250 },
+  });
+});
+
+test('history amount rendering includes ml and g units', () => {
+  const volumeHtml = renderToStaticMarkup(
+    React.createElement(foodLogModule.HistoryAmount, {
+      entry: { amount: '330', grams: null, amountUnit: 'ML' },
+    }),
+  );
+  const massHtml = renderToStaticMarkup(
+    React.createElement(foodLogModule.HistoryAmount, {
+      entry: { amount: '150', grams: '150', amountUnit: 'G' },
+    }),
+  );
+
+  assert.equal(volumeHtml, '330 ml');
+  assert.equal(massHtml, '150 g');
 });
 
 test('invalid barcodes stay distinct from confirmed not-found responses', async () => {

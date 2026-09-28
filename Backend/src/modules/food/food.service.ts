@@ -25,6 +25,7 @@ import {
   FOOD_LOG_REJECTION_REASONS,
   type FoodLogRejectionReason,
 } from './food-log-rejection-reasons';
+import type { FoodLogEntry, PackagedProduct } from '@prisma/client';
 
 const PORTION_AMOUNT_TOLERANCE = 0.05;
 
@@ -63,6 +64,96 @@ export class FoodService {
     };
   }
 
+  private calculateSafePackagedProductNutrients(
+    product: PackagedProduct,
+    amount: number,
+    amountUnit: NonNullable<CreateFoodLogDto['amountUnit']>,
+    portionKind?: CreateFoodLogDto['portionKind'],
+    portionMultiplier?: number,
+  ) {
+    const { resolution } = resolvePackagedProductPortion(product);
+    if (resolution.outcome === 'NOT_LOGGABLE') {
+      this.reject(resolution.primaryReason);
+    }
+
+    const expectedUnit =
+      resolution.effectiveNutritionBasis.basis === 'PER_100_G' ? 'G' : 'ML';
+    if (amountUnit !== expectedUnit) {
+      this.reject(FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_BASIS_MISMATCH);
+    }
+
+    if (portionKind === 'PACKAGE' || portionKind === 'SERVING') {
+      const measurement =
+        portionKind === 'PACKAGE' ? resolution.package : resolution.serving;
+      if (!measurement) {
+        this.reject(
+          portionKind === 'PACKAGE'
+            ? FOOD_LOG_REJECTION_REASONS.PACKAGE_PORTION_UNAVAILABLE
+            : FOOD_LOG_REJECTION_REASONS.SERVING_PORTION_UNAVAILABLE,
+        );
+      }
+      const expectedAmount = measurement.size * (portionMultiplier ?? 0);
+      const floatingPointMargin =
+        Number.EPSILON *
+        Math.max(1, Math.abs(amount), Math.abs(expectedAmount));
+      if (
+        Math.abs(amount - expectedAmount) >
+        PORTION_AMOUNT_TOLERANCE + floatingPointMargin
+      ) {
+        this.reject(FOOD_LOG_REJECTION_REASONS.PORTION_AMOUNT_MISMATCH);
+      }
+    }
+
+    return calculateNutrientsForAmount(
+      this.nutrientsFromPackagedProduct(product),
+      amount,
+      amountUnit,
+      resolution.effectiveNutritionBasis.basis,
+    );
+  }
+
+  private rejectStructuredPortionForMassSource(
+    portionKind?: CreateFoodLogDto['portionKind'],
+  ) {
+    if (portionKind !== 'PACKAGE' && portionKind !== 'SERVING') return;
+    this.reject(
+      portionKind === 'PACKAGE'
+        ? FOOD_LOG_REJECTION_REASONS.PACKAGE_PORTION_UNAVAILABLE
+        : FOOD_LOG_REJECTION_REASONS.SERVING_PORTION_UNAVAILABLE,
+    );
+  }
+
+  private isUnchangedFoodLogAmount(
+    existing: Pick<
+      FoodLogEntry,
+      'amount' | 'grams' | 'amountUnit' | 'portionKind' | 'portionMultiplier'
+    >,
+    dto: UpdateFoodLogDto,
+  ): boolean {
+    const submittedAmount = dto.amount ?? dto.grams;
+    if (submittedAmount === undefined) return false;
+
+    const submittedUnit = dto.amount === undefined ? 'G' : dto.amountUnit;
+    const storedUnit = existing.amountUnit ?? 'G';
+    if (
+      submittedAmount !== Number(existing.amount ?? existing.grams) ||
+      submittedUnit !== storedUnit
+    ) {
+      return false;
+    }
+
+    if (dto.amount === undefined) return true;
+
+    const storedMultiplier =
+      existing.portionMultiplier === null
+        ? null
+        : Number(existing.portionMultiplier);
+    return (
+      (dto.portionKind ?? null) === existing.portionKind &&
+      (dto.portionMultiplier ?? null) === storedMultiplier
+    );
+  }
+
   // Cache-through wrapper — kept for the legacy OPEN_FOOD_FACTS resolution
   // path only (resolveNutrients below, for FoodLogEntry rows created before
   // the local-first PackagedProduct cache existed). New scans no longer go
@@ -94,6 +185,13 @@ export class FoodService {
       );
     }
     return serializePackagedProduct(result.product, result.resolution);
+  }
+
+  async getPackagedProduct(id: string) {
+    const product = await this.packagedProducts.findById(id);
+    if (!product) throw new NotFoundException('Packaged product not found.');
+    const { resolution } = resolvePackagedProductPortion(product);
+    return serializePackagedProduct(product, resolution);
   }
 
   async createLocalFoodItem(userId: string, dto: CreateLocalFoodItemDto) {
@@ -214,61 +312,20 @@ export class FoodService {
       throw new Error('Validated amount did not contain an amount unit.');
     }
 
-    if (
-      dto.sourceType !== 'PACKAGED_PRODUCT' &&
-      (dto.portionKind === 'PACKAGE' || dto.portionKind === 'SERVING')
-    ) {
-      this.reject(
-        dto.portionKind === 'PACKAGE'
-          ? FOOD_LOG_REJECTION_REASONS.PACKAGE_PORTION_UNAVAILABLE
-          : FOOD_LOG_REJECTION_REASONS.SERVING_PORTION_UNAVAILABLE,
-      );
+    if (dto.sourceType !== 'PACKAGED_PRODUCT') {
+      this.rejectStructuredPortionForMassSource(dto.portionKind);
     }
 
     if (dto.sourceType === 'PACKAGED_PRODUCT') {
       const product = await this.packagedProducts.findById(dto.sourceRef);
       if (!product) throw new NotFoundException('Packaged product not found.');
 
-      const { resolution } = resolvePackagedProductPortion(product);
-      if (resolution.outcome === 'NOT_LOGGABLE') {
-        this.reject(resolution.primaryReason);
-      }
-
-      const expectedUnit =
-        resolution.effectiveNutritionBasis.basis === 'PER_100_G' ? 'G' : 'ML';
-      if (amountUnit !== expectedUnit) {
-        this.reject(FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_BASIS_MISMATCH);
-      }
-
-      if (dto.portionKind === 'PACKAGE' || dto.portionKind === 'SERVING') {
-        const measurement =
-          dto.portionKind === 'PACKAGE'
-            ? resolution.package
-            : resolution.serving;
-        if (!measurement) {
-          this.reject(
-            dto.portionKind === 'PACKAGE'
-              ? FOOD_LOG_REJECTION_REASONS.PACKAGE_PORTION_UNAVAILABLE
-              : FOOD_LOG_REJECTION_REASONS.SERVING_PORTION_UNAVAILABLE,
-          );
-        }
-        const expectedAmount = measurement.size * (dto.portionMultiplier ?? 0);
-        const floatingPointMargin =
-          Number.EPSILON *
-          Math.max(1, Math.abs(amount), Math.abs(expectedAmount));
-        if (
-          Math.abs(amount - expectedAmount) >
-          PORTION_AMOUNT_TOLERANCE + floatingPointMargin
-        ) {
-          this.reject(FOOD_LOG_REJECTION_REASONS.PORTION_AMOUNT_MISMATCH);
-        }
-      }
-
-      const computed = calculateNutrientsForAmount(
-        this.nutrientsFromPackagedProduct(product),
+      const computed = this.calculateSafePackagedProductNutrients(
+        product,
         amount,
         amountUnit,
-        resolution.effectiveNutritionBasis.basis,
+        dto.portionKind,
+        dto.portionMultiplier,
       );
 
       return this.prisma.foodLogEntry.create({
@@ -363,64 +420,108 @@ export class FoodService {
       throw new NotFoundException('Food log entry not found.');
     }
 
-    if (existing.amountUnit === 'ML') {
-      // Deployment-transition guard: preserve unit semantics until the
-      // complete unit-aware edit contract replaces this restricted path.
-      if (
-        dto.grams !== undefined ||
-        dto.amount !== undefined ||
-        dto.amountUnit !== undefined
-      ) {
-        this.reject(FOOD_LOG_REJECTION_REASONS.ML_AMOUNT_EDIT_UNAVAILABLE);
-      }
+    const hasAmountUpdate = dto.grams !== undefined || dto.amount !== undefined;
+
+    if (existing.sourceType === 'PACKAGED_PRODUCT') {
       const product = await this.packagedProducts.findById(
         existing.packagedProductId ?? existing.sourceRef,
       );
       if (!product) {
         throw new NotFoundException('Packaged product not found.');
       }
+      if (!hasAmountUpdate || this.isUnchangedFoodLogAmount(existing, dto)) {
+        if (dto.mealCategory === undefined) return existing;
+        return this.prisma.foodLogEntry.update({
+          where: { id },
+          data: { mealCategory: dto.mealCategory },
+        });
+      }
+
+      const amount = dto.amount ?? dto.grams;
+      if (amount === undefined) {
+        throw new Error('Validated food-log update did not contain an amount.');
+      }
+      const amountUnit = dto.amount === undefined ? 'G' : dto.amountUnit;
+      if (!amountUnit) {
+        throw new Error('Validated amount did not contain an amount unit.');
+      }
+      const computed = this.calculateSafePackagedProductNutrients(
+        product,
+        amount,
+        amountUnit,
+        dto.amount === undefined ? undefined : dto.portionKind,
+        dto.amount === undefined ? undefined : dto.portionMultiplier,
+      );
       return this.prisma.foodLogEntry.update({
         where: { id },
-        data: { mealCategory: dto.mealCategory ?? existing.mealCategory },
+        data: {
+          grams: amountUnit === 'G' ? amount : null,
+          amount,
+          amountUnit,
+          ...(dto.amount !== undefined
+            ? {
+                portionKind: dto.portionKind ?? null,
+                portionMultiplier: dto.portionMultiplier ?? null,
+              }
+            : {
+                portionKind:
+                  existing.portionKind === null ? null : ('CUSTOM' as const),
+                portionMultiplier: null,
+              }),
+          mealCategory: dto.mealCategory ?? existing.mealCategory,
+          caloriesComputed: computed.calories,
+          proteinComputed: computed.protein,
+          carbsComputed: computed.carbs,
+          fatComputed: computed.fat,
+        },
       });
     }
 
-    if (dto.amount !== undefined || dto.amountUnit !== undefined) {
-      this.reject(
-        FOOD_LOG_REJECTION_REASONS.UPDATE_AMOUNT_REPRESENTATION_UNSUPPORTED,
-      );
+    if (!hasAmountUpdate || this.isUnchangedFoodLogAmount(existing, dto)) {
+      if (dto.mealCategory === undefined) return existing;
+      return this.prisma.foodLogEntry.update({
+        where: { id },
+        data: { mealCategory: dto.mealCategory },
+      });
     }
 
-    // Prefer the explicit amount, falling back to grams for legacy rows.
-    const storedAmount = Number(existing.amount ?? existing.grams);
-    const grams = dto.grams ?? storedAmount;
-    const mealCategory = dto.mealCategory ?? existing.mealCategory;
-    const gramsChanged = dto.grams !== undefined && dto.grams !== storedAmount;
+    const amount = dto.amount ?? dto.grams;
+    if (amount === undefined) {
+      throw new Error('Validated food-log update did not contain an amount.');
+    }
 
-    // Re-resolve nutrients (rather than trusting the stored computed
-    // values) so a since-edited LOCAL food item's per-100g values are
-    // reflected, matching how createFoodLog always resolves fresh.
+    const amountUnit = dto.amount === undefined ? 'G' : dto.amountUnit;
+    if (amountUnit !== 'G') {
+      this.reject(FOOD_LOG_REJECTION_REASONS.MASS_SOURCE_REQUIRES_G);
+    }
+    this.rejectStructuredPortionForMassSource(dto.portionKind);
+
+    // Historical OPEN_FOOD_FACTS rows retain their live provider
+    // re-resolution path solely for legacy compatibility. This does not
+    // endorse its old grams-based semantics, and new entries cannot use it.
     const { nutrients } = await this.resolveNutrients(
       userId,
       existing.sourceType,
       existing.sourceRef,
     );
-    const computed = calculateNutrientsForGrams(nutrients, grams);
-
+    const computed = calculateNutrientsForGrams(nutrients, amount);
     return this.prisma.foodLogEntry.update({
       where: { id },
       data: {
-        grams,
-        amount: grams,
+        grams: amount,
+        amount,
         amountUnit: 'G',
-        ...(gramsChanged
+        ...(dto.amount !== undefined
           ? {
+              portionKind: dto.portionKind ?? null,
+              portionMultiplier: dto.portionMultiplier ?? null,
+            }
+          : {
               portionKind:
                 existing.portionKind === null ? null : ('CUSTOM' as const),
               portionMultiplier: null,
-            }
-          : {}),
-        mealCategory,
+            }),
+        mealCategory: dto.mealCategory ?? existing.mealCategory,
         caloriesComputed: computed.calories,
         proteinComputed: computed.protein,
         carbsComputed: computed.carbs,
