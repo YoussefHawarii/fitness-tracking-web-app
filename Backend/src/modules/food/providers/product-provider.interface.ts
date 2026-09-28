@@ -4,11 +4,7 @@ import type { BaseUnit, ContainerKey, ProductSource } from '@prisma/client';
 // mapped into this app's own field names, so the resolver never needs to
 // know which provider a result came from beyond the `source` tag it attaches
 // itself (see OpenFoodFactsProvider.source).
-export interface CataloguableProductLookup {
-  name: string;
-  nameAr?: string | null;
-  brand?: string | null;
-  category?: string | null;
+export interface PortionMetadataLookup {
   // Size values are expressed in the Base units named by the corresponding
   // *BaseUnit fields. The compatibility free-text unit fields are not trusted
   // by the persistence upsert; it derives lowercase units from the enums.
@@ -19,6 +15,13 @@ export interface CataloguableProductLookup {
   packageUnit?: string | null;
   packageBaseUnit?: BaseUnit | null;
   containerKey?: ContainerKey | null;
+}
+
+export interface CataloguableProductLookup extends PortionMetadataLookup {
+  name: string;
+  nameAr?: string | null;
+  brand?: string | null;
+  category?: string | null;
   caloriesPer100g: number;
   proteinPer100g?: number | null;
   carbsPer100g?: number | null;
@@ -34,7 +37,7 @@ export interface CataloguableProductLookup {
   sourceId?: string | null;
 }
 
-export interface IdentifiedProductLookup {
+export interface IdentifiedProductLookup extends PortionMetadataLookup {
   name: string;
   brand: string | null;
   imageUrl: string | null;

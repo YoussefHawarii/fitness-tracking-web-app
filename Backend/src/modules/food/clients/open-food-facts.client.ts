@@ -1,5 +1,5 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
-import type { BaseUnit, ContainerKey } from '@prisma/client';
+import { ContainerKey, type BaseUnit } from '@prisma/client';
 import type { NutrientsPer100g } from '../calorie-calculator';
 import { mapOffPackagingShapes } from '../container-key';
 import { normalizeMeasurement } from '../unit-normalizer';
@@ -65,6 +65,13 @@ export interface OpenFoodFactsIdentification {
   name: string;
   brand: string | null;
   imageUrl: string | null;
+  servingSize?: number;
+  servingUnit?: string;
+  servingBaseUnit?: BaseUnit;
+  packageSize?: number;
+  packageUnit?: string;
+  packageBaseUnit?: BaseUnit;
+  containerKey?: ContainerKey;
 }
 
 export type OpenFoodFactsLookupResult =
@@ -154,16 +161,6 @@ export class OpenFoodFactsClient {
     const brand = body.product.brands?.trim() || null;
     const imageUrl =
       body.product.image_front_url ?? body.product.image_url ?? null;
-    if (
-      typeof caloriesPer100g !== 'number' ||
-      !Number.isFinite(caloriesPer100g) ||
-      caloriesPer100g <= 0
-    ) {
-      return {
-        outcome: 'FOUND_WITHOUT_NUTRITION',
-        identification: { barcode, name, brand, imageUrl },
-      };
-    }
     const serving = normalizeMeasurement(
       body.product.serving_quantity,
       body.product.serving_quantity_unit,
@@ -172,6 +169,37 @@ export class OpenFoodFactsClient {
       body.product.product_quantity,
       body.product.product_quantity_unit,
     );
+    const containerKey = mapOffPackagingShapes(body.product.packagings);
+    if (
+      typeof caloriesPer100g !== 'number' ||
+      !Number.isFinite(caloriesPer100g) ||
+      caloriesPer100g <= 0
+    ) {
+      return {
+        outcome: 'FOUND_WITHOUT_NUTRITION',
+        identification: {
+          barcode,
+          name,
+          brand,
+          imageUrl,
+          ...(serving
+            ? {
+                servingSize: serving.value,
+                servingUnit: serving.legacyUnit,
+                servingBaseUnit: serving.baseUnit,
+              }
+            : {}),
+          ...(packageMeasurement
+            ? {
+                packageSize: packageMeasurement.value,
+                packageUnit: packageMeasurement.legacyUnit,
+                packageBaseUnit: packageMeasurement.baseUnit,
+              }
+            : {}),
+          ...(containerKey !== ContainerKey.PACKAGE ? { containerKey } : {}),
+        },
+      };
+    }
     return {
       outcome: 'FOUND_WITH_NUTRITION',
       barcode,
@@ -189,7 +217,7 @@ export class OpenFoodFactsClient {
       packageSize: packageMeasurement?.value ?? null,
       packageUnit: packageMeasurement?.legacyUnit ?? null,
       packageBaseUnit: packageMeasurement?.baseUnit ?? null,
-      containerKey: mapOffPackagingShapes(body.product.packagings),
+      containerKey,
       fiberPer100g: nutriments.fiber_100g ?? null,
       sugarPer100g: nutriments.sugars_100g ?? null,
       sodiumPer100g: nutriments.sodium_100g ?? null,

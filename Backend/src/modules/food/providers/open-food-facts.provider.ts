@@ -24,12 +24,37 @@ export class OpenFoodFactsProvider implements ProductProvider {
     const result = await this.client.lookupByBarcode(canonicalBarcode);
     if (result.outcome === 'NOT_FOUND') return result;
     if (result.outcome === 'FOUND_WITHOUT_NUTRITION') {
+      const serving = normalizeMeasurement(
+        result.identification.servingSize,
+        result.identification.servingUnit,
+      );
+      const packageMeasurement = normalizeMeasurement(
+        result.identification.packageSize,
+        result.identification.packageUnit,
+      );
       return {
         outcome: result.outcome,
         identification: {
           name: result.identification.name,
           brand: result.identification.brand,
           imageUrl: result.identification.imageUrl,
+          ...(serving
+            ? {
+                servingSize: serving.value,
+                servingUnit: serving.legacyUnit,
+                servingBaseUnit: serving.baseUnit,
+              }
+            : {}),
+          ...(packageMeasurement
+            ? {
+                packageSize: packageMeasurement.value,
+                packageUnit: packageMeasurement.legacyUnit,
+                packageBaseUnit: packageMeasurement.baseUnit,
+              }
+            : {}),
+          ...(result.identification.containerKey
+            ? { containerKey: result.identification.containerKey }
+            : {}),
         },
       };
     }

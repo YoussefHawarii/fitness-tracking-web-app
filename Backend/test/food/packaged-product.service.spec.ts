@@ -5,6 +5,7 @@ import {
   Prisma,
   ProductSource,
   VerificationStatus,
+  type PackagedProduct,
 } from '@prisma/client';
 import { PackagedProductService } from '../../src/modules/food/packaged-product.service';
 import type { CataloguableProductLookup } from '../../src/modules/food/providers/product-provider.interface';
@@ -19,6 +20,7 @@ function uniqueBarcodeViolation(): Prisma.PrismaClientKnownRequestError {
 
 describe('PackagedProductService', () => {
   const barcode = '3017620422003';
+  const checkedAt = new Date('2026-09-28T12:00:00.000Z');
   const providerResult: CataloguableProductLookup = {
     name: 'Nutella',
     caloriesPer100g: 539,
@@ -34,6 +36,43 @@ describe('PackagedProductService', () => {
     containerKey: ContainerKey.JAR,
   };
 
+  function productRow(
+    overrides: Partial<PackagedProduct> = {},
+  ): PackagedProduct {
+    return {
+      id: 'product-1',
+      barcode,
+      name: 'Cached product',
+      nameAr: null,
+      brand: null,
+      category: null,
+      servingSize: null,
+      servingUnit: null,
+      servingBaseUnit: null,
+      packageSize: null,
+      packageUnit: null,
+      packageBaseUnit: null,
+      containerKey: ContainerKey.PACKAGE,
+      declaredNutritionBasis: null,
+      caloriesPer100g: new Prisma.Decimal(539),
+      proteinPer100g: new Prisma.Decimal(6.3),
+      carbsPer100g: new Prisma.Decimal(57.5),
+      fatPer100g: new Prisma.Decimal(30.9),
+      fiberPer100g: null,
+      sugarPer100g: null,
+      sodiumPer100g: null,
+      imageUrl: null,
+      country: null,
+      source: ProductSource.OPEN_FOOD_FACTS,
+      sourceId: barcode,
+      verificationStatus: VerificationStatus.EXTERNAL,
+      lastProviderCheckAt: null,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
   function buildService() {
     const prisma = {
       packagedProduct: {
@@ -45,11 +84,220 @@ describe('PackagedProductService', () => {
         ),
         findUnique: jest.fn(),
         findUniqueOrThrow: jest.fn(),
+        updateMany: jest.fn(
+          (args: {
+            where: Record<string, unknown>;
+            data: Record<string, unknown>;
+          }): Promise<{ count: number }> => {
+            void args;
+            return Promise.resolve({ count: 0 });
+          },
+        ),
       },
     };
     const service = new PackagedProductService(prisma as never);
     return { service, prisma };
   }
+
+  describe('fillPortionGaps', () => {
+    it('fills unusable portion gaps and advances the completed-check timestamp without writing nutrition', async () => {
+      const { service, prisma } = buildService();
+      const existing = productRow({
+        packageSize: new Prisma.Decimal(0),
+        packageUnit: 'g',
+        packageBaseUnit: BaseUnit.G,
+      });
+      const refreshed = productRow({
+        packageSize: new Prisma.Decimal(330),
+        packageUnit: 'ml',
+        packageBaseUnit: BaseUnit.ML,
+        servingSize: new Prisma.Decimal(30),
+        servingUnit: 'g',
+        servingBaseUnit: BaseUnit.G,
+        containerKey: ContainerKey.CAN,
+        lastProviderCheckAt: checkedAt,
+      });
+      prisma.packagedProduct.updateMany.mockResolvedValue({ count: 1 });
+      prisma.packagedProduct.findUniqueOrThrow.mockResolvedValue(refreshed);
+
+      await expect(
+        service.fillPortionGaps(existing, providerResult, checkedAt),
+      ).resolves.toBe(refreshed);
+
+      const writes = prisma.packagedProduct.updateMany.mock.calls.map(
+        ([args]) => args,
+      );
+      expect(writes.map(({ data }) => data)).toEqual([
+        {
+          packageSize: 330,
+          packageUnit: 'ml',
+          packageBaseUnit: BaseUnit.ML,
+        },
+        {
+          servingSize: 60,
+          servingUnit: 'g',
+          servingBaseUnit: BaseUnit.G,
+        },
+        { containerKey: ContainerKey.JAR },
+        { lastProviderCheckAt: checkedAt },
+      ]);
+      for (const { where, data: writtenData } of writes) {
+        expect(where).toMatchObject({
+          id: existing.id,
+          source: ProductSource.OPEN_FOOD_FACTS,
+          verificationStatus: { not: VerificationStatus.VERIFIED },
+        });
+        expect(writtenData).not.toHaveProperty('caloriesPer100g');
+        expect(writtenData).not.toHaveProperty('proteinPer100g');
+        expect(writtenData).not.toHaveProperty('carbsPer100g');
+        expect(writtenData).not.toHaveProperty('fatPer100g');
+      }
+    });
+
+    it('keeps every usable portion value and only advances the timestamp', async () => {
+      const { service, prisma } = buildService();
+      const existing = productRow({
+        packageSize: new Prisma.Decimal(400),
+        packageUnit: 'g',
+        packageBaseUnit: BaseUnit.G,
+        servingSize: new Prisma.Decimal(50),
+        servingUnit: 'g',
+        servingBaseUnit: BaseUnit.G,
+        containerKey: ContainerKey.BOX,
+      });
+      const refreshed = productRow({
+        ...existing,
+        lastProviderCheckAt: checkedAt,
+      });
+      prisma.packagedProduct.updateMany.mockResolvedValue({ count: 1 });
+      prisma.packagedProduct.findUniqueOrThrow.mockResolvedValue(refreshed);
+
+      await service.fillPortionGaps(existing, providerResult, checkedAt);
+
+      expect(prisma.packagedProduct.updateMany).toHaveBeenCalledTimes(1);
+      expect(prisma.packagedProduct.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: existing.id,
+          source: ProductSource.OPEN_FOOD_FACTS,
+          verificationStatus: { not: VerificationStatus.VERIFIED },
+        },
+        data: { lastProviderCheckAt: checkedAt },
+      });
+    });
+
+    it('advances only the timestamp when the provider still has no usable portion metadata', async () => {
+      const { service, prisma } = buildService();
+      const existing = productRow();
+      const checked = productRow({ lastProviderCheckAt: checkedAt });
+      prisma.packagedProduct.updateMany.mockResolvedValue({ count: 1 });
+      prisma.packagedProduct.findUniqueOrThrow.mockResolvedValue(checked);
+
+      await expect(
+        service.fillPortionGaps(existing, {}, checkedAt),
+      ).resolves.toBe(checked);
+      expect(prisma.packagedProduct.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: existing.id,
+          source: ProductSource.OPEN_FOOD_FACTS,
+          verificationStatus: { not: VerificationStatus.VERIFIED },
+        },
+        data: { lastProviderCheckAt: checkedAt },
+      });
+    });
+
+    it('does not modify a row that became VERIFIED after it was read', async () => {
+      const { service, prisma } = buildService();
+      const stale = productRow();
+      const current = productRow({
+        verificationStatus: VerificationStatus.VERIFIED,
+      });
+      prisma.packagedProduct.updateMany.mockResolvedValue({ count: 0 });
+      prisma.packagedProduct.findUniqueOrThrow.mockResolvedValue(current);
+
+      await expect(
+        service.fillPortionGaps(stale, providerResult, checkedAt),
+      ).resolves.toBe(current);
+
+      for (const [{ where }] of prisma.packagedProduct.updateMany.mock.calls) {
+        expect(where).toMatchObject({
+          id: stale.id,
+          source: ProductSource.OPEN_FOOD_FACTS,
+          verificationStatus: { not: VerificationStatus.VERIFIED },
+        });
+      }
+      expect(current).toEqual(
+        productRow({ verificationStatus: VerificationStatus.VERIFIED }),
+      );
+    });
+
+    it('does not overwrite a package filled by another writer after the initial read', async () => {
+      const { service, prisma } = buildService();
+      const stale = productRow();
+      const concurrent = productRow({
+        packageSize: new Prisma.Decimal(500),
+        packageUnit: 'g',
+        packageBaseUnit: BaseUnit.G,
+        lastProviderCheckAt: checkedAt,
+      });
+      prisma.packagedProduct.updateMany
+        .mockResolvedValueOnce({ count: 0 })
+        .mockResolvedValueOnce({ count: 1 });
+      prisma.packagedProduct.findUniqueOrThrow.mockResolvedValue(concurrent);
+
+      await expect(
+        service.fillPortionGaps(
+          stale,
+          {
+            packageSize: 330,
+            packageBaseUnit: BaseUnit.ML,
+          },
+          checkedAt,
+        ),
+      ).resolves.toBe(concurrent);
+
+      expect(prisma.packagedProduct.updateMany).toHaveBeenNthCalledWith(1, {
+        where: {
+          id: stale.id,
+          source: ProductSource.OPEN_FOOD_FACTS,
+          verificationStatus: { not: VerificationStatus.VERIFIED },
+          OR: [
+            { packageSize: null },
+            { packageSize: { lte: 0 } },
+            { packageBaseUnit: null },
+          ],
+        },
+        data: {
+          packageSize: 330,
+          packageUnit: 'ml',
+          packageBaseUnit: BaseUnit.ML,
+        },
+      });
+      expect(concurrent.packageSize).toEqual(new Prisma.Decimal(500));
+      expect(concurrent.packageBaseUnit).toBe(BaseUnit.G);
+    });
+
+    it.each([
+      [
+        'USER_SUBMITTED',
+        ProductSource.USER_SUBMITTED,
+        VerificationStatus.UNVERIFIED,
+      ],
+      ['ADMIN', ProductSource.ADMIN, VerificationStatus.UNVERIFIED],
+      ['VERIFIED', ProductSource.OPEN_FOOD_FACTS, VerificationStatus.VERIFIED],
+    ] as const)(
+      'skips %s products without advancing their timestamp',
+      async (_label, source, verificationStatus) => {
+        const { service, prisma } = buildService();
+        const existing = productRow({ source, verificationStatus });
+
+        await expect(
+          service.fillPortionGaps(existing, providerResult, checkedAt),
+        ).resolves.toBe(existing);
+        expect(prisma.packagedProduct.updateMany).not.toHaveBeenCalled();
+        expect(prisma.packagedProduct.findUniqueOrThrow).not.toHaveBeenCalled();
+      },
+    );
+  });
 
   describe('upsertFromProvider', () => {
     it.each([0, -1, Number.NaN])(

@@ -68,6 +68,10 @@ describe('provider retry policy', () => {
     ).toBe(true);
   });
 
+  it('treats a missing completed-check timestamp as due', () => {
+    expect(isProviderRecheckDue(null, new Date())).toBe(true);
+  });
+
   it('backs off transient failures independently of the 30-day timestamp', () => {
     const backoff = new TransientProviderBackoff();
     const source = ProductSource.OPEN_FOOD_FACTS;

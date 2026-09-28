@@ -4,10 +4,11 @@ import {
   Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import type {
-  IdentifiedBarcode,
-  PackagedProduct,
+import {
   ProductSource,
+  VerificationStatus,
+  type IdentifiedBarcode,
+  type PackagedProduct,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizeBarcode } from './barcode-normalizer';
@@ -24,6 +25,7 @@ import {
 import { OpenFoodFactsProvider } from './providers/open-food-facts.provider';
 import type {
   CataloguableProductLookup,
+  PortionMetadataLookup,
   ProductLookupResult,
   ProductProvider,
 } from './providers/product-provider.interface';
@@ -133,6 +135,51 @@ export class ProductResolverService {
     return this.providers.find((provider) => provider.source === source);
   }
 
+  private shouldRehydratePortion(product: PackagedProduct, now: Date): boolean {
+    if (
+      product.source !== ProductSource.OPEN_FOOD_FACTS ||
+      product.verificationStatus === VerificationStatus.VERIFIED ||
+      !isProviderRecheckDue(product.lastProviderCheckAt, now)
+    ) {
+      return false;
+    }
+    return resolvePackagedProductPortion(product).diagnostics.reasons.includes(
+      'PORTION_DIMENSION_UNKNOWN',
+    );
+  }
+
+  private portionMetadataFor(
+    result: ProductLookupResult,
+  ): PortionMetadataLookup {
+    if (result.outcome === 'FOUND_WITH_NUTRITION') return result.product;
+    if (result.outcome === 'FOUND_WITHOUT_NUTRITION') {
+      return result.identification;
+    }
+    return {};
+  }
+
+  private async rehydratePortion(
+    barcode: string,
+    existing: PackagedProduct,
+    now: Date,
+  ): Promise<Extract<ResolveBarcodeResult, { status: 'found' }>> {
+    const provider = this.providerFor(existing.source);
+    if (!provider) return this.resolvedProduct(barcode, existing);
+
+    const check = await this.checkProvider(provider, barcode);
+    if (check.kind !== 'COMPLETED_CHECK') {
+      this.logProviderFailure(provider.source, barcode, check);
+      return this.resolvedProduct(barcode, existing);
+    }
+
+    const refreshed = await this.packagedProducts.fillPortionGaps(
+      existing,
+      this.portionMetadataFor(check.result),
+      now,
+    );
+    return this.resolvedProduct(barcode, refreshed);
+  }
+
   private async supersedeIdentification(
     barcode: string,
     data: CataloguableProductLookup,
@@ -220,6 +267,10 @@ export class ProductResolverService {
     const local = await this.packagedProducts.findByBarcode(barcode);
     if (local) {
       this.logger.log(`barcode local hit: ${barcode}`);
+      const now = new Date();
+      if (this.shouldRehydratePortion(local, now)) {
+        return this.rehydratePortion(barcode, local, now);
+      }
       return this.resolvedProduct(barcode, local);
     }
 

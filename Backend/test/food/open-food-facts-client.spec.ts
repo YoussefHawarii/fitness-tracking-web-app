@@ -282,6 +282,10 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
         name: 'Eau minérale naturelle gazeuse',
         brand: 'Perrier',
         imageUrl: null,
+        packageSize: 6000,
+        packageUnit: 'ml',
+        packageBaseUnit: BaseUnit.ML,
+        containerKey: ContainerKey.BOTTLE,
       },
     });
   });
@@ -340,6 +344,40 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
         name: 'Some Regional Snack',
         brand: 'Regional Foods',
         imageUrl: 'https://images.example/regional-snack.jpg',
+      },
+    });
+  });
+
+  it('retains usable portion metadata when the product has no usable calories', async () => {
+    mockFetch({
+      ok: true,
+      status: 200,
+      body: {
+        status: 1,
+        product: {
+          product_name: 'Portioned product',
+          product_quantity: 330,
+          product_quantity_unit: 'ml',
+          serving_quantity: 30,
+          serving_quantity_unit: 'g',
+          packagings: [{ shape: 'en:can' }],
+          nutriments: {},
+        },
+      },
+    });
+
+    await expect(
+      new OpenFoodFactsClient().lookupByBarcode('123456'),
+    ).resolves.toMatchObject({
+      outcome: 'FOUND_WITHOUT_NUTRITION',
+      identification: {
+        packageSize: 330,
+        packageUnit: 'ml',
+        packageBaseUnit: BaseUnit.ML,
+        servingSize: 30,
+        servingUnit: 'g',
+        servingBaseUnit: BaseUnit.G,
+        containerKey: ContainerKey.CAN,
       },
     });
   });

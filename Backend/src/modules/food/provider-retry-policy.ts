@@ -24,9 +24,10 @@ export function classifyProviderCheck(
 }
 
 export function isProviderRecheckDue(
-  lastProviderCheckAt: Date,
+  lastProviderCheckAt: Date | null,
   now: Date,
 ): boolean {
+  if (!lastProviderCheckAt) return true;
   return (
     now.getTime() - lastProviderCheckAt.getTime() >=
     PROVIDER_RECHECK_INTERVAL_MS

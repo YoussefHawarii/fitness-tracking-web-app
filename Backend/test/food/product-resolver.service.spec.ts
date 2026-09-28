@@ -15,7 +15,10 @@ import {
   type PackagedProduct,
 } from '@prisma/client';
 import { ProductResolverService } from '../../src/modules/food/product-resolver.service';
-import { TransientProviderBackoff } from '../../src/modules/food/provider-retry-policy';
+import {
+  TRANSIENT_PROVIDER_BACKOFF_MS,
+  TransientProviderBackoff,
+} from '../../src/modules/food/provider-retry-policy';
 
 describe('ProductResolverService.resolveBarcode', () => {
   const barcode = '3017620422003';
@@ -51,6 +54,7 @@ describe('ProductResolverService.resolveBarcode', () => {
       source: ProductSource.OPEN_FOOD_FACTS,
       sourceId: barcode,
       verificationStatus: VerificationStatus.EXTERNAL,
+      lastProviderCheckAt: null,
       createdAt: new Date('2026-01-01T00:00:00.000Z'),
       updatedAt: new Date('2026-01-01T00:00:00.000Z'),
       ...overrides,
@@ -106,6 +110,21 @@ describe('ProductResolverService.resolveBarcode', () => {
     containerKey: ContainerKey.JAR,
   };
 
+  function unknownPortionProduct(
+    overrides: Partial<PackagedProduct> = {},
+  ): PackagedProduct {
+    return productRow({
+      packageSize: null,
+      packageUnit: null,
+      packageBaseUnit: null,
+      servingSize: null,
+      servingUnit: null,
+      servingBaseUnit: null,
+      containerKey: ContainerKey.PACKAGE,
+      ...overrides,
+    });
+  }
+
   function buildService() {
     const transactionClient = {
       identifiedBarcode: {
@@ -122,6 +141,7 @@ describe('ProductResolverService.resolveBarcode', () => {
       findByBarcode: jest.fn(),
       upsertFromProvider: jest.fn(),
       createFromProvider: jest.fn(),
+      fillPortionGaps: jest.fn(),
     };
     const identifiedBarcodes = {
       findByBarcode: jest.fn(),
@@ -147,6 +167,7 @@ describe('ProductResolverService.resolveBarcode', () => {
       packagedProducts,
       identifiedBarcodes,
       openFoodFacts,
+      backoff,
     };
   }
 
@@ -172,6 +193,305 @@ describe('ProductResolverService.resolveBarcode', () => {
     });
     expect(identifiedBarcodes.findByBarcode).not.toHaveBeenCalled();
     expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+  });
+
+  it('does not re-query a local product with a usable serving and no package', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    packagedProducts.findByBarcode.mockResolvedValue(
+      productRow({
+        packageSize: null,
+        packageUnit: null,
+        packageBaseUnit: null,
+        servingSize: new Prisma.Decimal(30),
+        servingUnit: 'g',
+        servingBaseUnit: BaseUnit.G,
+      }),
+    );
+
+    await service.resolveBarcode(barcode);
+
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+  });
+
+  it('advances only the timestamp when a completed product re-check still has no usable portion metadata', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const cached = unknownPortionProduct();
+    const checked = unknownPortionProduct({ lastProviderCheckAt: now });
+    const response = {
+      outcome: 'FOUND_WITHOUT_NUTRITION' as const,
+      identification: {
+        name: 'Cached product',
+        brand: null,
+        imageUrl: null,
+      },
+    };
+    packagedProducts.findByBarcode.mockResolvedValue(cached);
+    packagedProducts.fillPortionGaps.mockResolvedValue(checked);
+    openFoodFacts.lookupByBarcode.mockResolvedValue(response);
+
+    await expect(service.resolveBarcode(barcode)).resolves.toMatchObject({
+      status: 'found',
+      product: checked,
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        primaryReason: 'PORTION_DIMENSION_UNKNOWN',
+      },
+    });
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledWith(barcode);
+    expect(packagedProducts.fillPortionGaps).toHaveBeenCalledWith(
+      cached,
+      response.identification,
+      now,
+    );
+  });
+
+  it('fills returned portion gaps and becomes loggable in the same scan', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const cached = unknownPortionProduct();
+    const response = {
+      outcome: 'FOUND_WITH_NUTRITION' as const,
+      product: {
+        name: 'Provider product',
+        caloriesPer100g: 999,
+        packageSize: 330,
+        packageBaseUnit: BaseUnit.ML,
+        containerKey: ContainerKey.CAN,
+      },
+    };
+    const refreshed = unknownPortionProduct({
+      packageSize: new Prisma.Decimal(330),
+      packageUnit: 'ml',
+      packageBaseUnit: BaseUnit.ML,
+      containerKey: ContainerKey.CAN,
+      lastProviderCheckAt: now,
+    });
+    packagedProducts.findByBarcode.mockResolvedValue(cached);
+    packagedProducts.fillPortionGaps.mockResolvedValue(refreshed);
+    openFoodFacts.lookupByBarcode.mockResolvedValue(response);
+
+    await expect(service.resolveBarcode(barcode)).resolves.toMatchObject({
+      status: 'found',
+      product: refreshed,
+      resolution: {
+        outcome: 'LOGGABLE',
+        portionDimension: 'VOLUME',
+        package: { size: 330, baseUnit: BaseUnit.ML },
+      },
+    });
+    expect(packagedProducts.fillPortionGaps).toHaveBeenCalledWith(
+      cached,
+      response.product,
+      now,
+    );
+  });
+
+  it('treats a removed OFF product as a completed check and leaves its fields untouched', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const cached = unknownPortionProduct();
+    const checked = unknownPortionProduct({ lastProviderCheckAt: now });
+    packagedProducts.findByBarcode.mockResolvedValue(cached);
+    packagedProducts.fillPortionGaps.mockResolvedValue(checked);
+    openFoodFacts.lookupByBarcode.mockResolvedValue({ outcome: 'NOT_FOUND' });
+
+    await expect(service.resolveBarcode(barcode)).resolves.toMatchObject({
+      status: 'found',
+      product: checked,
+    });
+    expect(packagedProducts.fillPortionGaps).toHaveBeenCalledWith(
+      cached,
+      {},
+      now,
+    );
+  });
+
+  it('does not re-check an unknown-portion product inside its 30-day window', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    packagedProducts.findByBarcode.mockResolvedValue(
+      unknownPortionProduct({
+        lastProviderCheckAt: new Date('2026-08-30T12:00:00.001Z'),
+      }),
+    );
+
+    await service.resolveBarcode(barcode);
+
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+  });
+
+  it('re-checks an unknown-portion product when 30 days have elapsed', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const stale = unknownPortionProduct({
+      lastProviderCheckAt: new Date('2026-08-29T12:00:00.000Z'),
+    });
+    const checked = unknownPortionProduct({ lastProviderCheckAt: now });
+    packagedProducts.findByBarcode.mockResolvedValue(stale);
+    packagedProducts.fillPortionGaps.mockResolvedValue(checked);
+    openFoodFacts.lookupByBarcode.mockResolvedValue({ outcome: 'NOT_FOUND' });
+
+    await service.resolveBarcode(barcode);
+
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['timeout', 'network failure', 'HTTP 5xx', 'unparseable body'])(
+    'returns the cached product unchanged and writes nothing after %s',
+    async (failure) => {
+      const { service, packagedProducts, openFoodFacts } = buildService();
+      const cached = unknownPortionProduct();
+      packagedProducts.findByBarcode.mockResolvedValue(cached);
+      openFoodFacts.lookupByBarcode.mockRejectedValue(
+        new ServiceUnavailableException(failure),
+      );
+
+      await expect(service.resolveBarcode(barcode)).resolves.toMatchObject({
+        status: 'found',
+        product: cached,
+      });
+      expect(packagedProducts.fillPortionGaps).not.toHaveBeenCalled();
+    },
+  );
+
+  it('backs off a product re-check for 60 seconds after a transient failure', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const cached = unknownPortionProduct();
+    packagedProducts.findByBarcode.mockResolvedValue(cached);
+    openFoodFacts.lookupByBarcode.mockRejectedValue(
+      new ServiceUnavailableException('OFF unavailable'),
+    );
+
+    const first = await service.resolveBarcode(barcode);
+    jest.advanceTimersByTime(TRANSIENT_PROVIDER_BACKOFF_MS - 1);
+    const backedOff = await service.resolveBarcode(barcode);
+
+    expect(first).toMatchObject({ status: 'found', product: cached });
+    expect(backedOff).toMatchObject({ status: 'found', product: cached });
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledTimes(1);
+    expect(packagedProducts.fillPortionGaps).not.toHaveBeenCalled();
+
+    jest.advanceTimersByTime(1);
+    const retried = await service.resolveBarcode(barcode);
+
+    expect(retried).toMatchObject({ status: 'found', product: cached });
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledTimes(2);
+    expect(packagedProducts.fillPortionGaps).not.toHaveBeenCalled();
+  });
+
+  it('returns the cached product after a non-transient error without writing or backing off', async () => {
+    const { service, packagedProducts, openFoodFacts, backoff } =
+      buildService();
+    const cached = unknownPortionProduct();
+    const recordFailure = jest.spyOn(backoff, 'recordFailure');
+    jest.spyOn(Logger.prototype, 'error').mockImplementation();
+    packagedProducts.findByBarcode.mockResolvedValue(cached);
+    openFoodFacts.lookupByBarcode.mockRejectedValue(
+      new Error('provider adapter bug'),
+    );
+
+    const first = await service.resolveBarcode(barcode);
+    const second = await service.resolveBarcode(barcode);
+
+    expect(first).toMatchObject({ status: 'found', product: cached });
+    expect(second).toMatchObject({ status: 'found', product: cached });
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledTimes(2);
+    expect(packagedProducts.fillPortionGaps).not.toHaveBeenCalled();
+    expect(recordFailure).not.toHaveBeenCalled();
+    expect(cached.lastProviderCheckAt).toBeNull();
+  });
+
+  it.each([
+    [
+      'USER_SUBMITTED',
+      ProductSource.USER_SUBMITTED,
+      VerificationStatus.UNVERIFIED,
+    ],
+    ['ADMIN', ProductSource.ADMIN, VerificationStatus.UNVERIFIED],
+    ['VERIFIED', ProductSource.OPEN_FOOD_FACTS, VerificationStatus.VERIFIED],
+  ] as const)(
+    'does not re-query an unknown-portion %s product',
+    async (_label, source, verificationStatus) => {
+      const { service, packagedProducts, openFoodFacts } = buildService();
+      packagedProducts.findByBarcode.mockResolvedValue(
+        unknownPortionProduct({ source, verificationStatus }),
+      );
+
+      await service.resolveBarcode(barcode);
+
+      expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+    },
+  );
+
+  it('captures a re-fetched serving in another dimension and discards it during re-resolution', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const cached = unknownPortionProduct();
+    const response = {
+      outcome: 'FOUND_WITH_NUTRITION' as const,
+      product: {
+        name: 'Mixed metadata',
+        caloriesPer100g: 42,
+        packageSize: 330,
+        packageBaseUnit: BaseUnit.ML,
+        servingSize: 30,
+        servingBaseUnit: BaseUnit.G,
+      },
+    };
+    const refreshed = unknownPortionProduct({
+      packageSize: new Prisma.Decimal(330),
+      packageUnit: 'ml',
+      packageBaseUnit: BaseUnit.ML,
+      servingSize: new Prisma.Decimal(30),
+      servingUnit: 'g',
+      servingBaseUnit: BaseUnit.G,
+      lastProviderCheckAt: now,
+    });
+    packagedProducts.findByBarcode.mockResolvedValue(cached);
+    packagedProducts.fillPortionGaps.mockResolvedValue(refreshed);
+    openFoodFacts.lookupByBarcode.mockResolvedValue(response);
+
+    await expect(service.resolveBarcode(barcode)).resolves.toMatchObject({
+      status: 'found',
+      resolution: {
+        outcome: 'LOGGABLE',
+        package: { size: 330, baseUnit: BaseUnit.ML },
+        serving: null,
+      },
+    });
+    expect(packagedProducts.fillPortionGaps).toHaveBeenCalledWith(
+      cached,
+      expect.objectContaining({
+        servingSize: 30,
+        servingBaseUnit: BaseUnit.G,
+      }),
+      now,
+    );
+  });
+
+  it('uses one completed-check timestamp across a no-retry then retry sequence', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
+    const first = unknownPortionProduct();
+    const checked = unknownPortionProduct({ lastProviderCheckAt: now });
+    const checkedAgain = unknownPortionProduct({
+      lastProviderCheckAt: new Date('2026-10-28T12:00:00.000Z'),
+    });
+    packagedProducts.findByBarcode
+      .mockResolvedValueOnce(first)
+      .mockResolvedValue(checked);
+    packagedProducts.fillPortionGaps
+      .mockResolvedValueOnce(checked)
+      .mockResolvedValueOnce(checkedAgain);
+    openFoodFacts.lookupByBarcode.mockResolvedValue({ outcome: 'NOT_FOUND' });
+
+    await service.resolveBarcode(barcode);
+    jest.setSystemTime(new Date('2026-10-27T12:00:00.000Z'));
+    await service.resolveBarcode(barcode);
+    jest.setSystemTime(new Date('2026-10-28T12:00:00.000Z'));
+    await service.resolveBarcode(barcode);
+
+    expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledTimes(2);
+    expect(packagedProducts.fillPortionGaps).toHaveBeenNthCalledWith(
+      2,
+      checked,
+      {},
+      new Date('2026-10-28T12:00:00.000Z'),
+    );
   });
 
   it('returns an identification inside its 30-day window without a provider call', async () => {
@@ -583,8 +903,8 @@ describe('ProductResolverService.resolveBarcode', () => {
     expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
   });
 
-  it('still logs discarded serving diagnostics for local products', async () => {
-    const { service, packagedProducts } = buildService();
+  it('still logs discarded serving diagnostics without re-querying the provider', async () => {
+    const { service, packagedProducts, openFoodFacts } = buildService();
     const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
     packagedProducts.findByBarcode.mockResolvedValue(
       productRow({
@@ -603,5 +923,6 @@ describe('ProductResolverService.resolveBarcode', () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('DIMENSION_MISMATCH'),
     );
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
   });
 });

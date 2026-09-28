@@ -393,6 +393,7 @@ model PackagedProduct {
   // provider's id differs from the barcode itself.
   sourceId            String?
   verificationStatus  VerificationStatus @default(UNVERIFIED)
+  lastProviderCheckAt DateTime?
 
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt

@@ -107,6 +107,10 @@ describe('OpenFoodFactsProvider contract', () => {
           name: 'Known drink',
           brand: 'Known brand',
           imageUrl: 'https://images.example/known.jpg',
+          packageSize: 330,
+          packageUnit: 'ml',
+          packageBaseUnit: BaseUnit.ML,
+          containerKey: ContainerKey.CAN,
         },
       }),
     };
@@ -118,6 +122,10 @@ describe('OpenFoodFactsProvider contract', () => {
         name: 'Known drink',
         brand: 'Known brand',
         imageUrl: 'https://images.example/known.jpg',
+        packageSize: 330,
+        packageUnit: 'ml',
+        packageBaseUnit: BaseUnit.ML,
+        containerKey: ContainerKey.CAN,
       },
     });
   });

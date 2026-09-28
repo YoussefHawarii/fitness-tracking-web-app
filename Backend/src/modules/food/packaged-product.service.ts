@@ -13,7 +13,10 @@ import {
 import type { PackagedProduct } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizeBarcode } from './barcode-normalizer';
-import type { CataloguableProductLookup } from './providers/product-provider.interface';
+import type {
+  CataloguableProductLookup,
+  PortionMetadataLookup,
+} from './providers/product-provider.interface';
 import { CreatePackagedProductDto } from './dto/create-packaged-product.dto';
 import { legacyUnitForBaseUnit, normalizeMeasurement } from './unit-normalizer';
 
@@ -42,6 +45,100 @@ export class PackagedProductService {
 
   findById(id: string): Promise<PackagedProduct | null> {
     return this.prisma.packagedProduct.findUnique({ where: { id } });
+  }
+
+  async fillPortionGaps(
+    product: PackagedProduct,
+    data: PortionMetadataLookup,
+    checkedAt: Date,
+  ): Promise<PackagedProduct> {
+    if (
+      product.source !== ProductSource.OPEN_FOOD_FACTS ||
+      product.verificationStatus === VerificationStatus.VERIFIED
+    ) {
+      return product;
+    }
+
+    const eligibleWhere: Prisma.PackagedProductWhereInput = {
+      id: product.id,
+      source: ProductSource.OPEN_FOOD_FACTS,
+      verificationStatus: { not: VerificationStatus.VERIFIED },
+    };
+    const existingPackage = normalizeMeasurement(
+      product.packageSize,
+      legacyUnitForBaseUnit(product.packageBaseUnit),
+    );
+    const providerPackage = normalizeMeasurement(
+      data.packageSize,
+      legacyUnitForBaseUnit(data.packageBaseUnit),
+    );
+    if (!existingPackage && providerPackage) {
+      await this.prisma.packagedProduct.updateMany({
+        where: {
+          ...eligibleWhere,
+          OR: [
+            { packageSize: null },
+            { packageSize: { lte: 0 } },
+            { packageBaseUnit: null },
+          ],
+        },
+        data: {
+          packageSize: providerPackage.value,
+          packageUnit: providerPackage.legacyUnit,
+          packageBaseUnit: providerPackage.baseUnit,
+        },
+      });
+    }
+
+    const existingServing = normalizeMeasurement(
+      product.servingSize,
+      legacyUnitForBaseUnit(product.servingBaseUnit),
+    );
+    const providerServing = normalizeMeasurement(
+      data.servingSize,
+      legacyUnitForBaseUnit(data.servingBaseUnit),
+    );
+    if (!existingServing && providerServing) {
+      await this.prisma.packagedProduct.updateMany({
+        where: {
+          ...eligibleWhere,
+          OR: [
+            { servingSize: null },
+            { servingSize: { lte: 0 } },
+            { servingBaseUnit: null },
+          ],
+        },
+        data: {
+          servingSize: providerServing.value,
+          servingUnit: providerServing.legacyUnit,
+          servingBaseUnit: providerServing.baseUnit,
+        },
+      });
+    }
+
+    if (
+      (!product.containerKey ||
+        product.containerKey === ContainerKey.PACKAGE) &&
+      data.containerKey &&
+      data.containerKey !== ContainerKey.PACKAGE
+    ) {
+      await this.prisma.packagedProduct.updateMany({
+        where: {
+          ...eligibleWhere,
+          OR: [{ containerKey: null }, { containerKey: ContainerKey.PACKAGE }],
+        },
+        data: { containerKey: data.containerKey },
+      });
+    }
+
+    await this.prisma.packagedProduct.updateMany({
+      where: eligibleWhere,
+      data: { lastProviderCheckAt: checkedAt },
+    });
+
+    return this.prisma.packagedProduct.findUniqueOrThrow({
+      where: { id: product.id },
+    });
   }
 
   // Called only on a genuine local-DB miss, right after a provider found the
@@ -120,6 +217,8 @@ export class PackagedProductService {
         source,
         sourceId: data.sourceId ?? barcode,
         verificationStatus: VerificationStatus.EXTERNAL,
+        lastProviderCheckAt:
+          source === ProductSource.OPEN_FOOD_FACTS ? new Date() : null,
       },
     });
   }
