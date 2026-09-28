@@ -56,7 +56,7 @@ export class FoodService {
         'Barcode lookup is temporarily unavailable.',
       );
     }
-    return serializePackagedProduct(result.product);
+    return serializePackagedProduct(result.product, result.resolution);
   }
 
   async createLocalFoodItem(userId: string, dto: CreateLocalFoodItemDto) {

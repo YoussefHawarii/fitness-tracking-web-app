@@ -1,11 +1,15 @@
 import type { PackagedProduct } from '@prisma/client';
+import type { PortionResolution } from './portion-resolution';
 
 // Prisma Decimal fields serialize to strings by default (matching this app's
 // existing FoodLogEntry response shape) — but the pre-existing barcode
 // response contract (OpenFoodFactsProduct, a plain object from the OFF
 // client, not Prisma) has always returned real numbers. Converting here
 // keeps that contract intact for the frontend.
-export function serializePackagedProduct(product: PackagedProduct) {
+export function serializePackagedProduct(
+  product: PackagedProduct,
+  resolution?: PortionResolution,
+) {
   return {
     id: product.id,
     barcode: product.barcode,
@@ -33,5 +37,6 @@ export function serializePackagedProduct(product: PackagedProduct) {
     country: product.country,
     source: product.source,
     verificationStatus: product.verificationStatus,
+    ...(resolution ? { resolution } : {}),
   };
 }

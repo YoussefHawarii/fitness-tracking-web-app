@@ -101,6 +101,37 @@ test('not-found actions retain add-product, manual-search, and rescan choices', 
   assert.match(html, /Scan again/);
 });
 
+test('Not scalable panel renders identity and safe fallbacks without logging controls', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.NotLoggableProductPanel, {
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Conflicting Cola',
+          brand: 'Example Drinks',
+          imageUrl: 'https://images.example/conflicting-cola.jpg',
+        },
+        subjectKind: 'PACKAGED_PRODUCT',
+        primaryReason: 'DIMENSION_BASIS_CONFLICT',
+      },
+      onAdd: () => undefined,
+      onSearch: () => undefined,
+      onRescan: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Conflicting Cola/);
+  assert.match(html, /Example Drinks/);
+  assert.match(html, /https:\/\/images\.example\/conflicting-cola\.jpg/);
+  assert.match(html, /portion unit conflicts with its nutrition basis/);
+  assert.match(html, /can&#x27;t be logged safely/);
+  assert.match(html, /Search manually instead/);
+  assert.match(html, /Scan again/);
+  assert.doesNotMatch(html, /Add this product/);
+  assert.doesNotMatch(html, /Save entry/);
+  assert.doesNotMatch(html, />Grams</);
+});
+
 test('invalid barcodes stay distinct from confirmed not-found responses', async () => {
   const originalGet = apiClientModule.apiClient.get;
   try {

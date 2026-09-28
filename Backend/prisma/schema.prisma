@@ -62,6 +62,14 @@ enum BaseUnit {
   ML
 }
 
+// Denominator explicitly stated by a trustworthy source for a Packaged
+// product's per-100 nutrition values. Inferred nutrition bases are resolved
+// from source-specific rules and are never persisted in this column.
+enum NutritionBasis {
+  PER_100_G
+  PER_100_ML
+}
+
 // Presentation-only package noun derived from structured provider metadata.
 // PACKAGE is the generic fallback when no specific container is known.
 enum ContainerKey {
@@ -354,6 +362,7 @@ model PackagedProduct {
   packageUnit         String?
   packageBaseUnit     BaseUnit?
   containerKey        ContainerKey?
+  declaredNutritionBasis NutritionBasis?
 
   // Per 100 Base units: 100 g for MASS or 100 ml for VOLUME (ADR 0006).
   // The existing column names remain unchanged, and Open Food Facts' `_100g`

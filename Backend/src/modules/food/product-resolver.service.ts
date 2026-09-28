@@ -7,9 +7,18 @@ import type {
   ProductLookupResult,
   ProductProvider,
 } from './providers/product-provider.interface';
+import {
+  resolvePackagedProductPortion,
+  type PortionResolution,
+  type PortionResolutionDiagnostics,
+} from './portion-resolution';
 
 export type ResolveBarcodeResult =
-  | { status: 'found'; product: PackagedProduct }
+  | {
+      status: 'found';
+      product: PackagedProduct;
+      resolution: PortionResolution;
+    }
   | { status: 'not_found' }
   // A configured provider errored (timeout/outage) and no other provider (nor
   // the local DB) resolved the barcode — distinct from a clean "not found" so
@@ -34,6 +43,31 @@ export class ProductResolverService {
     this.providers = [openFoodFacts];
   }
 
+  private resolvedProduct(
+    barcode: string,
+    product: PackagedProduct,
+  ): Extract<ResolveBarcodeResult, { status: 'found' }> {
+    const { resolution, diagnostics } = resolvePackagedProductPortion(product);
+    this.logDiagnostics(barcode, diagnostics);
+    return { status: 'found', product, resolution };
+  }
+
+  private logDiagnostics(
+    barcode: string,
+    diagnostics: PortionResolutionDiagnostics,
+  ): void {
+    if (diagnostics.servingDiscardReason) {
+      this.logger.warn(
+        `serving shortcut discarded for ${barcode}: ${diagnostics.servingDiscardReason}`,
+      );
+    }
+    if (diagnostics.reasons.length > 0) {
+      this.logger.warn(
+        `product is Not scalable for ${barcode}: ${diagnostics.reasons.join(',')}`,
+      );
+    }
+  }
+
   async resolveBarcode(rawBarcode: string): Promise<ResolveBarcodeResult> {
     const normalized = normalizeBarcode(rawBarcode);
     if (!normalized) {
@@ -46,7 +80,7 @@ export class ProductResolverService {
     const local = await this.packagedProducts.findByBarcode(barcode);
     if (local) {
       this.logger.log(`barcode local hit: ${barcode}`);
-      return { status: 'found', product: local };
+      return this.resolvedProduct(barcode, local);
     }
     this.logger.log(`barcode local miss: ${barcode}`);
 
@@ -77,7 +111,7 @@ export class ProductResolverService {
         result,
         provider.source,
       );
-      return { status: 'found', product: saved };
+      return this.resolvedProduct(barcode, saved);
     }
 
     return providerErrored

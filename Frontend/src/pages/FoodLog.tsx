@@ -18,6 +18,7 @@ import {
   type FoodSourceType,
   type LocalFoodItem,
   type MealCategory,
+  type NotLoggableReason,
   type PackagedProduct,
 } from '../services/foodService';
 import { Card, SegmentedControl } from '../components/ui/Card';
@@ -53,6 +54,7 @@ type ScanStatus =
   | 'idle'
   | 'looking-up'
   | 'found'
+  | 'not-loggable'
   | 'not-found'
   | 'invalid'
   | 'unavailable'
@@ -192,6 +194,69 @@ export function BarcodeNotFoundActions({
   );
 }
 
+const NOT_LOGGABLE_EXPLANATIONS: Record<NotLoggableReason, string> = {
+  DIMENSION_BASIS_CONFLICT:
+    "This product's portion unit conflicts with its nutrition basis, so it can't be logged safely.",
+  PORTION_DIMENSION_UNKNOWN:
+    "This product doesn't include a usable package or serving unit, so it can't be logged safely.",
+  NUTRITION_BASIS_UNKNOWN:
+    "The nutrition information doesn't say whether values are per 100 g or per 100 ml, so this product can't be logged safely.",
+};
+
+type NotLoggableResolution = Extract<
+  NonNullable<PackagedProduct['resolution']>,
+  { outcome: 'NOT_LOGGABLE' }
+>;
+
+export function NotLoggableProductPanel({
+  resolution,
+  onAdd,
+  onSearch,
+  onRescan,
+}: {
+  resolution: NotLoggableResolution;
+  onAdd: () => void;
+  onSearch: () => void;
+  onRescan: () => void;
+}) {
+  const { display } = resolution;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-warn bg-surface p-4">
+      <div className="flex items-start gap-3">
+        {display.imageUrl && (
+          <img
+            src={display.imageUrl}
+            alt={display.name}
+            className="h-16 w-16 shrink-0 rounded-lg object-cover"
+          />
+        )}
+        <div className="flex flex-col gap-1">
+          <p className="text-heading">{display.name}</p>
+          {display.brand && (
+            <p className="text-body text-text-muted">{display.brand}</p>
+          )}
+        </div>
+      </div>
+      <p className="text-body text-warn">
+        {NOT_LOGGABLE_EXPLANATIONS[resolution.primaryReason]}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {resolution.subjectKind !== 'PACKAGED_PRODUCT' && (
+          <PrimaryButton type="button" onClick={onAdd}>
+            Add this product
+          </PrimaryButton>
+        )}
+        <SecondaryButton type="button" onClick={onSearch}>
+          Search manually instead
+        </SecondaryButton>
+        <SecondaryButton type="button" onClick={onRescan}>
+          Scan again
+        </SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
 export function FoodLog() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -231,10 +296,13 @@ export function FoodLog() {
   // in progress) so a lookup abandoned by a rescan/mode-switch can't apply
   // its result after something newer has already taken its place.
   const scanRequestIdRef = useRef(0);
-  const [manualBarcodeContext, setManualBarcodeContext] = useState<
-    string | null
-  >(null);
+  const [manualBarcodeContext, setManualBarcodeContext] = useState<{
+    barcode: string;
+    kind: 'not-found' | 'not-loggable';
+  } | null>(null);
   const [showAddProduct, setShowAddProduct] = useState(false);
+  const [notLoggableResolution, setNotLoggableResolution] =
+    useState<NotLoggableResolution | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editGrams, setEditGrams] = useState('');
@@ -335,7 +403,15 @@ export function FoodLog() {
         setScanStatus('not-found');
         return;
       }
+      if (product.resolution?.outcome === 'NOT_LOGGABLE') {
+        setPendingItems([]);
+        setNotLoggableResolution(product.resolution);
+        setScanStatus('not-loggable');
+        setStatus(null);
+        return;
+      }
       setPendingItems([toPackagedPendingItem(product)]);
+      setNotLoggableResolution(null);
       setScanStatus('found');
       setStatus(null);
     } catch (error) {
@@ -364,6 +440,7 @@ export function FoodLog() {
     setLastScannedBarcode(null);
     setScanAttempt((n) => n + 1);
     setShowAddProduct(false);
+    setNotLoggableResolution(null);
   }
 
   function cancelPendingScanRestart() {
@@ -428,6 +505,7 @@ export function FoodLog() {
 
   function handleProductCreated(product: PackagedProduct) {
     setPendingItems([toPackagedPendingItem(product)]);
+    setNotLoggableResolution(null);
     setShowAddProduct(false);
     setScanStatus('found');
     setStatus(null);
@@ -494,6 +572,7 @@ export function FoodLog() {
           <div className="flex flex-col gap-3">
             <div className="hud-frame overflow-hidden rounded-xl bg-black">
               {scanStatus !== 'not-found' &&
+                scanStatus !== 'not-loggable' &&
                 scanStatus !== 'invalid' &&
                 scanStatus !== 'unavailable' &&
                 scanStatus !== 'scanner-failed' && (
@@ -504,6 +583,7 @@ export function FoodLog() {
                   />
                 )}
               {(scanStatus === 'not-found' ||
+                scanStatus === 'not-loggable' ||
                 scanStatus === 'invalid' ||
                 scanStatus === 'unavailable' ||
                 scanStatus === 'scanner-failed') && (
@@ -526,25 +606,50 @@ export function FoodLog() {
               pendingItem?.sourceType === 'PACKAGED_PRODUCT' && (
                 <PackagedProductPreview product={pendingItem} />
               )}
+            {scanStatus === 'not-loggable' &&
+              notLoggableResolution &&
+              !showAddProduct && (
+                <NotLoggableProductPanel
+                  resolution={notLoggableResolution}
+                  onAdd={() => setShowAddProduct(true)}
+                  onSearch={() => {
+                    setManualBarcodeContext(
+                      lastScannedBarcode
+                        ? {
+                            barcode: lastScannedBarcode,
+                            kind: 'not-loggable',
+                          }
+                        : null,
+                    );
+                    setMode('manual');
+                  }}
+                  onRescan={rescan}
+                />
+              )}
             {scanStatus === 'not-found' && !showAddProduct && (
               <BarcodeNotFoundActions
                 onAdd={() => setShowAddProduct(true)}
                 onSearch={() => {
-                  setManualBarcodeContext(lastScannedBarcode);
+                  setManualBarcodeContext(
+                    lastScannedBarcode
+                      ? { barcode: lastScannedBarcode, kind: 'not-found' }
+                      : null,
+                  );
                   setMode('manual');
                 }}
                 onRescan={rescan}
               />
             )}
-            {scanStatus === 'not-found' && showAddProduct && (
-              <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
-                <AddProductForm
-                  barcode={lastScannedBarcode ?? ''}
-                  onCreated={handleProductCreated}
-                  onCancel={() => setShowAddProduct(false)}
-                />
-              </div>
-            )}
+            {(scanStatus === 'not-found' || scanStatus === 'not-loggable') &&
+              showAddProduct && (
+                <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+                  <AddProductForm
+                    barcode={lastScannedBarcode ?? ''}
+                    onCreated={handleProductCreated}
+                    onCancel={() => setShowAddProduct(false)}
+                  />
+                </div>
+              )}
             {scanStatus === 'unavailable' && (
               <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
                 <p className="text-body text-warn">
@@ -618,8 +723,17 @@ export function FoodLog() {
             </p>
             {manualBarcodeContext && (
               <p className="text-body text-text-muted">
-                Barcode {manualBarcodeContext} wasn't found — search for the
-                product by name instead.
+                {manualBarcodeContext.kind === 'not-found' ? (
+                  <>
+                    Barcode {manualBarcodeContext.barcode} wasn't found — search
+                    for the product by name instead.
+                  </>
+                ) : (
+                  <>
+                    Barcode {manualBarcodeContext.barcode} can't be logged
+                    safely — search for the product by name instead.
+                  </>
+                )}
               </p>
             )}
             <ManualFoodSearch

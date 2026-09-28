@@ -14,13 +14,45 @@ export type FoodMatchSourceType = Exclude<
 >;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
 export type BaseUnit = 'G' | 'ML';
-export type ContainerKey =
-  | 'PACKAGE'
-  | 'CAN'
-  | 'BOTTLE'
-  | 'JAR'
-  | 'BOX'
-  | 'BAG';
+export type ContainerKey = 'PACKAGE' | 'CAN' | 'BOTTLE' | 'JAR' | 'BOX' | 'BAG';
+export type PortionDimension = 'MASS' | 'VOLUME' | 'UNKNOWN';
+export type NutritionBasis = 'PER_100_G' | 'PER_100_ML';
+export type NotLoggableReason =
+  | 'DIMENSION_BASIS_CONFLICT'
+  | 'PORTION_DIMENSION_UNKNOWN'
+  | 'NUTRITION_BASIS_UNKNOWN';
+export type EffectiveNutritionBasis =
+  | {
+      basis: NutritionBasis;
+      origin: 'DECLARED';
+    }
+  | {
+      basis: NutritionBasis;
+      origin: 'INFERRED';
+      source: 'OPEN_FOOD_FACTS' | 'USER_SUBMITTED' | 'ADMIN';
+      ruleId:
+        | 'OPEN_FOOD_FACTS_PORTION_DIMENSION'
+        | 'LEGACY_USER_SUBMITTED_MASS_GRANDFATHERING';
+    };
+export type BarcodeResolution =
+  | {
+      outcome: 'LOGGABLE';
+      portionDimension: Exclude<PortionDimension, 'UNKNOWN'>;
+      effectiveNutritionBasis: EffectiveNutritionBasis;
+      package: { size: number; baseUnit: BaseUnit } | null;
+      serving: { size: number; baseUnit: BaseUnit } | null;
+      containerKey: ContainerKey;
+    }
+  | {
+      outcome: 'NOT_LOGGABLE';
+      display: {
+        name: string;
+        brand: string | null;
+        imageUrl: string | null;
+      };
+      subjectKind: 'PACKAGED_PRODUCT';
+      primaryReason: NotLoggableReason;
+    };
 
 export interface NutrientsPer100g {
   caloriesPer100g: number;
@@ -59,6 +91,7 @@ export interface PackagedProduct {
   country: string | null;
   source: 'OPEN_FOOD_FACTS' | 'USER_SUBMITTED' | 'ADMIN';
   verificationStatus: 'UNVERIFIED' | 'EXTERNAL' | 'VERIFIED';
+  resolution?: BarcodeResolution;
 }
 
 export interface LocalFoodItem extends NutrientsPer100g {

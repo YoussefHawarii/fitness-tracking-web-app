@@ -1,5 +1,13 @@
-import { BadRequestException } from '@nestjs/common';
-import { ProductSource } from '@prisma/client';
+import { BadRequestException, Logger } from '@nestjs/common';
+import {
+  BaseUnit,
+  ContainerKey,
+  NutritionBasis,
+  Prisma,
+  ProductSource,
+  VerificationStatus,
+  type PackagedProduct,
+} from '@prisma/client';
 import { ProductResolverService } from '../../src/modules/food/product-resolver.service';
 
 // Covers the resolution paths required by the Egyptian-catalog barcode
@@ -8,9 +16,61 @@ import { ProductResolverService } from '../../src/modules/food/product-resolver.
 // 500 for what is really "no provider could resolve this right now").
 describe('ProductResolverService.resolveBarcode', () => {
   const barcode = '3017620422003';
-  const localProduct = { id: 'local-row-1', barcode, name: 'Cached product' };
+  function productRow(
+    overrides: Partial<PackagedProduct> = {},
+  ): PackagedProduct {
+    return {
+      id: 'local-row-1',
+      barcode,
+      name: 'Cached product',
+      nameAr: null,
+      brand: null,
+      category: null,
+      servingSize: null,
+      servingUnit: null,
+      servingBaseUnit: null,
+      packageSize: new Prisma.Decimal(400),
+      packageUnit: 'g',
+      packageBaseUnit: BaseUnit.G,
+      containerKey: ContainerKey.JAR,
+      declaredNutritionBasis: null,
+      caloriesPer100g: new Prisma.Decimal(539),
+      proteinPer100g: null,
+      carbsPer100g: null,
+      fatPer100g: null,
+      fiberPer100g: null,
+      sugarPer100g: null,
+      sodiumPer100g: null,
+      imageUrl: null,
+      country: null,
+      source: ProductSource.OPEN_FOOD_FACTS,
+      sourceId: barcode,
+      verificationStatus: VerificationStatus.EXTERNAL,
+      createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      ...overrides,
+    };
+  }
+  const localProduct = productRow();
   const providerResult = { name: 'Nutella', caloriesPer100g: 539 };
-  const upsertedProduct = { id: 'new-row-1', barcode, name: 'Nutella' };
+  const upsertedProduct = productRow({ id: 'new-row-1', name: 'Nutella' });
+  const expectedResolution = {
+    outcome: 'LOGGABLE',
+    portionDimension: 'MASS',
+    effectiveNutritionBasis: {
+      basis: NutritionBasis.PER_100_G,
+      origin: 'INFERRED',
+      source: ProductSource.OPEN_FOOD_FACTS,
+      ruleId: 'OPEN_FOOD_FACTS_PORTION_DIMENSION',
+    },
+    package: { size: 400, baseUnit: BaseUnit.G },
+    serving: null,
+    containerKey: ContainerKey.JAR,
+  };
+
+  function found(product: PackagedProduct) {
+    return { status: 'found', product, resolution: expectedResolution };
+  }
 
   function buildService() {
     const packagedProducts = {
@@ -34,7 +94,7 @@ describe('ProductResolverService.resolveBarcode', () => {
 
     const result = await service.resolveBarcode(barcode);
 
-    expect(result).toEqual({ status: 'found', product: localProduct });
+    expect(result).toEqual(found(localProduct));
     expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
     expect(packagedProducts.upsertFromProvider).not.toHaveBeenCalled();
   });
@@ -53,7 +113,7 @@ describe('ProductResolverService.resolveBarcode', () => {
       providerResult,
       ProductSource.OPEN_FOOD_FACTS,
     );
-    expect(result).toEqual({ status: 'found', product: upsertedProduct });
+    expect(result).toEqual(found(upsertedProduct));
   });
 
   it('a barcode already resolved once is served from the local DB on the next lookup, without calling the provider again', async () => {
@@ -66,7 +126,7 @@ describe('ProductResolverService.resolveBarcode', () => {
     packagedProducts.findByBarcode.mockResolvedValueOnce(upsertedProduct); // now cached
     const second = await service.resolveBarcode(barcode);
 
-    expect(second).toEqual({ status: 'found', product: upsertedProduct });
+    expect(second).toEqual(found(upsertedProduct));
     expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledTimes(1); // not called again
   });
 
@@ -108,7 +168,12 @@ describe('ProductResolverService.resolveBarcode', () => {
     const { service, packagedProducts, openFoodFacts } = buildService();
     const upcA = '012345678905';
     const equivalentEan13 = '0012345678905';
-    const saved = { ...upsertedProduct, barcode: equivalentEan13 };
+    const saved = productRow({
+      id: upsertedProduct.id,
+      name: upsertedProduct.name,
+      barcode: equivalentEan13,
+      sourceId: equivalentEan13,
+    });
     packagedProducts.findByBarcode
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(saved);
@@ -118,7 +183,7 @@ describe('ProductResolverService.resolveBarcode', () => {
     await service.resolveBarcode(upcA);
     const second = await service.resolveBarcode(equivalentEan13);
 
-    expect(second).toEqual({ status: 'found', product: saved });
+    expect(second).toEqual(found(saved));
     expect(packagedProducts.findByBarcode).toHaveBeenNthCalledWith(
       1,
       equivalentEan13,
@@ -148,5 +213,36 @@ describe('ProductResolverService.resolveBarcode', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
     expect(packagedProducts.findByBarcode).not.toHaveBeenCalled();
     expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+  });
+
+  it('logs a discarded serving as diagnostics while returning a loggable product', async () => {
+    const { service, packagedProducts } = buildService();
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
+    packagedProducts.findByBarcode.mockResolvedValue(
+      productRow({
+        packageSize: new Prisma.Decimal(330),
+        packageUnit: 'ml',
+        packageBaseUnit: BaseUnit.ML,
+        servingSize: new Prisma.Decimal(330),
+        servingUnit: 'g',
+        servingBaseUnit: BaseUnit.G,
+        containerKey: ContainerKey.CAN,
+      }),
+    );
+
+    const result = await service.resolveBarcode(barcode);
+
+    expect(result).toMatchObject({
+      status: 'found',
+      resolution: {
+        outcome: 'LOGGABLE',
+        portionDimension: 'VOLUME',
+        serving: null,
+      },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('DIMENSION_MISMATCH'),
+    );
+    warn.mockRestore();
   });
 });

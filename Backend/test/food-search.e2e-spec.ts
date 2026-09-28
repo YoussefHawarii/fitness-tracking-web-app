@@ -8,6 +8,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { UsdaClient } from '../src/modules/food/clients/usda.client';
 import { OpenFoodFactsClient } from '../src/modules/food/clients/open-food-facts.client';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
+import { ProductSource, VerificationStatus } from '@prisma/client';
 import {
   importPackagedProducts,
   parsePackagedProductRecords,
@@ -302,6 +303,19 @@ describe('Food search + barcode reuse (e2e)', () => {
       carbsPer100g: number;
       fatPer100g: number;
       verificationStatus: string;
+      resolution: {
+        outcome: string;
+        portionDimension: string;
+        effectiveNutritionBasis: {
+          basis: string;
+          origin: string;
+          source: string;
+          ruleId: string;
+        };
+        package: { size: number; baseUnit: string };
+        serving: null;
+        containerKey: string;
+      };
     };
     const productId = firstBody.id;
     expect(firstBody).toMatchObject({
@@ -316,6 +330,19 @@ describe('Food search + barcode reuse (e2e)', () => {
       carbsPer100g: 30,
       fatPer100g: 10,
       verificationStatus: 'EXTERNAL',
+      resolution: {
+        outcome: 'LOGGABLE',
+        portionDimension: 'MASS',
+        effectiveNutritionBasis: {
+          basis: 'PER_100_G',
+          origin: 'INFERRED',
+          source: 'OPEN_FOOD_FACTS',
+          ruleId: 'OPEN_FOOD_FACTS_PORTION_DIMENSION',
+        },
+        package: { size: 150, baseUnit: 'G' },
+        serving: null,
+        containerKey: 'PACKAGE',
+      },
     });
 
     // Second scan of the same barcode: local DB hit -> Open Food Facts is
@@ -359,6 +386,50 @@ describe('Food search + barcode reuse (e2e)', () => {
     );
 
     await prisma.packagedProduct.delete({ where: { id: productId } });
+  });
+
+  it('returns a NOT_LOGGABLE resolution for a Not scalable cached Packaged product', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500008${testSuffix}`.padEnd(12, '8').slice(0, 12),
+    );
+    const product = await prisma.packagedProduct.create({
+      data: {
+        barcode,
+        name: 'Basis unknown product',
+        brand: 'Test Brand',
+        imageUrl: 'https://images.example/basis-unknown.jpg',
+        caloriesPer100g: 100,
+        packageSize: 500,
+        packageUnit: 'ml',
+        packageBaseUnit: 'ML',
+        source: ProductSource.ADMIN,
+        verificationStatus: VerificationStatus.UNVERIFIED,
+      },
+    });
+    const token = await newVerifiedUser('barcode-not-loggable');
+
+    const response = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      id: product.id,
+      name: 'Basis unknown product',
+      caloriesPer100g: 100,
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Basis unknown product',
+          brand: 'Test Brand',
+          imageUrl: 'https://images.example/basis-unknown.jpg',
+        },
+        subjectKind: 'PACKAGED_PRODUCT',
+        primaryReason: 'NUTRITION_BASIS_UNKNOWN',
+      },
+    });
+
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
   });
 
   it('returns 404 (not 500) when a barcode is unknown to both the local DB and Open Food Facts', async () => {
