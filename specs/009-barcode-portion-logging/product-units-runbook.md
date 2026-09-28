@@ -51,6 +51,7 @@ it is unknown.
 | Environment | Date | Rows | First run changed | Verify | Idempotent rerun |
 |---|---|---:|---:|---|---:|
 | Local Docker | 2026-09-28 | 10 | 8 | 0 violations | 0 |
+| Production Supabase — pre-contract gate (backend `5bdbb14` live) | 2026-09-29 | 0 | 0 | 0 violations | 0 |
 
 The dry run and real run both found 10 rows: 7 package pairs and 6 serving
 pairs needed normalization across 8 distinct rows. Three package pairs and

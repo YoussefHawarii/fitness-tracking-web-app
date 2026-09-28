@@ -77,6 +77,7 @@ retires `grams`.
 |-------------|------|-----------------------|---------|--------|---------|
 | Local Docker (4 rows reset to legacy state) | 2026-09-28 | 14 / 4 | 4 (rerun: 0) | 0 violating rows | 0 changed / missing / extra |
 | Production Supabase | 2026-09-28 | 0 / 0 | 0 | 0 violating rows | 0 changed / missing / extra |
+| Production Supabase — post-deploy re-run and pre-contract gate (backend `5bdbb14` live) | 2026-09-29 | 0 / 0 | 0 | 0 violating rows (incl. 0 invalid ML) | 0 changed / missing / extra |
 
 Production held no food log entries at the time of the run, so the backend
 service was not stopped: there was nothing for a concurrent write to race.
