@@ -451,6 +451,12 @@ contracts (spec M3). Decided in ticket 01. **Decided (2026-09-25):**
   ever gain fields during the transition, so an older frontend keeps working.
   This applies to the log create/update contracts (tickets 06, 08), the
   barcode-lookup response (05, 10) and the product-submission contract (12).
+- *Legacy product submission without a basis.* The deployed Add Product form
+  labels every nutrition field per 100 g, so an omitted basis is accepted as
+  a user-declared `PER_100_G`. The normal creation-time safety check still
+  rejects a volume package as `DIMENSION_BASIS_CONFLICT`; an explicitly
+  invalid basis is rejected by request validation. The current form requires
+  an explicit basis choice and never defaults the control.
 - *Release batch 05 + 06.* Ticket 05's resolver may merge first, but the
   frontend step that lets a user save an ML amount ships only with 06's
   server-side safety enforcement already live. Because the backend always

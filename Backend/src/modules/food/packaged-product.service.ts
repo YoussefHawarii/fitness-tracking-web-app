@@ -5,7 +5,9 @@ import {
   Logger,
 } from '@nestjs/common';
 import {
+  BaseUnit,
   ContainerKey,
+  NutritionBasis,
   Prisma,
   ProductSource,
   VerificationStatus,
@@ -19,6 +21,11 @@ import type {
 } from './providers/product-provider.interface';
 import { CreatePackagedProductDto } from './dto/create-packaged-product.dto';
 import { legacyUnitForBaseUnit, normalizeMeasurement } from './unit-normalizer';
+import {
+  PRODUCT_SUBMISSION_REJECTION_MESSAGES,
+  PRODUCT_SUBMISSION_REJECTION_REASONS,
+  type ProductSubmissionRejectionReason,
+} from './product-submission-rejection-reasons';
 
 export function isUniqueBarcodeViolation(err: unknown): boolean {
   return (
@@ -26,6 +33,13 @@ export function isUniqueBarcodeViolation(err: unknown): boolean {
     err.code === 'P2002' &&
     (err.meta?.target as string[] | undefined)?.includes('barcode') === true
   );
+}
+
+function productSubmissionError(reason: ProductSubmissionRejectionReason) {
+  return new BadRequestException({
+    message: PRODUCT_SUBMISSION_REJECTION_MESSAGES[reason],
+    reason,
+  });
 }
 
 // The local product catalog: reads/writes on PackagedProduct itself, with no
@@ -235,31 +249,60 @@ export class PackagedProductService {
       );
     }
     const barcode = normalized.canonical;
+    // The older deployed form explicitly labels every nutrition field per
+    // 100 g, so omitting this newer field is still a user declaration of a
+    // mass basis. Explicit values from the current form remain authoritative.
+    const declaredNutritionBasis =
+      dto.declaredNutritionBasis ?? NutritionBasis.PER_100_G;
+    const serving = normalizeMeasurement(dto.servingSize, dto.servingUnit);
+    const packageMeasurement = normalizeMeasurement(
+      dto.packageSize,
+      dto.packageUnit,
+    );
+    const portionBaseUnit =
+      packageMeasurement?.baseUnit ?? serving?.baseUnit ?? null;
+    const basisBaseUnit =
+      declaredNutritionBasis === NutritionBasis.PER_100_G
+        ? BaseUnit.G
+        : BaseUnit.ML;
+
+    if (portionBaseUnit && portionBaseUnit !== basisBaseUnit) {
+      throw productSubmissionError(
+        PRODUCT_SUBMISSION_REJECTION_REASONS.DIMENSION_BASIS_CONFLICT,
+      );
+    }
 
     try {
-      const created = await this.prisma.packagedProduct.create({
-        data: {
-          barcode,
-          name: dto.name,
-          nameAr: dto.nameAr ?? null,
-          brand: dto.brand ?? null,
-          category: dto.category ?? null,
-          servingSize: dto.servingSize ?? null,
-          servingUnit: dto.servingUnit ?? null,
-          packageSize: dto.packageSize ?? null,
-          packageUnit: dto.packageUnit ?? null,
-          caloriesPer100g: dto.caloriesPer100g,
-          proteinPer100g: dto.proteinPer100g,
-          carbsPer100g: dto.carbsPer100g,
-          fatPer100g: dto.fatPer100g,
-          fiberPer100g: dto.fiberPer100g ?? null,
-          sugarPer100g: dto.sugarPer100g ?? null,
-          sodiumPer100g: dto.sodiumPer100g ?? null,
-          country: dto.country ?? null,
-          source: ProductSource.USER_SUBMITTED,
-          sourceId: null,
-          verificationStatus: VerificationStatus.UNVERIFIED,
-        },
+      const created = await this.prisma.$transaction(async (tx) => {
+        const product = await tx.packagedProduct.create({
+          data: {
+            barcode,
+            name: dto.name,
+            nameAr: dto.nameAr ?? null,
+            brand: dto.brand ?? null,
+            category: dto.category ?? null,
+            servingSize: serving?.value ?? null,
+            servingUnit: serving?.legacyUnit ?? null,
+            servingBaseUnit: serving?.baseUnit ?? null,
+            packageSize: packageMeasurement?.value ?? null,
+            packageUnit: packageMeasurement?.legacyUnit ?? null,
+            packageBaseUnit: packageMeasurement?.baseUnit ?? null,
+            declaredNutritionBasis,
+            caloriesPer100g: dto.caloriesPer100g,
+            proteinPer100g: dto.proteinPer100g,
+            carbsPer100g: dto.carbsPer100g,
+            fatPer100g: dto.fatPer100g,
+            fiberPer100g: dto.fiberPer100g ?? null,
+            sugarPer100g: dto.sugarPer100g ?? null,
+            sodiumPer100g: dto.sodiumPer100g ?? null,
+            country: dto.country ?? null,
+            source: ProductSource.USER_SUBMITTED,
+            sourceId: null,
+            verificationStatus: VerificationStatus.UNVERIFIED,
+          },
+        });
+        await tx.identifiedBarcode.deleteMany({ where: { barcode } });
+        return product;
       });
       this.logger.log(`user-submitted product created: ${barcode}`);
       return created;

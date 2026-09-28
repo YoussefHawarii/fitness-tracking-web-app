@@ -10,6 +10,8 @@ let addProductModule;
 let foodServiceModule;
 let apiClientModule;
 let editPortionOptionsModule;
+let addProductGuardModule;
+let scannerLifecycleModule;
 
 before(async () => {
   vite = await createServer({
@@ -24,12 +26,16 @@ before(async () => {
     foodServiceModule,
     apiClientModule,
     editPortionOptionsModule,
+    addProductGuardModule,
+    scannerLifecycleModule,
   ] = await Promise.all([
     vite.ssrLoadModule('/src/pages/FoodLog.tsx'),
     vite.ssrLoadModule('/src/features/add-product/AddProductForm.tsx'),
     vite.ssrLoadModule('/src/services/foodService.ts'),
     vite.ssrLoadModule('/src/services/apiClient.ts'),
     vite.ssrLoadModule('/src/features/portion-selector/editPortionOptions.ts'),
+    vite.ssrLoadModule('/src/features/add-product/submissionGuard.ts'),
+    vite.ssrLoadModule('/src/features/barcode-scanner/scannerLifecycle.ts'),
   ]);
 });
 
@@ -368,7 +374,59 @@ test('nutrition extraction candidates become editable form values without creati
   );
   assert.match(formHtml, /Scan nutrition label \(optional\)/);
   assert.match(formHtml, /Product name \(required\)/);
-  assert.match(formHtml, /Calories \/ 100g \(required\)/);
+  assert.match(formHtml, /Nutrition basis \(required\)/);
+  assert.match(formHtml, /<select[^>]*required=""/);
+  assert.match(formHtml, /Per 100 g/);
+  assert.match(formHtml, /Per 100 ml/);
+  assert.match(formHtml, /Calories \/ selected basis \(required\)/);
   assert.match(formHtml, /Country/);
   assert.match(formHtml, /Create product/);
+});
+
+test('identified product identity pre-fills Add Product while basis remains user-supplied', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(addProductModule.AddProductForm, {
+      barcode: '3017620422003',
+      initialName: 'Known Regional Snack',
+      initialBrand: 'Regional Foods',
+      onCreated: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Barcode: 3017620422003/);
+  assert.match(html, /value="Known Regional Snack"/);
+  assert.match(html, /value="Regional Foods"/);
+  assert.match(html, /<option value="" selected="">Choose a basis<\/option>/);
+});
+
+test('Add Product blocks a missing basis without starting a request', () => {
+  let requests = 0;
+  const result = addProductGuardModule.withDeclaredNutritionBasis('', () => {
+    requests += 1;
+    return Promise.resolve();
+  });
+
+  assert.deepEqual(result, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('barcode scanning is paused for identified results and while Add Product is open', () => {
+  assert.equal(
+    scannerLifecycleModule.shouldMountBarcodeScanner(
+      'identified-no-nutrition',
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    scannerLifecycleModule.shouldMountBarcodeScanner('idle', true),
+    false,
+  );
+  assert.equal(
+    scannerLifecycleModule.shouldMountBarcodeScanner('idle', false),
+    true,
+  );
 });

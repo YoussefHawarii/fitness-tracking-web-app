@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { BarcodeScanner } from '../features/barcode-scanner/BarcodeScanner';
+import {
+  shouldMountBarcodeScanner,
+  type ScanStatus,
+} from '../features/barcode-scanner/scannerLifecycle';
 import { VoiceLogger } from '../features/voice-logger/VoiceLogger';
 import { ManualFoodSearch } from '../features/manual-food-search/ManualFoodSearch';
 import { AddProductForm } from '../features/add-product/AddProductForm';
@@ -75,17 +79,6 @@ export type PendingItem = {
   verificationStatus?: PackagedProduct['verificationStatus'] | null;
   resolution?: BarcodeResolution;
 };
-
-type ScanStatus =
-  | 'idle'
-  | 'looking-up'
-  | 'found'
-  | 'identified-no-nutrition'
-  | 'not-loggable'
-  | 'not-found'
-  | 'invalid'
-  | 'unavailable'
-  | 'scanner-failed';
 
 interface FoodLogEntry {
   id: string;
@@ -768,7 +761,7 @@ export function FoodLog() {
   }
 
   async function handleBarcodeDecoded(barcode: string) {
-    if (scanStatus === 'looking-up') return; // single-flight guard
+    if (showAddProduct || scanStatus === 'looking-up') return;
     cancelPendingScanRestart();
     const requestId = ++scanRequestIdRef.current;
     setLastScannedBarcode(barcode);
@@ -997,17 +990,13 @@ export function FoodLog() {
         {mode === 'barcode' && (
           <div className="flex flex-col gap-3">
             <div className="hud-frame overflow-hidden rounded-xl bg-black">
-              {scanStatus !== 'not-found' &&
-                scanStatus !== 'not-loggable' &&
-                scanStatus !== 'invalid' &&
-                scanStatus !== 'unavailable' &&
-                scanStatus !== 'scanner-failed' && (
-                  <BarcodeScanner
-                    key={scanAttempt}
-                    onDecoded={handleBarcodeDecoded}
-                    onScanError={handleScannerError}
-                  />
-                )}
+              {shouldMountBarcodeScanner(scanStatus, showAddProduct) && (
+                <BarcodeScanner
+                  key={scanAttempt}
+                  onDecoded={handleBarcodeDecoded}
+                  onScanError={handleScannerError}
+                />
+              )}
               {(scanStatus === 'not-found' ||
                 scanStatus === 'not-loggable' ||
                 scanStatus === 'identified-no-nutrition' ||
@@ -1074,7 +1063,18 @@ export function FoodLog() {
               showAddProduct && (
                 <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
                   <AddProductForm
+                    key={lastScannedBarcode ?? ''}
                     barcode={lastScannedBarcode ?? ''}
+                    initialName={
+                      scanStatus === 'identified-no-nutrition'
+                        ? notLoggableResolution?.display.name
+                        : undefined
+                    }
+                    initialBrand={
+                      scanStatus === 'identified-no-nutrition'
+                        ? (notLoggableResolution?.display.brand ?? undefined)
+                        : undefined
+                    }
                     onCreated={handleProductCreated}
                     onCancel={() => setShowAddProduct(false)}
                   />

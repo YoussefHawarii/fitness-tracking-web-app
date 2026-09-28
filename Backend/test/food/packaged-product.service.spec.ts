@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common';
 import {
   BaseUnit,
   ContainerKey,
+  NutritionBasis,
   Prisma,
   ProductSource,
   VerificationStatus,
@@ -9,6 +10,7 @@ import {
 } from '@prisma/client';
 import { PackagedProductService } from '../../src/modules/food/packaged-product.service';
 import type { CataloguableProductLookup } from '../../src/modules/food/providers/product-provider.interface';
+import { resolvePackagedProductPortion } from '../../src/modules/food/portion-resolution';
 
 function uniqueBarcodeViolation(): Prisma.PrismaClientKnownRequestError {
   return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
@@ -74,26 +76,36 @@ describe('PackagedProductService', () => {
   }
 
   function buildService() {
+    const packagedProduct = {
+      create: jest.fn(
+        (args: { data: Record<string, unknown> }): Promise<unknown> => {
+          void args;
+          return Promise.resolve(undefined);
+        },
+      ),
+      findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
+      updateMany: jest.fn(
+        (args: {
+          where: Record<string, unknown>;
+          data: Record<string, unknown>;
+        }): Promise<{ count: number }> => {
+          void args;
+          return Promise.resolve({ count: 0 });
+        },
+      ),
+    };
+    const identifiedBarcode = {
+      deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    };
+    const transactionClient = { packagedProduct, identifiedBarcode };
     const prisma = {
-      packagedProduct: {
-        create: jest.fn(
-          (args: { data: Record<string, unknown> }): Promise<unknown> => {
-            void args;
-            return Promise.resolve(undefined);
-          },
-        ),
-        findUnique: jest.fn(),
-        findUniqueOrThrow: jest.fn(),
-        updateMany: jest.fn(
-          (args: {
-            where: Record<string, unknown>;
-            data: Record<string, unknown>;
-          }): Promise<{ count: number }> => {
-            void args;
-            return Promise.resolve({ count: 0 });
-          },
-        ),
-      },
+      packagedProduct,
+      identifiedBarcode,
+      $transaction: jest.fn(
+        <T>(callback: (tx: typeof transactionClient) => Promise<T>) =>
+          callback(transactionClient),
+      ),
     };
     const service = new PackagedProductService(prisma as never);
     return { service, prisma };
@@ -438,6 +450,7 @@ describe('PackagedProductService', () => {
     const validDto = {
       barcode,
       name: 'Homemade Molokhia Mix',
+      declaredNutritionBasis: NutritionBasis.PER_100_G,
       caloriesPer100g: 90,
       proteinPer100g: 4,
       carbsPer100g: 10,
@@ -457,6 +470,238 @@ describe('PackagedProductService', () => {
       expect(data.source).toBe(ProductSource.USER_SUBMITTED);
       expect(data.verificationStatus).toBe(VerificationStatus.UNVERIFIED);
       expect(data.barcode).toBe(barcode);
+      expect(data.declaredNutritionBasis).toBe(NutritionBasis.PER_100_G);
+      expect(prisma.identifiedBarcode.deleteMany).toHaveBeenCalledWith({
+        where: { barcode },
+      });
+    });
+
+    it('treats a legacy submission without a basis as Declared PER_100_G', async () => {
+      const { service, prisma } = buildService();
+      const withoutBasis = { ...validDto } as Partial<typeof validDto>;
+      delete withoutBasis.declaredNutritionBasis;
+      prisma.packagedProduct.create.mockResolvedValue({ id: 'row-1' });
+
+      await service.createUserSubmitted({
+        ...withoutBasis,
+        packageSize: 250,
+        packageUnit: 'g',
+      } as never);
+
+      expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
+        {
+          packageSize: 250,
+          packageBaseUnit: BaseUnit.G,
+          declaredNutritionBasis: NutritionBasis.PER_100_G,
+        },
+      );
+    });
+
+    it('rejects a legacy submission without a basis when its package is VOLUME', async () => {
+      const { service, prisma } = buildService();
+      const withoutBasis = { ...validDto } as Partial<typeof validDto>;
+      delete withoutBasis.declaredNutritionBasis;
+
+      await expect(
+        service.createUserSubmitted({
+          ...withoutBasis,
+          packageSize: 330,
+          packageUnit: 'ml',
+        } as never),
+      ).rejects.toMatchObject({
+        response: { reason: 'DIMENSION_BASIS_CONFLICT' },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects PER_100_G with a 330 ml package as a dimension conflict', async () => {
+      const { service, prisma } = buildService();
+
+      await expect(
+        service.createUserSubmitted({
+          ...validDto,
+          packageSize: 330,
+          packageUnit: 'ml',
+        }),
+      ).rejects.toMatchObject({
+        response: { reason: 'DIMENSION_BASIS_CONFLICT' },
+      });
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('accepts a VOLUME package with a MASS serving and resolution discards the serving', async () => {
+      const { service, prisma } = buildService();
+      prisma.packagedProduct.create.mockResolvedValue({ id: 'row-1' });
+
+      await service.createUserSubmitted({
+        ...validDto,
+        declaredNutritionBasis: NutritionBasis.PER_100_ML,
+        packageSize: 330,
+        packageUnit: 'ml',
+        servingSize: 30,
+        servingUnit: 'g',
+      });
+
+      const data = prisma.packagedProduct.create.mock.calls[0][0].data;
+      const result = resolvePackagedProductPortion(
+        productRow({
+          source: ProductSource.USER_SUBMITTED,
+          packageSize: new Prisma.Decimal(data.packageSize as number),
+          packageBaseUnit: data.packageBaseUnit as BaseUnit,
+          servingSize: new Prisma.Decimal(data.servingSize as number),
+          servingBaseUnit: data.servingBaseUnit as BaseUnit,
+          declaredNutritionBasis: data.declaredNutritionBasis as NutritionBasis,
+        }),
+      );
+      expect(result.resolution).toMatchObject({
+        outcome: 'LOGGABLE',
+        portionDimension: 'VOLUME',
+        package: { size: 330, baseUnit: BaseUnit.ML },
+        serving: null,
+      });
+      expect(result.diagnostics.servingDiscardReason).toBe(
+        'DIMENSION_MISMATCH',
+      );
+    });
+
+    it('accepts PER_100_ML without package or serving as loggable Scenario E', async () => {
+      const { service, prisma } = buildService();
+      const created = productRow({
+        source: ProductSource.USER_SUBMITTED,
+        declaredNutritionBasis: NutritionBasis.PER_100_ML,
+      });
+      prisma.packagedProduct.create.mockResolvedValue(created);
+
+      await expect(
+        service.createUserSubmitted({
+          ...validDto,
+          declaredNutritionBasis: NutritionBasis.PER_100_ML,
+        }),
+      ).resolves.toBe(created);
+      expect(resolvePackagedProductPortion(created).resolution).toMatchObject({
+        outcome: 'LOGGABLE',
+        portionDimension: 'VOLUME',
+        package: null,
+        serving: null,
+      });
+    });
+
+    it('normalizes decimal litre input into the Base-unit columns', async () => {
+      const { service, prisma } = buildService();
+      prisma.packagedProduct.create.mockResolvedValue({ id: 'row-1' });
+
+      await service.createUserSubmitted({
+        ...validDto,
+        declaredNutritionBasis: NutritionBasis.PER_100_ML,
+        packageSize: 1.5,
+        packageUnit: 'L',
+      });
+
+      expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
+        {
+          packageSize: 1500,
+          packageUnit: 'ml',
+          packageBaseUnit: BaseUnit.ML,
+        },
+      );
+    });
+
+    it('stores a bare oz package as absent and still creates the product', async () => {
+      const { service, prisma } = buildService();
+      prisma.packagedProduct.create.mockResolvedValue({ id: 'row-1' });
+
+      await service.createUserSubmitted({
+        ...validDto,
+        packageSize: 12.5,
+        packageUnit: 'oz',
+      });
+
+      expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
+        {
+          packageSize: null,
+          packageUnit: null,
+          packageBaseUnit: null,
+        },
+      );
+    });
+
+    it.each(['oz', 'portion', 'mystery-unit'])(
+      'stores an unsupported serving unit (%s) as absent without rejecting',
+      async (servingUnit) => {
+        const { service, prisma } = buildService();
+        prisma.packagedProduct.create.mockResolvedValue({ id: 'row-1' });
+
+        await service.createUserSubmitted({
+          ...validDto,
+          servingSize: 12.5,
+          servingUnit,
+        });
+
+        expect(
+          prisma.packagedProduct.create.mock.calls[0][0].data,
+        ).toMatchObject({
+          servingSize: null,
+          servingUnit: null,
+          servingBaseUnit: null,
+        });
+      },
+    );
+
+    it('leaves the identification untouched when product creation fails', async () => {
+      const { service, prisma } = buildService();
+      prisma.packagedProduct.create.mockRejectedValue(
+        new Error('product insert failed'),
+      );
+
+      await expect(service.createUserSubmitted(validDto)).rejects.toThrow(
+        'product insert failed',
+      );
+      expect(prisma.identifiedBarcode.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('rolls back product creation when identification removal fails', async () => {
+      const persisted: { product: Record<string, unknown> | null } = {
+        product: null,
+      };
+      const prisma = {
+        packagedProduct: {},
+        $transaction: jest.fn(
+          async <T>(
+            callback: (tx: {
+              packagedProduct: {
+                create: (args: {
+                  data: Record<string, unknown>;
+                }) => Promise<unknown>;
+              };
+              identifiedBarcode: {
+                deleteMany: () => Promise<never>;
+              };
+            }) => Promise<T>,
+          ) => {
+            let stagedProduct: Record<string, unknown> | null = null;
+            const result = await callback({
+              packagedProduct: {
+                create: ({ data }) => {
+                  stagedProduct = data;
+                  return Promise.resolve({ id: 'row-1', ...data });
+                },
+              },
+              identifiedBarcode: {
+                deleteMany: () =>
+                  Promise.reject(new Error('identification removal failed')),
+              },
+            });
+            persisted.product = stagedProduct;
+            return result;
+          },
+        ),
+      };
+      const service = new PackagedProductService(prisma as never);
+
+      await expect(service.createUserSubmitted(validDto)).rejects.toThrow(
+        'identification removal failed',
+      );
+      expect(persisted.product).toBeNull();
     });
 
     it('rejects a barcode that is not a valid EAN-13/EAN-8/UPC-A/UPC-E with 400, not 409', async () => {
@@ -490,6 +735,7 @@ describe('PackagedProductService', () => {
       await expect(
         service.createUserSubmitted(validDto as never),
       ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.identifiedBarcode.deleteMany).not.toHaveBeenCalled();
     });
   });
 });

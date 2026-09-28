@@ -8,7 +8,11 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { UsdaClient } from '../src/modules/food/clients/usda.client';
 import { OpenFoodFactsClient } from '../src/modules/food/clients/open-food-facts.client';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
-import { ProductSource, VerificationStatus } from '@prisma/client';
+import {
+  NutritionBasis,
+  ProductSource,
+  VerificationStatus,
+} from '@prisma/client';
 import {
   importPackagedProducts,
   parsePackagedProductRecords,
@@ -678,6 +682,63 @@ describe('Food search + barcode reuse (e2e)', () => {
       .expect(400);
   });
 
+  it('treats a legacy product submission with a gram package as Declared PER_100_G', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500012${testSuffix}`.padEnd(12, '2').slice(0, 12),
+    );
+    const token = await newVerifiedUser('legacy-product-mass');
+
+    await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Legacy Mass Product',
+        packageSize: 250,
+        packageUnit: 'g',
+        caloriesPer100g: 100,
+        proteinPer100g: 2,
+        carbsPer100g: 20,
+        fatPer100g: 1,
+      })
+      .expect(201);
+
+    const created = await prisma.packagedProduct.findUniqueOrThrow({
+      where: { barcode },
+    });
+    expect(created.declaredNutritionBasis).toBe(NutritionBasis.PER_100_G);
+    await prisma.packagedProduct.delete({ where: { barcode } });
+  });
+
+  it('rejects a legacy product submission whose ml package conflicts with its per-100-g labels', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500013${testSuffix}`.padEnd(12, '3').slice(0, 12),
+    );
+    const token = await newVerifiedUser('legacy-product-volume');
+
+    const response = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Conflicting Legacy Drink',
+        packageSize: 330,
+        packageUnit: 'ml',
+        caloriesPer100g: 42,
+        proteinPer100g: 0,
+        carbsPer100g: 10.5,
+        fatPer100g: 0,
+      })
+      .expect(400);
+
+    expect(response.body).toMatchObject({
+      reason: 'DIMENSION_BASIS_CONFLICT',
+    });
+    await expect(
+      prisma.packagedProduct.findUnique({ where: { barcode } }),
+    ).resolves.toBeNull();
+  });
+
   it('keeps two pack sizes with the same brand and name as distinct products', async () => {
     const firstBarcode = ean13WithValidCheckDigit(
       `500005${testSuffix}`.padEnd(12, '6').slice(0, 12),
@@ -690,6 +751,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       name: 'Same Branded Drink',
       brand: 'Same Brand',
       packageUnit: 'ml',
+      declaredNutritionBasis: NutritionBasis.PER_100_ML,
       caloriesPer100g: 42,
       proteinPer100g: 0,
       carbsPer100g: 10.5,

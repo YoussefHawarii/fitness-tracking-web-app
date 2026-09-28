@@ -3,13 +3,18 @@ import {
   createPackagedProduct,
   extractNutritionLabel,
   ProductConflictError,
+  ProductSubmissionError,
+  type NutritionBasis,
   type PackagedProduct,
 } from '../../services/foodService';
-import { FieldLabel, Input } from '../../components/ui/Input';
+import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
+import { withDeclaredNutritionBasis } from './submissionGuard';
 
 interface Props {
   barcode: string;
+  initialName?: string;
+  initialBrand?: string;
   onCreated: (product: PackagedProduct) => void;
   onCancel?: () => void;
 }
@@ -41,10 +46,16 @@ export function validateNonNegative(v: string, label: string): string | null {
   return null;
 }
 
-export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
-  const [name, setName] = useState('');
+export function AddProductForm({
+  barcode,
+  initialName,
+  initialBrand,
+  onCreated,
+  onCancel,
+}: Props) {
+  const [name, setName] = useState(initialName ?? '');
   const [nameAr, setNameAr] = useState('');
-  const [brand, setBrand] = useState('');
+  const [brand, setBrand] = useState(initialBrand ?? '');
   const [category, setCategory] = useState('');
   const [caloriesPer100g, setCaloriesPer100g] = useState('');
   const [proteinPer100g, setProteinPer100g] = useState('');
@@ -57,6 +68,9 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
   const [servingUnit, setServingUnit] = useState('');
   const [packageSize, setPackageSize] = useState('');
   const [packageUnit, setPackageUnit] = useState('');
+  const [declaredNutritionBasis, setDeclaredNutritionBasis] = useState<
+    NutritionBasis | ''
+  >('');
   const [country, setCountry] = useState('');
 
   const [labelFile, setLabelFile] = useState<File | null>(null);
@@ -67,6 +81,12 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const nutritionBasisLabel =
+    declaredNutritionBasis === 'PER_100_G'
+      ? '100 g'
+      : declaredNutritionBasis === 'PER_100_ML'
+        ? '100 ml'
+        : 'selected basis';
 
   function toNumber(v: string): number | undefined {
     if (v.trim() === '') return undefined;
@@ -157,33 +177,46 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
     const serving = toNumber(servingSize);
     const pkgSize = toNumber(packageSize);
 
+    const submission = withDeclaredNutritionBasis(
+      declaredNutritionBasis,
+      (selectedNutritionBasis) =>
+        createPackagedProduct({
+          barcode,
+          name: name.trim(),
+          ...(nameAr.trim() && { nameAr: nameAr.trim() }),
+          ...(brand.trim() && { brand: brand.trim() }),
+          ...(category.trim() && { category: category.trim() }),
+          caloriesPer100g: cal,
+          proteinPer100g: prot,
+          carbsPer100g: carb,
+          fatPer100g: fat,
+          ...(fiber !== undefined && { fiberPer100g: fiber }),
+          ...(sugar !== undefined && { sugarPer100g: sugar }),
+          ...(sodium !== undefined && { sodiumPer100g: sodium }),
+          ...(serving !== undefined && { servingSize: serving }),
+          ...(servingUnit.trim() && { servingUnit: servingUnit.trim() }),
+          ...(pkgSize !== undefined && { packageSize: pkgSize }),
+          ...(packageUnit.trim() && { packageUnit: packageUnit.trim() }),
+          declaredNutritionBasis: selectedNutritionBasis,
+          ...(country.trim() && { country: country.trim() }),
+        }),
+    );
+    if (!submission.allowed) {
+      setError(submission.error);
+      return;
+    }
+
     setSubmitting(true);
     try {
-      const product = await createPackagedProduct({
-        barcode,
-        name: name.trim(),
-        ...(nameAr.trim() && { nameAr: nameAr.trim() }),
-        ...(brand.trim() && { brand: brand.trim() }),
-        ...(category.trim() && { category: category.trim() }),
-        caloriesPer100g: cal,
-        proteinPer100g: prot,
-        carbsPer100g: carb,
-        fatPer100g: fat,
-        ...(fiber !== undefined && { fiberPer100g: fiber }),
-        ...(sugar !== undefined && { sugarPer100g: sugar }),
-        ...(sodium !== undefined && { sodiumPer100g: sodium }),
-        ...(serving !== undefined && { servingSize: serving }),
-        ...(servingUnit.trim() && { servingUnit: servingUnit.trim() }),
-        ...(pkgSize !== undefined && { packageSize: pkgSize }),
-        ...(packageUnit.trim() && { packageUnit: packageUnit.trim() }),
-        ...(country.trim() && { country: country.trim() }),
-      });
+      const product = await submission.value;
       onCreated(product);
     } catch (err) {
       if (err instanceof ProductConflictError) {
         setError(
           'A product with this barcode already exists — try scanning again.',
         );
+      } else if (err instanceof ProductSubmissionError) {
+        setError(err.message);
       } else {
         setError('Could not create this product.');
       }
@@ -261,9 +294,24 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
         />
       </FieldLabel>
 
+      <FieldLabel>
+        Nutrition basis (required)
+        <Select
+          value={declaredNutritionBasis}
+          onChange={(e) =>
+            setDeclaredNutritionBasis(e.target.value as NutritionBasis | '')
+          }
+          required
+        >
+          <option value="">Choose a basis</option>
+          <option value="PER_100_G">Per 100 g</option>
+          <option value="PER_100_ML">Per 100 ml</option>
+        </Select>
+      </FieldLabel>
+
       <div className="grid grid-cols-2 gap-3">
         <FieldLabel>
-          Calories / 100g (required)
+          Calories / {nutritionBasisLabel} (required)
           <Input
             type="number"
             min={0}
@@ -273,7 +321,7 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
           />
         </FieldLabel>
         <FieldLabel>
-          Protein / 100g (required)
+          Protein / {nutritionBasisLabel} (required)
           <Input
             type="number"
             min={0}
@@ -283,7 +331,7 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
           />
         </FieldLabel>
         <FieldLabel>
-          Carbs / 100g (required)
+          Carbs / {nutritionBasisLabel} (required)
           <Input
             type="number"
             min={0}
@@ -293,7 +341,7 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
           />
         </FieldLabel>
         <FieldLabel>
-          Fat / 100g (required)
+          Fat / {nutritionBasisLabel} (required)
           <Input
             type="number"
             min={0}
@@ -303,7 +351,7 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
           />
         </FieldLabel>
         <FieldLabel>
-          Fiber / 100g
+          Fiber / {nutritionBasisLabel}
           <Input
             type="number"
             min={0}
@@ -313,7 +361,7 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
           />
         </FieldLabel>
         <FieldLabel>
-          Sugar / 100g
+          Sugar / {nutritionBasisLabel}
           <Input
             type="number"
             min={0}
@@ -323,7 +371,7 @@ export function AddProductForm({ barcode, onCreated, onCancel }: Props) {
           />
         </FieldLabel>
         <FieldLabel>
-          Sodium / 100g
+          Sodium / {nutritionBasisLabel}
           <Input
             type="number"
             min={0}

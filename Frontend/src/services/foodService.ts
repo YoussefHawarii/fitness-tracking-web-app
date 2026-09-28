@@ -340,6 +340,18 @@ export class ProductConflictError extends Error {
   }
 }
 
+export type ProductSubmissionRejectionReason = 'DIMENSION_BASIS_CONFLICT';
+
+export class ProductSubmissionError extends Error {
+  readonly reason: ProductSubmissionRejectionReason;
+
+  constructor(message: string, reason: ProductSubmissionRejectionReason) {
+    super(message);
+    this.name = 'ProductSubmissionError';
+    this.reason = reason;
+  }
+}
+
 export async function createPackagedProduct(input: {
   barcode: string;
   name: string;
@@ -350,6 +362,7 @@ export async function createPackagedProduct(input: {
   servingUnit?: string;
   packageSize?: number;
   packageUnit?: string;
+  declaredNutritionBasis: NutritionBasis;
   caloriesPer100g: number;
   proteinPer100g: number;
   carbsPer100g: number;
@@ -365,6 +378,20 @@ export async function createPackagedProduct(input: {
   } catch (err) {
     if (isAxiosError(err) && err.response?.status === 409) {
       throw new ProductConflictError();
+    }
+    const reason = isAxiosError(err) ? err.response?.data?.reason : undefined;
+    if (
+      isAxiosError(err) &&
+      err.response?.status === 400 &&
+      reason === 'DIMENSION_BASIS_CONFLICT'
+    ) {
+      const message = err.response?.data?.message;
+      throw new ProductSubmissionError(
+        typeof message === 'string'
+          ? message
+          : 'The product cannot be created with these portion details.',
+        reason,
+      );
     }
     throw err;
   }
