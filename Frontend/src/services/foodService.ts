@@ -13,6 +13,14 @@ export type FoodMatchSourceType = Exclude<
   'OPEN_FOOD_FACTS' | 'PACKAGED_PRODUCT'
 >;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
+export type BaseUnit = 'G' | 'ML';
+export type ContainerKey =
+  | 'PACKAGE'
+  | 'CAN'
+  | 'BOTTLE'
+  | 'JAR'
+  | 'BOX'
+  | 'BAG';
 
 export interface NutrientsPer100g {
   caloriesPer100g: number;
@@ -35,8 +43,11 @@ export interface PackagedProduct {
   category: string | null;
   servingSize: number | null;
   servingUnit: string | null;
+  servingBaseUnit?: BaseUnit | null;
   packageSize: number | null;
   packageUnit: string | null;
+  packageBaseUnit?: BaseUnit | null;
+  containerKey?: ContainerKey | null;
   caloriesPer100g: number;
   proteinPer100g: number | null;
   carbsPer100g: number | null;
@@ -161,8 +172,6 @@ export async function createFoodLog(input: {
   const { data } = await apiClient.post('/food/logs', input);
   return data;
 }
-
-export type BaseUnit = 'G' | 'ML';
 
 export interface FoodLogEntry {
   id: string;

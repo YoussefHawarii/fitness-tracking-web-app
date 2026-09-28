@@ -1,4 +1,4 @@
-import type { ProductSource } from '@prisma/client';
+import type { BaseUnit, ContainerKey, ProductSource } from '@prisma/client';
 
 // What a barcode provider hands back to ProductResolverService — already
 // mapped into this app's own field names, so the resolver never needs to
@@ -9,10 +9,16 @@ export interface ProductLookupResult {
   nameAr?: string | null;
   brand?: string | null;
   category?: string | null;
+  // Size values are expressed in the Base units named by the corresponding
+  // *BaseUnit fields. The compatibility free-text unit fields are not trusted
+  // by the persistence upsert; it derives lowercase units from the enums.
   servingSize?: number | null;
   servingUnit?: string | null;
+  servingBaseUnit?: BaseUnit | null;
   packageSize?: number | null;
   packageUnit?: string | null;
+  packageBaseUnit?: BaseUnit | null;
+  containerKey?: ContainerKey | null;
   caloriesPer100g: number;
   proteinPer100g?: number | null;
   carbsPer100g?: number | null;

@@ -4,12 +4,18 @@ import {
   Injectable,
   Logger,
 } from '@nestjs/common';
-import { Prisma, ProductSource, VerificationStatus } from '@prisma/client';
+import {
+  ContainerKey,
+  Prisma,
+  ProductSource,
+  VerificationStatus,
+} from '@prisma/client';
 import type { PackagedProduct } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { normalizeBarcode } from './barcode-normalizer';
 import type { ProductLookupResult } from './providers/product-provider.interface';
 import { CreatePackagedProductDto } from './dto/create-packaged-product.dto';
+import { legacyUnitForBaseUnit, normalizeMeasurement } from './unit-normalizer';
 
 function isUniqueBarcodeViolation(err: unknown): boolean {
   return (
@@ -49,6 +55,14 @@ export class PackagedProductService {
     data: ProductLookupResult,
     source: ProductSource,
   ): Promise<PackagedProduct> {
+    const serving = normalizeMeasurement(
+      data.servingSize,
+      legacyUnitForBaseUnit(data.servingBaseUnit),
+    );
+    const packageMeasurement = normalizeMeasurement(
+      data.packageSize,
+      legacyUnitForBaseUnit(data.packageBaseUnit),
+    );
     try {
       const created = await this.prisma.packagedProduct.create({
         data: {
@@ -57,10 +71,13 @@ export class PackagedProductService {
           nameAr: data.nameAr,
           brand: data.brand,
           category: data.category,
-          servingSize: data.servingSize,
-          servingUnit: data.servingUnit,
-          packageSize: data.packageSize,
-          packageUnit: data.packageUnit,
+          servingSize: serving?.value ?? null,
+          servingUnit: serving?.legacyUnit ?? null,
+          servingBaseUnit: serving?.baseUnit ?? null,
+          packageSize: packageMeasurement?.value ?? null,
+          packageUnit: packageMeasurement?.legacyUnit ?? null,
+          packageBaseUnit: packageMeasurement?.baseUnit ?? null,
+          containerKey: data.containerKey ?? ContainerKey.PACKAGE,
           caloriesPer100g: data.caloriesPer100g,
           proteinPer100g: data.proteinPer100g,
           carbsPer100g: data.carbsPer100g,

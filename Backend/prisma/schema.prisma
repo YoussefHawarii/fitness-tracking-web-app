@@ -62,6 +62,17 @@ enum BaseUnit {
   ML
 }
 
+// Presentation-only package noun derived from structured provider metadata.
+// PACKAGE is the generic fallback when no specific container is known.
+enum ContainerKey {
+  PACKAGE
+  CAN
+  BOTTLE
+  JAR
+  BOX
+  BAG
+}
+
 // How the consumed amount was chosen (specs/009-barcode-portion-logging).
 enum PortionKind {
   PACKAGE
@@ -338,13 +349,16 @@ model PackagedProduct {
 
   servingSize         Decimal?
   servingUnit         String?
+  servingBaseUnit     BaseUnit?
   packageSize         Decimal?
   packageUnit         String?
+  packageBaseUnit     BaseUnit?
+  containerKey        ContainerKey?
 
-  // Per 100g, matching this app's one existing nutrition convention
-  // (docs/business-logic.md §4) — including for liquids, since Open Food
-  // Facts' own `_100g` nutriment fields (the only ones this app reads) are
-  // populated for beverages too. caloriesPer100g is required: a product
+  // Per 100 Base units: 100 g for MASS or 100 ml for VOLUME (ADR 0006).
+  // The existing column names remain unchanged, and Open Food Facts' `_100g`
+  // fields are interpreted using its documented provider-specific rule.
+  // caloriesPer100g is required: a product
   // without usable calorie data is treated as "not found" at resolution time
   // (see ProductResolverService), the same data-quality bar Open Food
   // Facts/USDA lookups already enforce elsewhere in this module.

@@ -5,6 +5,7 @@ import type {
   ProductLookupResult,
   ProductProvider,
 } from './product-provider.interface';
+import { normalizeMeasurement } from '../unit-normalizer';
 
 // Thin adapter over the existing OpenFoodFactsClient — the HTTP call, OFF's
 // inconsistent not-found signaling, and the missing-calorie-data handling
@@ -22,16 +23,27 @@ export class OpenFoodFactsProvider implements ProductProvider {
   ): Promise<ProductLookupResult | null> {
     const product = await this.client.lookupByBarcode(canonicalBarcode);
     if (!product) return null;
+    const serving = normalizeMeasurement(
+      product.servingSize,
+      product.servingUnit,
+    );
+    const packageMeasurement = normalizeMeasurement(
+      product.packageSize,
+      product.packageUnit,
+    );
 
     return {
       name: product.name,
       nameAr: product.nameAr ?? null,
       brand: product.brand ?? null,
       category: product.category ?? null,
-      servingSize: product.servingSize ?? null,
-      servingUnit: product.servingUnit ?? null,
-      packageSize: product.packageSize ?? null,
-      packageUnit: product.packageUnit ?? null,
+      servingSize: serving?.value ?? null,
+      servingUnit: serving?.legacyUnit ?? null,
+      servingBaseUnit: serving?.baseUnit ?? null,
+      packageSize: packageMeasurement?.value ?? null,
+      packageUnit: packageMeasurement?.legacyUnit ?? null,
+      packageBaseUnit: packageMeasurement?.baseUnit ?? null,
+      containerKey: product.containerKey ?? null,
       caloriesPer100g: product.caloriesPer100g,
       proteinPer100g: product.proteinPer100g ?? null,
       carbsPer100g: product.carbsPer100g ?? null,

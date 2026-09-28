@@ -1,5 +1,8 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import type { BaseUnit, ContainerKey } from '@prisma/client';
 import type { NutrientsPer100g } from '../calorie-calculator';
+import { mapOffPackagingShapes } from '../container-key';
+import { normalizeMeasurement } from '../unit-normalizer';
 
 export const OPEN_FOOD_FACTS_TIMEOUT_MS = 8_000;
 
@@ -13,10 +16,13 @@ interface OpenFoodFactsResponse {
     countries?: string;
     image_front_url?: string;
     image_url?: string;
-    // Total quantity of the product as sold, e.g. "330ml" — maps to
-    // packageSize/packageUnit, distinct from serving_size below.
+    product_quantity?: number | string;
+    product_quantity_unit?: string;
+    serving_quantity?: number | string;
+    serving_quantity_unit?: string;
     quantity?: string;
     serving_size?: string;
+    packagings?: Array<{ shape?: string }>;
     nutriments?: {
       'energy-kcal_100g'?: number;
       proteins_100g?: number;
@@ -42,28 +48,16 @@ export interface OpenFoodFactsProduct extends NutrientsPer100g {
   category?: string | null;
   servingSize?: number | null;
   servingUnit?: string | null;
+  servingBaseUnit?: BaseUnit | null;
   packageSize?: number | null;
   packageUnit?: string | null;
+  packageBaseUnit?: BaseUnit | null;
+  containerKey?: ContainerKey | null;
   fiberPer100g?: number | null;
   sugarPer100g?: number | null;
   sodiumPer100g?: number | null;
   imageUrl?: string | null;
   country?: string | null;
-}
-
-// Best-effort parse of Open Food Facts' free-text size fields (e.g. "30 g",
-// "1 bar (40g)", "330ml"). Only accepts a clean "<number><unit>" match at the
-// start of the string — anything else is left null rather than guessed, per
-// this app's "don't fabricate missing data" rule.
-function parseSize(
-  text: string | undefined,
-): { size: number; unit: string } | null {
-  if (!text) return null;
-  const match = text.trim().match(/^([\d.]+)\s*([a-zA-Zµ]+)/);
-  if (!match) return null;
-  const size = Number(match[1]);
-  if (!Number.isFinite(size) || size <= 0) return null;
-  return { size, unit: match[2].toLowerCase() };
 }
 
 // OFF's `categories`/`countries` are comma-separated tag lists (broadest or
@@ -148,8 +142,14 @@ export class OpenFoodFactsClient {
     if (caloriesPer100g === undefined) {
       return null;
     }
-    const servingSize = parseSize(body.product.serving_size);
-    const packageSize = parseSize(body.product.quantity);
+    const serving = normalizeMeasurement(
+      body.product.serving_quantity,
+      body.product.serving_quantity_unit,
+    );
+    const packageMeasurement = normalizeMeasurement(
+      body.product.product_quantity,
+      body.product.product_quantity_unit,
+    );
     return {
       barcode,
       name: body.product.product_name ?? 'Unknown product',
@@ -160,10 +160,13 @@ export class OpenFoodFactsClient {
       nameAr: body.product.product_name_ar ?? null,
       brand: body.product.brands?.trim() || null,
       category: firstSegment(body.product.categories),
-      servingSize: servingSize?.size ?? null,
-      servingUnit: servingSize?.unit ?? null,
-      packageSize: packageSize?.size ?? null,
-      packageUnit: packageSize?.unit ?? null,
+      servingSize: serving?.value ?? null,
+      servingUnit: serving?.legacyUnit ?? null,
+      servingBaseUnit: serving?.baseUnit ?? null,
+      packageSize: packageMeasurement?.value ?? null,
+      packageUnit: packageMeasurement?.legacyUnit ?? null,
+      packageBaseUnit: packageMeasurement?.baseUnit ?? null,
+      containerKey: mapOffPackagingShapes(body.product.packagings),
       fiberPer100g: nutriments.fiber_100g ?? null,
       sugarPer100g: nutriments.sugars_100g ?? null,
       sodiumPer100g: nutriments.sodium_100g ?? null,

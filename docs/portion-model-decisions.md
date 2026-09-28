@@ -410,7 +410,24 @@ recorded here by the ticket named, with its evidence. None may override a
 settled requirement above or in the spec; if one would, the owner is asked.
 
 9.1 Final app-owned container keys and the Open Food Facts shape-tag mapping
-(spec G6). Decided in ticket 03. *Pending.*
+(spec G6). Decided in ticket 03. **Decided (2026-09-28):**
+
+- *Evidence.* Across 24 recorded single-product responses, the observed shape
+  counts were: `en:bottle` 6; `en:bag` 5; `en:drink-can` 4; `en:sleeve` 4;
+  `en:bottle-cap` 3; `en:box` 3; `en:can`, `en:envelope` and `en:film` 2 each;
+  and `en:Container`, `en:fastener`, `en:individual-bag`, `en:jar`, `en:label`,
+  `en:lid`, `en:packet`, `en:pot`, `en:seal` and `en:sheet` 1 each.
+- *Keys and mapping.* The closed app-owned key set is `PACKAGE`, `CAN`,
+  `BOTTLE`, `JAR`, `BOX`, `BAG`. `en:can` and `en:drink-can` map to `CAN`;
+  `en:bottle` to `BOTTLE`; `en:jar` and `en:pot` to `JAR`; `en:box` to `BOX`;
+  and `en:bag` and `en:packet` to `BAG`. Matching is case-insensitive, so the
+  inconsistent `en:Container` is recognized as generic rather than persisted.
+- *Primary-container rule.* Preserve provider order and choose the first
+  mapped physical container after ignoring closures and secondary wraps
+  (`bottle-cap`, `film`, `sleeve`, `individual-bag`, `envelope`, `lid`, plus
+  the observed `fastener`, `label`, `seal` and `sheet`). Unknown and generic
+  tags do not mask a later meaningful shape. If nothing maps, use `PACKAGE`.
+  These keys are presentation-only and raw tags are never persisted.
 
 9.2 Deployment-compatibility mechanism for the staged food-log rollout,
 including the create-path release batch, the transitional representation of ML
@@ -448,7 +465,22 @@ contracts (spec M3). Decided in ticket 01. **Decided (2026-09-25):**
 
 9.3 Whether conservative free-text Open Food Facts size parsing remains as a
 fallback beneath the structured numeric fields (spec E1). Decided in ticket 03.
-*Pending.*
+**Decided (2026-09-28):** Do not retain a free-text fallback.
+
+- *Evidence.* All 24 recorded found-product responses had both
+  `product_quantity` and `product_quantity_unit` (0/24 incomplete package
+  pairs). Five of 24 lacked a complete structured serving pair:
+  `serving_quantity` was absent in 5/24 and `serving_quantity_unit` in 4/24.
+  None of those five had a free-text `serving_size` that would yield a usable
+  value (0/5 recovered). The package free text therefore recovered 0 cases,
+  and serving free text recovered 0 cases.
+- *Rule.* Only the structured numeric value/unit pairs are normalized. A
+  missing or unusable structured pair remains absent. This removes an
+  unneeded parsing surface and preserves the no-guessing rule for ambiguous
+  or unsupported units. Explicit spelling aliases are accepted only when they
+  name the same unit (including common English/French spellings,
+  abbreviations, and the recorded Arabic vocabulary); ambiguous tokens such
+  as bare `oz` or a lone `fl` remain absent.
 
 9.4 The short-lived transient-provider-error backoff mechanism, if repeated
 provider calls during an outage need limiting (3.4) — whether one is needed,

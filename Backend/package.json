@@ -1,6 +1,6 @@
 {
   "name": "Backend",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "",
   "author": "",
   "private": true,
@@ -20,7 +20,8 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "db:seed": "prisma db seed",
     "db:import-products": "ts-node prisma/import-packaged-products.ts",
-    "db:backfill-amounts": "ts-node prisma/backfill-food-log-amounts.ts"
+    "db:backfill-amounts": "ts-node prisma/backfill-food-log-amounts.ts",
+    "db:normalize-product-units": "ts-node prisma/normalize-product-units.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

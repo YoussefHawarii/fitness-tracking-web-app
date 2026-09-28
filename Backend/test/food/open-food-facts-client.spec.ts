@@ -1,6 +1,9 @@
 import { ServiceUnavailableException } from '@nestjs/common';
 import { OpenFoodFactsClient } from '../../src/modules/food/clients/open-food-facts.client';
 import { OPEN_FOOD_FACTS_TIMEOUT_MS } from '../../src/modules/food/clients/open-food-facts.client';
+import { BaseUnit, ContainerKey } from '@prisma/client';
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Open Food Facts' real API is inconsistent about how it reports "no such
 // product": confirmed against the live API that a well-formed barcode with
@@ -24,6 +27,16 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
       status: response.status,
       json: () => Promise.resolve(response.body ?? {}),
     });
+  }
+
+  function mockRecordedFixture(name: string) {
+    const body = JSON.parse(
+      fs.readFileSync(
+        path.join(__dirname, 'fixtures', 'off', `${name}.json`),
+        'utf8',
+      ),
+    ) as unknown;
+    mockFetch({ ok: true, status: 200, body });
   }
 
   it('returns null on a genuine HTTP 404 (well-formed barcode, no product)', async () => {
@@ -75,8 +88,11 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
       category: null,
       servingSize: null,
       servingUnit: null,
+      servingBaseUnit: null,
       packageSize: null,
       packageUnit: null,
+      packageBaseUnit: null,
+      containerKey: ContainerKey.PACKAGE,
       fiberPer100g: null,
       sugarPer100g: null,
       sodiumPer100g: null,
@@ -99,7 +115,12 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
           countries: 'Egypt',
           image_front_url: 'https://images.example/chipsy.jpg',
           quantity: '150g',
+          product_quantity: 150,
+          product_quantity_unit: 'g',
           serving_size: '30 g',
+          serving_quantity: 30,
+          serving_quantity_unit: 'g',
+          packagings: [{ shape: 'en:bag' }],
           nutriments: {
             'energy-kcal_100g': 536,
             proteins_100g: 6.5,
@@ -125,13 +146,168 @@ describe('OpenFoodFactsClient.lookupByBarcode', () => {
       imageUrl: 'https://images.example/chipsy.jpg',
       packageSize: 150,
       packageUnit: 'g',
+      packageBaseUnit: BaseUnit.G,
       servingSize: 30,
       servingUnit: 'g',
+      servingBaseUnit: BaseUnit.G,
+      containerKey: ContainerKey.BAG,
       fiberPer100g: 4.2,
       sugarPer100g: 1.1,
       sodiumPer100g: 0.6,
     });
   });
+
+  it('uses numeric serving fields over free text and maps a volume can', async () => {
+    mockRecordedFixture('5449000000996');
+    const client = new OpenFoodFactsClient();
+
+    const result = await client.lookupByBarcode('5449000000996');
+
+    expect(result).toMatchObject({
+      packageSize: 330,
+      packageUnit: 'ml',
+      packageBaseUnit: BaseUnit.ML,
+      servingSize: 330,
+      servingUnit: 'ml',
+      servingBaseUnit: BaseUnit.ML,
+      containerKey: ContainerKey.CAN,
+    });
+  });
+
+  it('does not fall back to free-text sizes when structured pairs are absent', async () => {
+    mockFetch({
+      ok: true,
+      status: 200,
+      body: {
+        status: 1,
+        product: {
+          product_name: 'Text-only sizes',
+          quantity: '330 ml',
+          serving_size: '1 portion (330 ml)',
+          nutriments: { 'energy-kcal_100g': 42 },
+        },
+      },
+    });
+    const client = new OpenFoodFactsClient();
+
+    const result = await client.lookupByBarcode('123456');
+
+    expect(result).toMatchObject({
+      packageSize: null,
+      packageUnit: null,
+      packageBaseUnit: null,
+      servingSize: null,
+      servingUnit: null,
+      servingBaseUnit: null,
+    });
+  });
+
+  it.each([
+    [33, 'cl', 330, 'ml', BaseUnit.ML],
+    [0.33, 'L', 330, 'ml', BaseUnit.ML],
+    [1.5, 'l', 1500, 'ml', BaseUnit.ML],
+    [0.06, 'kg', 60, 'g', BaseUnit.G],
+    [8, 'fl oz', 236.5882365, 'ml', BaseUnit.ML],
+    [12, 'oz', null, null, null],
+    [1, 'portion', null, null, null],
+  ])(
+    'normalizes structured OFF package pair %s %s',
+    async (quantity, unit, value, legacyUnit, baseUnit) => {
+      mockFetch({
+        ok: true,
+        status: 200,
+        body: {
+          status: 1,
+          product: {
+            product_name: 'Synthetic product',
+            product_quantity: quantity,
+            product_quantity_unit: unit,
+            nutriments: { 'energy-kcal_100g': 42 },
+          },
+        },
+      });
+      const client = new OpenFoodFactsClient();
+
+      const result = await client.lookupByBarcode('123456');
+
+      expect(result).toMatchObject({
+        packageSize: value,
+        packageUnit: legacyUnit,
+        packageBaseUnit: baseUnit,
+      });
+    },
+  );
+
+  it('uses structured quantity fields despite noisy free-text quantity', async () => {
+    mockFetch({
+      ok: true,
+      status: 200,
+      body: {
+        status: 1,
+        product: {
+          product_name: 'Noisy quantity',
+          quantity: '500ml مل',
+          product_quantity: 500,
+          product_quantity_unit: 'ml',
+          nutriments: { 'energy-kcal_100g': 42 },
+        },
+      },
+    });
+    const client = new OpenFoodFactsClient();
+
+    await expect(client.lookupByBarcode('123456')).resolves.toEqual(
+      expect.objectContaining({
+        packageSize: 500,
+        packageUnit: 'ml',
+        packageBaseUnit: BaseUnit.ML,
+      }),
+    );
+  });
+
+  it('normalizes a recorded multipack to its total Base-unit volume', async () => {
+    mockRecordedFixture('7613035833289');
+    const client = new OpenFoodFactsClient();
+
+    const result = await client.lookupByBarcode('7613035833289');
+
+    expect(result).toMatchObject({
+      packageSize: 6000,
+      packageUnit: 'ml',
+      packageBaseUnit: BaseUnit.ML,
+      containerKey: ContainerKey.BOTTLE,
+    });
+  });
+
+  it('captures package and serving metadata in different dimensions as-is', async () => {
+    mockRecordedFixture('5000112637922');
+    const client = new OpenFoodFactsClient();
+
+    const result = await client.lookupByBarcode('5000112637922');
+
+    expect(result).toMatchObject({
+      packageSize: 330,
+      packageBaseUnit: BaseUnit.ML,
+      servingSize: 330,
+      servingBaseUnit: BaseUnit.G,
+      containerKey: ContainerKey.CAN,
+    });
+  });
+
+  it.each([
+    ['3017620422003', ContainerKey.JAR],
+    ['5053990101597', ContainerKey.BOX],
+    ['3046920022606', ContainerKey.PACKAGE],
+  ])(
+    'selects the primary container for fixture %s',
+    async (barcode, expected) => {
+      mockRecordedFixture(barcode);
+      const client = new OpenFoodFactsClient();
+
+      await expect(client.lookupByBarcode(barcode)).resolves.toEqual(
+        expect.objectContaining({ containerKey: expected }),
+      );
+    },
+  );
 
   it('returns null when the product exists but has no calorie data', async () => {
     mockFetch({

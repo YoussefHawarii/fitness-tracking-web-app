@@ -15,8 +15,11 @@ export function serializePackagedProduct(product: PackagedProduct) {
     category: product.category,
     servingSize: product.servingSize ? Number(product.servingSize) : null,
     servingUnit: product.servingUnit,
+    servingBaseUnit: product.servingBaseUnit,
     packageSize: product.packageSize ? Number(product.packageSize) : null,
     packageUnit: product.packageUnit,
+    packageBaseUnit: product.packageBaseUnit,
+    containerKey: product.containerKey,
     caloriesPer100g: Number(product.caloriesPer100g),
     proteinPer100g: product.proteinPer100g
       ? Number(product.proteinPer100g)
