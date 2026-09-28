@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   createPackagedProduct,
   extractNutritionLabel,
@@ -9,6 +9,7 @@ import {
 } from '../../services/foodService';
 import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
+import { completeNutritionLabelExtraction } from './extractionFormValues';
 import { withDeclaredNutritionBasis } from './submissionGuard';
 
 interface Props {
@@ -17,26 +18,6 @@ interface Props {
   initialBrand?: string;
   onCreated: (product: PackagedProduct) => void;
   onCancel?: () => void;
-}
-
-interface NutritionCandidate {
-  caloriesPer100g?: number;
-  proteinPer100g?: number;
-  carbsPer100g?: number;
-  fatPer100g?: number;
-  fiberPer100g?: number;
-  sugarPer100g?: number;
-  sodiumPer100g?: number;
-  servingSize?: number;
-  servingUnit?: string;
-}
-
-export function nutritionCandidateToFormValues(candidate: NutritionCandidate) {
-  return Object.fromEntries(
-    Object.entries(candidate)
-      .filter(([, value]) => value !== undefined)
-      .map(([field, value]) => [field, String(value)]),
-  );
 }
 
 export function validateNonNegative(v: string, label: string): string | null {
@@ -71,6 +52,7 @@ export function AddProductForm({
   const [declaredNutritionBasis, setDeclaredNutritionBasis] = useState<
     NutritionBasis | ''
   >('');
+  const basisSelectedByUser = useRef(false);
   const [country, setCountry] = useState('');
 
   const [labelFile, setLabelFile] = useState<File | null>(null);
@@ -99,30 +81,34 @@ export function AddProductForm({
     setLabelStatus('extracting');
     setLabelReason(null);
     try {
-      const result = await extractNutritionLabel(labelFile);
+      await completeNutritionLabelExtraction(extractNutritionLabel(labelFile), {
+        applyValues: (values) => {
+          if (values.caloriesPer100g !== undefined)
+            setCaloriesPer100g(values.caloriesPer100g);
+          if (values.proteinPer100g !== undefined)
+            setProteinPer100g(values.proteinPer100g);
+          if (values.carbsPer100g !== undefined)
+            setCarbsPer100g(values.carbsPer100g);
+          if (values.fatPer100g !== undefined) setFatPer100g(values.fatPer100g);
+          if (values.fiberPer100g !== undefined)
+            setFiberPer100g(values.fiberPer100g);
+          if (values.sugarPer100g !== undefined)
+            setSugarPer100g(values.sugarPer100g);
+          if (values.sodiumPer100g !== undefined)
+            setSodiumPer100g(values.sodiumPer100g);
+          if (values.servingSize !== undefined)
+            setServingSize(values.servingSize);
+          if (values.servingUnit !== undefined)
+            setServingUnit(values.servingUnit);
+        },
+        updateBasis: (resolveBasis) => {
+          setDeclaredNutritionBasis((currentBasis) =>
+            resolveBasis(currentBasis, basisSelectedByUser.current),
+          );
+        },
+        setUnavailableReason: setLabelReason,
+      });
       setLabelStatus('done');
-      if (result.available && result.candidate) {
-        const values = nutritionCandidateToFormValues(result.candidate);
-        if (values.caloriesPer100g !== undefined)
-          setCaloriesPer100g(values.caloriesPer100g);
-        if (values.proteinPer100g !== undefined)
-          setProteinPer100g(values.proteinPer100g);
-        if (values.carbsPer100g !== undefined)
-          setCarbsPer100g(values.carbsPer100g);
-        if (values.fatPer100g !== undefined) setFatPer100g(values.fatPer100g);
-        if (values.fiberPer100g !== undefined)
-          setFiberPer100g(values.fiberPer100g);
-        if (values.sugarPer100g !== undefined)
-          setSugarPer100g(values.sugarPer100g);
-        if (values.sodiumPer100g !== undefined)
-          setSodiumPer100g(values.sodiumPer100g);
-        if (values.servingSize !== undefined)
-          setServingSize(values.servingSize);
-        if (values.servingUnit !== undefined)
-          setServingUnit(values.servingUnit);
-      } else if (result.reason) {
-        setLabelReason(result.reason);
-      }
     } catch {
       setLabelStatus('done');
       setLabelReason('Could not process this image.');
@@ -298,9 +284,10 @@ export function AddProductForm({
         Nutrition basis (required)
         <Select
           value={declaredNutritionBasis}
-          onChange={(e) =>
-            setDeclaredNutritionBasis(e.target.value as NutritionBasis | '')
-          }
+          onChange={(e) => {
+            basisSelectedByUser.current = true;
+            setDeclaredNutritionBasis(e.target.value as NutritionBasis | '');
+          }}
           required
         >
           <option value="">Choose a basis</option>

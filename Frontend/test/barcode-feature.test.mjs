@@ -11,6 +11,7 @@ let foodServiceModule;
 let apiClientModule;
 let editPortionOptionsModule;
 let addProductGuardModule;
+let extractionFormValuesModule;
 let scannerLifecycleModule;
 
 before(async () => {
@@ -27,6 +28,7 @@ before(async () => {
     apiClientModule,
     editPortionOptionsModule,
     addProductGuardModule,
+    extractionFormValuesModule,
     scannerLifecycleModule,
   ] = await Promise.all([
     vite.ssrLoadModule('/src/pages/FoodLog.tsx'),
@@ -35,6 +37,7 @@ before(async () => {
     vite.ssrLoadModule('/src/services/apiClient.ts'),
     vite.ssrLoadModule('/src/features/portion-selector/editPortionOptions.ts'),
     vite.ssrLoadModule('/src/features/add-product/submissionGuard.ts'),
+    vite.ssrLoadModule('/src/features/add-product/extractionFormValues.ts'),
     vite.ssrLoadModule('/src/features/barcode-scanner/scannerLifecycle.ts'),
   ]);
 });
@@ -344,7 +347,7 @@ test('invalid barcodes stay distinct from confirmed not-found responses', async 
 });
 
 test('nutrition extraction candidates become editable form values without creating a product', () => {
-  const values = addProductModule.nutritionCandidateToFormValues({
+  const values = extractionFormValuesModule.nutritionCandidateToFormValues({
     caloriesPer100g: 0,
     proteinPer100g: 5,
     carbsPer100g: 12,
@@ -381,6 +384,197 @@ test('nutrition extraction candidates become editable form values without creati
   assert.match(formHtml, /Calories \/ selected basis \(required\)/);
   assert.match(formHtml, /Country/);
   assert.match(formHtml, /Create product/);
+});
+
+test('a confident nutrition-label basis suggestion pre-selects the form basis', () => {
+  const values = extractionFormValuesModule.nutritionExtractionToFormValues({
+    available: true,
+    candidate: { caloriesPer100g: 42 },
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: true,
+    },
+  });
+
+  assert.deepEqual(values, {
+    caloriesPer100g: '42',
+    declaredNutritionBasis: 'PER_100_ML',
+  });
+});
+
+test('a missing nutrition-label basis suggestion leaves submission blocked', () => {
+  const extraction = {
+    available: true,
+    candidate: { caloriesPer100g: 42 },
+  };
+  const basis = extractionFormValuesModule.nutritionBasisAfterExtraction(
+    extraction,
+    '',
+    false,
+  );
+  let requests = 0;
+  const result = addProductGuardModule.withDeclaredNutritionBasis(basis, () => {
+    requests += 1;
+  });
+
+  assert.equal(basis, '');
+  assert.deepEqual(result, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('an unconfident nutrition-label basis suggestion leaves submission blocked', () => {
+  const extraction = {
+    available: true,
+    candidate: { caloriesPer100g: 42 },
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: false,
+    },
+  };
+  const basis = extractionFormValuesModule.nutritionBasisAfterExtraction(
+    extraction,
+    '',
+    false,
+  );
+  let requests = 0;
+  const result = addProductGuardModule.withDeclaredNutritionBasis(basis, () => {
+    requests += 1;
+  });
+
+  assert.equal(basis, '');
+  assert.deepEqual(result, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('the user can replace a suggested basis and submits the replacement', () => {
+  const extraction = {
+    available: true,
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: true,
+    },
+  };
+  const suggestedBasis =
+    extractionFormValuesModule.nutritionBasisAfterExtraction(
+      extraction,
+      '',
+      false,
+    );
+  const userBasis = extractionFormValuesModule.nutritionBasisAfterExtraction(
+    extraction,
+    'PER_100_G',
+    true,
+  );
+  let submittedBasis;
+
+  assert.equal(suggestedBasis, 'PER_100_ML');
+  assert.equal(userBasis, 'PER_100_G');
+  const result = addProductGuardModule.withDeclaredNutritionBasis(
+    userBasis,
+    (basis) => {
+      submittedBasis = basis;
+      return basis;
+    },
+  );
+
+  assert.deepEqual(result, { allowed: true, value: 'PER_100_G' });
+  assert.equal(submittedBasis, 'PER_100_G');
+});
+
+test('Add Product keeps and submits a user basis selected while extraction is pending', async () => {
+  let resolveExtraction;
+  const extraction = new Promise((resolve) => {
+    resolveExtraction = resolve;
+  });
+  let basis = '';
+  let basisSelectedByUser = false;
+
+  const completion =
+    extractionFormValuesModule.completeNutritionLabelExtraction(extraction, {
+      applyValues: () => undefined,
+      updateBasis: (resolveBasis) => {
+        basis = resolveBasis(basis, basisSelectedByUser);
+      },
+      setUnavailableReason: () => undefined,
+    });
+
+  basis = 'PER_100_G';
+  basisSelectedByUser = true;
+  resolveExtraction({
+    available: true,
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: true,
+    },
+  });
+  await completion;
+
+  let submittedBasis;
+  const submission = addProductGuardModule.withDeclaredNutritionBasis(
+    basis,
+    (selectedBasis) => {
+      submittedBasis = selectedBasis;
+      return selectedBasis;
+    },
+  );
+  assert.equal(basis, 'PER_100_G');
+  assert.deepEqual(submission, { allowed: true, value: 'PER_100_G' });
+  assert.equal(submittedBasis, 'PER_100_G');
+});
+
+test('Add Product keeps the basis empty and blocks submit after the unavailable stub resolves', async () => {
+  let resolveExtraction;
+  const extraction = new Promise((resolve) => {
+    resolveExtraction = resolve;
+  });
+  let basis = '';
+  let unavailableReason;
+  let appliedValues = false;
+
+  const completion =
+    extractionFormValuesModule.completeNutritionLabelExtraction(extraction, {
+      applyValues: () => {
+        appliedValues = true;
+      },
+      updateBasis: (resolveBasis) => {
+        basis = resolveBasis(basis, false);
+      },
+      setUnavailableReason: (reason) => {
+        unavailableReason = reason;
+      },
+    });
+
+  resolveExtraction({
+    available: false,
+    reason:
+      'Automatic nutrition label scanning is not set up for this deployment yet — enter the values manually below.',
+  });
+  await completion;
+
+  let requests = 0;
+  const submission = addProductGuardModule.withDeclaredNutritionBasis(
+    basis,
+    () => {
+      requests += 1;
+    },
+  );
+  assert.equal(basis, '');
+  assert.equal(appliedValues, false);
+  assert.equal(
+    unavailableReason,
+    'Automatic nutrition label scanning is not set up for this deployment yet — enter the values manually below.',
+  );
+  assert.deepEqual(submission, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
 });
 
 test('identified product identity pre-fills Add Product while basis remains user-supplied', () => {

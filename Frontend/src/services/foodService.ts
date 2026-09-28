@@ -397,21 +397,33 @@ export async function createPackagedProduct(input: {
   }
 }
 
-export async function extractNutritionLabel(file: File): Promise<{
+export interface ExtractedNutritionCandidate {
+  caloriesPer100g?: number;
+  proteinPer100g?: number;
+  carbsPer100g?: number;
+  fatPer100g?: number;
+  fiberPer100g?: number;
+  sugarPer100g?: number;
+  sodiumPer100g?: number;
+  servingSize?: number;
+  servingUnit?: string;
+}
+
+export interface DeclaredNutritionBasisSuggestion {
+  basis: NutritionBasis;
+  confident: boolean;
+}
+
+export interface NutritionLabelExtractionResult {
   available: boolean;
   reason?: string;
-  candidate?: {
-    caloriesPer100g?: number;
-    proteinPer100g?: number;
-    carbsPer100g?: number;
-    fatPer100g?: number;
-    fiberPer100g?: number;
-    sugarPer100g?: number;
-    sodiumPer100g?: number;
-    servingSize?: number;
-    servingUnit?: string;
-  };
-}> {
+  basisSuggestion?: DeclaredNutritionBasisSuggestion;
+  candidate?: ExtractedNutritionCandidate;
+}
+
+export async function extractNutritionLabel(
+  file: File,
+): Promise<NutritionLabelExtractionResult> {
   const formData = new FormData();
   formData.append('image', file);
   const { data } = await apiClient.post(
