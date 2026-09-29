@@ -80,10 +80,8 @@ describe('parsePackagedProductRecords', () => {
 
     expect(record).toMatchObject({
       packageSize: 330,
-      packageUnit: 'ml',
       packageBaseUnit: BaseUnit.ML,
       servingSize: 60,
-      servingUnit: 'g',
       servingBaseUnit: BaseUnit.G,
       containerKey: ContainerKey.BOX,
     });
@@ -109,10 +107,8 @@ describe('parsePackagedProductRecords', () => {
 
     expect(record).toMatchObject({
       packageSize: null,
-      packageUnit: null,
       packageBaseUnit: null,
       servingSize: null,
-      servingUnit: null,
       servingBaseUnit: null,
       unrecognizedUnitTokens: ['bar'],
     });
@@ -180,10 +176,8 @@ describe('parsePackagedProductRecords', () => {
 
     expect(records[0]).toMatchObject({
       packageSize: null,
-      packageUnit: null,
       packageBaseUnit: null,
       servingSize: null,
-      servingUnit: null,
       servingBaseUnit: null,
       unrecognizedUnitTokens: ['stone', 'stone'],
     });
@@ -369,7 +363,6 @@ describe('importPackagedProducts', () => {
     expect(data.verificationStatus).toBe(VerificationStatus.EXTERNAL);
     expect(data.containerKey).toBe(ContainerKey.PACKAGE);
     expect(data.packageSize).toBe(330);
-    expect(data.packageUnit).toBe('ml');
     expect(data.packageBaseUnit).toBe(BaseUnit.ML);
   });
 });

@@ -1,5 +1,8 @@
 # Backfill runbook: legacy food log amounts (ticket 02)
 
+> Retired by the contract step. This tool references columns removed from the
+> contracted schema and can only be run from a pre-contract commit.
+
 Run every command from `Backend/` in Git Bash, in this order per
 environment: snapshot → backfill → verify → compare. The backfill is
 idempotent; re-running it changes nothing.

@@ -22,7 +22,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
       sourceRef: 'local-1',
       name: "Mom's lasagna",
       localFoodItemId: 'local-1',
-      grams: 100,
+      amount: 100,
+      amountUnit: 'G',
+      portionKind: null,
+      portionMultiplier: null,
       mealCategory: 'LUNCH',
       ...overrides.existing,
     };
@@ -86,19 +89,20 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     return { service, prisma, updateCalls, openFoodFacts, packagedProducts };
   }
 
-  it('recomputes calories proportionally to the new grams', async () => {
-    const { service, updateCalls } = buildService({
-      existing: { grams: 100 },
+  it('recomputes calories proportionally to the new amount', async () => {
+    const { service, updateCalls } = buildService();
+
+    await service.updateFoodLog(userId, 'log-1', {
+      amount: 250,
+      amountUnit: 'G',
     });
 
-    await service.updateFoodLog(userId, 'log-1', { grams: 250 });
-
-    expect(updateCalls[0].grams).toBe(250);
+    expect(updateCalls[0].amount).toBe(250);
     // 200 cal/100g * 250g = 500
     expect(updateCalls[0].caloriesComputed).toBe(500);
   });
 
-  it('updates mealCategory without requiring grams', async () => {
+  it('updates mealCategory without requiring an amount', async () => {
     const { service, updateCalls, prisma } = buildService();
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'DINNER' });
@@ -118,7 +122,6 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     });
 
     expect(updateCalls[0]).toMatchObject({
-      grams: 80,
       amount: 80,
       amountUnit: 'G',
       portionKind: 'CUSTOM',
@@ -165,7 +168,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
         openFoodFactsProduct: {},
       });
 
-    await service.updateFoodLog(userId, 'log-1', { grams: 40 });
+    await service.updateFoodLog(userId, 'log-1', {
+      amount: 40,
+      amountUnit: 'G',
+    });
 
     expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledWith('3017620422003');
     expect(packagedProducts.findById).not.toHaveBeenCalled();
@@ -224,7 +230,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     prisma.foodLogEntry.findFirst.mockResolvedValueOnce(null);
 
     await expect(
-      service.updateFoodLog(userId, 'log-1', { grams: 50 }),
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 50,
+        amountUnit: 'G',
+      }),
     ).rejects.toThrow(NotFoundException);
   });
 

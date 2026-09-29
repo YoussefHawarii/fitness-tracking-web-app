@@ -71,13 +71,9 @@ describe('UpdateFoodLogDto through the global ValidationPipe', () => {
     },
   );
 
-  it('accepts meal-only, legacy grams, and explicit amount updates', async () => {
+  it('accepts meal-only and explicit amount updates', async () => {
     const mealOnly: unknown = await globalValidationPipe.transform(
       { mealCategory: 'DINNER' },
-      metadata,
-    );
-    const legacy: unknown = await globalValidationPipe.transform(
-      { grams: 999_999_999.9 },
       metadata,
     );
     const explicit: unknown = await globalValidationPipe.transform(
@@ -91,7 +87,6 @@ describe('UpdateFoodLogDto through the global ValidationPipe', () => {
     );
 
     expect(mealOnly).toMatchObject({ mealCategory: 'DINNER' });
-    expect(legacy).toMatchObject({ grams: 999_999_999.9 });
     expect(explicit).toMatchObject({
       amount: 330,
       amountUnit: 'ML',
@@ -100,12 +95,16 @@ describe('UpdateFoodLogDto through the global ValidationPipe', () => {
     });
   });
 
+  it('rejects the retired grams request field through the whitelist', async () => {
+    await expect(
+      globalValidationPipe.transform(
+        { amount: 10, amountUnit: 'G', grams: 10 },
+        metadata,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it.each([
-    [
-      'both amount fields',
-      { grams: 10, amount: 10, amountUnit: 'G' },
-      FOOD_LOG_REJECTION_REASONS.EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED,
-    ],
     [
       'amount without unit',
       { amount: 10 },
@@ -115,11 +114,6 @@ describe('UpdateFoodLogDto through the global ValidationPipe', () => {
       'unit without amount',
       { amountUnit: 'G' },
       FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_WITHOUT_AMOUNT,
-    ],
-    [
-      'portion fields on legacy grams',
-      { grams: 10, portionKind: 'CUSTOM' },
-      FOOD_LOG_REJECTION_REASONS.LEGACY_GRAMS_PORTION_FIELDS_FORBIDDEN,
     ],
     [
       'structured choice without multiplier',

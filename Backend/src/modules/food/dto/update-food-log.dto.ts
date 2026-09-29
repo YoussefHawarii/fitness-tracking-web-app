@@ -14,10 +14,6 @@ import type {
 export class UpdateFoodLogDto {
   @HasValidFoodLogUpdateShape()
   @IsConsumedAmount()
-  grams?: number;
-
-  @ValidateIf((_object, value) => value !== undefined)
-  @IsConsumedAmount()
   amount?: number;
 
   @ValidateIf((_object, value) => value !== undefined)

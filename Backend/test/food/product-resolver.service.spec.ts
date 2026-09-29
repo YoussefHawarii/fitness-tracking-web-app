@@ -35,10 +35,8 @@ describe('ProductResolverService.resolveBarcode', () => {
       brand: null,
       category: null,
       servingSize: null,
-      servingUnit: null,
       servingBaseUnit: null,
       packageSize: new Prisma.Decimal(400),
-      packageUnit: 'g',
       packageBaseUnit: BaseUnit.G,
       containerKey: ContainerKey.JAR,
       declaredNutritionBasis: null,
@@ -115,10 +113,8 @@ describe('ProductResolverService.resolveBarcode', () => {
   ): PackagedProduct {
     return productRow({
       packageSize: null,
-      packageUnit: null,
       packageBaseUnit: null,
       servingSize: null,
-      servingUnit: null,
       servingBaseUnit: null,
       containerKey: ContainerKey.PACKAGE,
       ...overrides,
@@ -200,10 +196,8 @@ describe('ProductResolverService.resolveBarcode', () => {
     packagedProducts.findByBarcode.mockResolvedValue(
       productRow({
         packageSize: null,
-        packageUnit: null,
         packageBaseUnit: null,
         servingSize: new Prisma.Decimal(30),
-        servingUnit: 'g',
         servingBaseUnit: BaseUnit.G,
       }),
     );
@@ -260,7 +254,6 @@ describe('ProductResolverService.resolveBarcode', () => {
     };
     const refreshed = unknownPortionProduct({
       packageSize: new Prisma.Decimal(330),
-      packageUnit: 'ml',
       packageBaseUnit: BaseUnit.ML,
       containerKey: ContainerKey.CAN,
       lastProviderCheckAt: now,
@@ -435,10 +428,8 @@ describe('ProductResolverService.resolveBarcode', () => {
     };
     const refreshed = unknownPortionProduct({
       packageSize: new Prisma.Decimal(330),
-      packageUnit: 'ml',
       packageBaseUnit: BaseUnit.ML,
       servingSize: new Prisma.Decimal(30),
-      servingUnit: 'g',
       servingBaseUnit: BaseUnit.G,
       lastProviderCheckAt: now,
     });
@@ -909,10 +900,8 @@ describe('ProductResolverService.resolveBarcode', () => {
     packagedProducts.findByBarcode.mockResolvedValue(
       productRow({
         packageSize: new Prisma.Decimal(330),
-        packageUnit: 'ml',
         packageBaseUnit: BaseUnit.ML,
         servingSize: new Prisma.Decimal(330),
-        servingUnit: 'g',
         servingBaseUnit: BaseUnit.G,
         containerKey: ContainerKey.CAN,
       }),

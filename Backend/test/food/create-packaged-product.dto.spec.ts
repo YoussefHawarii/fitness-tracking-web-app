@@ -1,6 +1,8 @@
 import { validate } from 'class-validator';
 import { NutritionBasis } from '@prisma/client';
+import type { ArgumentMetadata } from '@nestjs/common';
 import { CreatePackagedProductDto } from '../../src/modules/food/dto/create-packaged-product.dto';
+import { globalValidationPipe } from '../../src/common/pipes/validation.pipe';
 
 const validInput = {
   barcode: '3017620422003',
@@ -10,6 +12,12 @@ const validInput = {
   proteinPer100g: 5,
   carbsPer100g: 12,
   fatPer100g: 3,
+};
+
+const metadata: ArgumentMetadata = {
+  type: 'body',
+  metatype: CreatePackagedProductDto,
+  data: undefined,
 };
 
 function dtoFrom(input: Record<string, unknown>): CreatePackagedProductDto {
@@ -45,11 +53,27 @@ describe('CreatePackagedProductDto', () => {
     },
   );
 
-  it('accepts an absent Declared basis for the legacy product-submission shape', async () => {
+  it('requires an explicit Declared basis', async () => {
     const input: Record<string, unknown> = { ...validInput };
     delete input.declaredNutritionBasis;
 
-    await expect(validate(dtoFrom(input))).resolves.toEqual([]);
+    const errors = await validate(dtoFrom(input));
+
+    expect(
+      errors.find((error) => error.property === 'declaredNutritionBasis')
+        ?.constraints,
+    ).toMatchObject({
+      isDefined: 'DECLARED_NUTRITION_BASIS_REQUIRED',
+    });
+
+    await expect(
+      globalValidationPipe.transform(input, metadata),
+    ).rejects.toMatchObject({
+      response: {
+        reason: 'DECLARED_NUTRITION_BASIS_REQUIRED',
+        message: 'declaredNutritionBasis is required.',
+      },
+    });
   });
 
   it.each([

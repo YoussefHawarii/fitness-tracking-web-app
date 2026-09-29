@@ -50,21 +50,13 @@ export class CreateFoodLogDto {
   @MaxLength(200)
   name?: string;
 
-  // Compatibility reader: a legacy grams-only request is interpreted as a
-  // G amount and stored with no structured Portion choice.
-  @ValidateIf((_object, value) => value !== undefined)
   @IsConsumedAmount()
-  grams?: number;
+  amount: number;
 
-  @ValidateIf((_object, value) => value !== undefined)
-  @IsConsumedAmount()
-  amount?: number;
-
-  @ValidateIf((_object, value) => value !== undefined)
   @IsIn(['G', 'ML'], {
     message: FOOD_LOG_REJECTION_REASONS.INVALID_AMOUNT_UNIT,
   })
-  amountUnit?: FoodLogAmountUnit;
+  amountUnit: FoodLogAmountUnit;
 
   @ValidateIf((_object, value) => value !== undefined)
   @IsIn(['PACKAGE', 'SERVING', 'CUSTOM'], {

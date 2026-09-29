@@ -5,14 +5,11 @@ import { TECHNICAL_INPUT_VALIDATION_REASONS } from './consumed-amount-validation
 // while `message` remains free to be rewritten for people.
 export const FOOD_LOG_REJECTION_REASONS = {
   ...TECHNICAL_INPUT_VALIDATION_REASONS,
-  EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED:
-    'EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED',
+  AMOUNT_REQUIRED: 'AMOUNT_REQUIRED',
   AMOUNT_UNIT_REQUIRED: 'AMOUNT_UNIT_REQUIRED',
   AMOUNT_UNIT_WITHOUT_AMOUNT: 'AMOUNT_UNIT_WITHOUT_AMOUNT',
   INVALID_AMOUNT_UNIT: 'INVALID_AMOUNT_UNIT',
   INVALID_PORTION_KIND: 'INVALID_PORTION_KIND',
-  LEGACY_GRAMS_PORTION_FIELDS_FORBIDDEN:
-    'LEGACY_GRAMS_PORTION_FIELDS_FORBIDDEN',
   PORTION_MULTIPLIER_REQUIRED: 'PORTION_MULTIPLIER_REQUIRED',
   PORTION_MULTIPLIER_FORBIDDEN: 'PORTION_MULTIPLIER_FORBIDDEN',
   PORTION_MULTIPLIER_WITHOUT_PORTION_KIND:
@@ -42,14 +39,11 @@ export const FOOD_LOG_REJECTION_MESSAGES: Record<
   NEGATIVE: 'The amount must be greater than zero.',
   TOO_PRECISE: 'The amount may have at most one decimal place.',
   TOO_LARGE: 'The amount is outside the supported technical range.',
-  EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED:
-    'Provide exactly one of grams or amount.',
+  AMOUNT_REQUIRED: 'amount is required.',
   AMOUNT_UNIT_REQUIRED: 'amountUnit is required when amount is provided.',
   AMOUNT_UNIT_WITHOUT_AMOUNT: 'amountUnit may only be provided with amount.',
   INVALID_AMOUNT_UNIT: 'amountUnit must be G or ML.',
   INVALID_PORTION_KIND: 'portionKind must be PACKAGE, SERVING, or CUSTOM.',
-  LEGACY_GRAMS_PORTION_FIELDS_FORBIDDEN:
-    'A legacy grams request cannot include portion fields.',
   PORTION_MULTIPLIER_REQUIRED:
     'portionMultiplier is required for a package or serving choice.',
   PORTION_MULTIPLIER_FORBIDDEN:

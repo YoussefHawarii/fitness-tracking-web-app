@@ -76,11 +76,9 @@ export interface PackagedProduct {
   brand: string | null;
   category: string | null;
   servingSize: number | null;
-  servingUnit: string | null;
-  servingBaseUnit?: BaseUnit | null;
+  servingBaseUnit: BaseUnit | null;
   packageSize: number | null;
-  packageUnit: string | null;
-  packageBaseUnit?: BaseUnit | null;
+  packageBaseUnit: BaseUnit | null;
   containerKey?: ContainerKey | null;
   caloriesPer100g: number;
   proteinPer100g: number | null;
@@ -224,23 +222,12 @@ type CreateFoodLogBase = {
   loggedAtUtc: string;
 };
 
-export type CreateFoodLogInput = CreateFoodLogBase &
-  (
-    | {
-        grams: number;
-        amount?: never;
-        amountUnit?: never;
-        portionKind?: never;
-        portionMultiplier?: never;
-      }
-    | {
-        grams?: never;
-        amount: number;
-        amountUnit: BaseUnit;
-        portionKind?: PortionKind;
-        portionMultiplier?: number;
-      }
-  );
+export type CreateFoodLogInput = CreateFoodLogBase & {
+  amount: number;
+  amountUnit: BaseUnit;
+  portionKind?: PortionKind;
+  portionMultiplier?: number;
+};
 
 export async function createFoodLog(input: CreateFoodLogInput) {
   const { data } = await apiClient.post('/food/logs', input);
@@ -254,12 +241,8 @@ export interface FoodLogEntry {
   localFoodItemId: string | null;
   packagedProductId?: string | null;
   name: string;
-  grams: string | null;
-  // Explicit consumed amount, dual-written by the backend alongside grams
-  // for G entries. Absent/null on rows (or
-  // older backends) that only carry grams.
-  amount?: string | null;
-  amountUnit?: BaseUnit | null;
+  amount: string;
+  amountUnit: BaseUnit;
   portionKind?: PortionKind | null;
   portionMultiplier?: string | null;
   caloriesComputed: string;
@@ -270,22 +253,17 @@ export interface FoodLogEntry {
   loggedAtUtc: string;
 }
 
-// Displayed quantity for history rendering and edit pre-fill: prefer the
-// explicit amount, falling back to grams when amount is null/absent (a
-// grams-only response from a row or backend predating dual-write). Display
 export function getEntryDisplayAmount(entry: {
-  amount?: string | number | null;
-  grams?: string | number | null;
-}): string | number | null | undefined {
-  return entry.amount ?? entry.grams;
+  amount: string | number;
+}): string | number {
+  return entry.amount;
 }
 
 // G entries retain the existing whole-gram display. ML entries expose their
 // stored Base unit and preserve the supported one-decimal input precision.
 export function formatEntryAmount(entry: {
-  amount?: string | number | null;
-  grams?: string | number | null;
-  amountUnit?: BaseUnit | null;
+  amount: string | number;
+  amountUnit: BaseUnit;
 }): string {
   const value = Number(getEntryDisplayAmount(entry) ?? 0);
   if (entry.amountUnit === 'ML') {
@@ -298,11 +276,8 @@ export function formatEntryAmount(entry: {
 }
 
 // Exact string FoodLog's startEdit puts in the edit input.
-export function getEditPrefill(entry: {
-  amount?: string | number | null;
-  grams?: string | number | null;
-}): string {
-  return String(getEntryDisplayAmount(entry) ?? '');
+export function getEditPrefill(entry: { amount: string | number }): string {
+  return String(getEntryDisplayAmount(entry));
 }
 
 export async function listFoodLogsForDay(
@@ -322,8 +297,7 @@ export async function updateFoodLog(
         portionKind?: PortionKind;
         portionMultiplier?: number;
         mealCategory: MealCategory;
-      }
-    | { grams: number; mealCategory?: MealCategory },
+      },
 ): Promise<FoodLogEntry> {
   const { data } = await apiClient.patch(`/food/logs/${id}`, input);
   return data;
@@ -340,7 +314,8 @@ export class ProductConflictError extends Error {
   }
 }
 
-export type ProductSubmissionRejectionReason = 'DIMENSION_BASIS_CONFLICT';
+export type ProductSubmissionRejectionReason =
+  'DECLARED_NUTRITION_BASIS_REQUIRED' | 'DIMENSION_BASIS_CONFLICT';
 
 export class ProductSubmissionError extends Error {
   readonly reason: ProductSubmissionRejectionReason;
@@ -383,7 +358,8 @@ export async function createPackagedProduct(input: {
     if (
       isAxiosError(err) &&
       err.response?.status === 400 &&
-      reason === 'DIMENSION_BASIS_CONFLICT'
+      (reason === 'DECLARED_NUTRITION_BASIS_REQUIRED' ||
+        reason === 'DIMENSION_BASIS_CONFLICT')
     ) {
       const message = err.response?.data?.message;
       throw new ProductSubmissionError(

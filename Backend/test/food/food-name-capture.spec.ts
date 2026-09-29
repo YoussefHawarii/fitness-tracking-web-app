@@ -71,7 +71,8 @@ describe('FoodService — name capture on createFoodLog', () => {
     await service.createFoodLog(userId, {
       sourceType: 'USDA',
       sourceRef: '123',
-      grams: 100,
+      amount: 100,
+      amountUnit: 'G',
       mealCategory: 'BREAKFAST',
       loggedAtUtc: '2026-08-30T08:00:00.000Z',
     });
@@ -93,7 +94,8 @@ describe('FoodService — name capture on createFoodLog', () => {
       service.createFoodLog(userId, {
         sourceType: 'OPEN_FOOD_FACTS',
         sourceRef: '0000000000000',
-        grams: 40,
+        amount: 40,
+        amountUnit: 'G',
         mealCategory: 'BREAKFAST',
         loggedAtUtc: '2026-08-30T08:00:00.000Z',
       }),
@@ -124,7 +126,8 @@ describe('FoodService — name capture on createFoodLog', () => {
     await service.createFoodLog(userId, {
       sourceType: 'LOCAL',
       sourceRef: 'local-1',
-      grams: 250,
+      amount: 250,
+      amountUnit: 'G',
       mealCategory: 'DINNER',
       loggedAtUtc: '2026-08-30T19:00:00.000Z',
     });
@@ -164,7 +167,8 @@ describe('FoodService — name capture on createFoodLog', () => {
       await service.createFoodLog(userId, {
         sourceType: 'CANONICAL',
         sourceRef: 'canon-1',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-08-30T12:00:00.000Z',
       });
@@ -179,7 +183,8 @@ describe('FoodService — name capture on createFoodLog', () => {
         sourceType: 'CANONICAL',
         sourceRef: 'canon-1',
         name: 'صدر فراخ نيء',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-08-30T12:00:00.000Z',
       });
@@ -194,7 +199,8 @@ describe('FoodService — name capture on createFoodLog', () => {
         sourceType: 'CANONICAL',
         sourceRef: 'canon-1',
         name: 'Ice cream',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-08-30T12:00:00.000Z',
       });

@@ -6,9 +6,8 @@ import {
 } from './portionOptions';
 
 export interface StoredFoodLogPortion {
-  grams: string | null;
-  amount?: string | null;
-  amountUnit?: BaseUnit | null;
+  amount: string;
+  amountUnit: BaseUnit;
   portionKind?: PortionKind | null;
   portionMultiplier?: string | null;
 }
@@ -21,7 +20,7 @@ export function buildEditPortionOptions(
     portionKind: entry.portionKind ?? null,
     portionMultiplier:
       entry.portionMultiplier == null ? null : Number(entry.portionMultiplier),
-    amount: Number(entry.amount ?? entry.grams),
-    amountUnit: entry.amountUnit ?? 'G',
+    amount: Number(entry.amount),
+    amountUnit: entry.amountUnit,
   });
 }

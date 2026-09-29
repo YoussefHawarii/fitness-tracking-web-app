@@ -70,7 +70,7 @@ export class FoodService {
   private calculateSafePackagedProductNutrients(
     product: PackagedProduct,
     amount: number,
-    amountUnit: NonNullable<CreateFoodLogDto['amountUnit']>,
+    amountUnit: CreateFoodLogDto['amountUnit'],
     portionKind?: CreateFoodLogDto['portionKind'],
     portionMultiplier?: number,
   ) {
@@ -129,23 +129,19 @@ export class FoodService {
   private isUnchangedFoodLogAmount(
     existing: Pick<
       FoodLogEntry,
-      'amount' | 'grams' | 'amountUnit' | 'portionKind' | 'portionMultiplier'
+      'amount' | 'amountUnit' | 'portionKind' | 'portionMultiplier'
     >,
     dto: UpdateFoodLogDto,
   ): boolean {
-    const submittedAmount = dto.amount ?? dto.grams;
+    const submittedAmount = dto.amount;
     if (submittedAmount === undefined) return false;
 
-    const submittedUnit = dto.amount === undefined ? 'G' : dto.amountUnit;
-    const storedUnit = existing.amountUnit ?? 'G';
     if (
-      submittedAmount !== Number(existing.amount ?? existing.grams) ||
-      submittedUnit !== storedUnit
+      submittedAmount !== Number(existing.amount) ||
+      dto.amountUnit !== existing.amountUnit
     ) {
       return false;
     }
-
-    if (dto.amount === undefined) return true;
 
     const storedMultiplier =
       existing.portionMultiplier === null
@@ -309,15 +305,7 @@ export class FoodService {
       this.reject(FOOD_LOG_REJECTION_REASONS.OPEN_FOOD_FACTS_CREATE_RETIRED);
     }
 
-    const amount = dto.amount ?? dto.grams;
-    if (amount === undefined) {
-      throw new Error('Validated food-log DTO did not contain an amount.');
-    }
-    const amountUnit =
-      dto.amount === undefined ? ('G' as const) : dto.amountUnit;
-    if (!amountUnit) {
-      throw new Error('Validated amount did not contain an amount unit.');
-    }
+    const { amount, amountUnit } = dto;
 
     if (dto.sourceType !== 'PACKAGED_PRODUCT') {
       this.rejectStructuredPortionForMassSource(dto.portionKind);
@@ -344,7 +332,6 @@ export class FoodService {
           localFoodItemId: null,
           canonicalFoodId: null,
           packagedProductId: product.id,
-          grams: amountUnit === 'G' ? amount : null,
           amount,
           amountUnit,
           portionKind: dto.portionKind ?? null,
@@ -394,7 +381,6 @@ export class FoodService {
         localFoodItemId,
         canonicalFoodId,
         packagedProductId,
-        grams: amount,
         amount,
         amountUnit: 'G',
         portionKind: dto.portionKind ?? null,
@@ -427,7 +413,7 @@ export class FoodService {
       throw new NotFoundException('Food log entry not found.');
     }
 
-    const hasAmountUpdate = dto.grams !== undefined || dto.amount !== undefined;
+    const hasAmountUpdate = dto.amount !== undefined;
 
     if (existing.sourceType === 'PACKAGED_PRODUCT') {
       const product = await this.packagedProducts.findById(
@@ -444,11 +430,11 @@ export class FoodService {
         });
       }
 
-      const amount = dto.amount ?? dto.grams;
+      const amount = dto.amount;
       if (amount === undefined) {
         throw new Error('Validated food-log update did not contain an amount.');
       }
-      const amountUnit = dto.amount === undefined ? 'G' : dto.amountUnit;
+      const amountUnit = dto.amountUnit;
       if (!amountUnit) {
         throw new Error('Validated amount did not contain an amount unit.');
       }
@@ -462,19 +448,10 @@ export class FoodService {
       return this.prisma.foodLogEntry.update({
         where: { id },
         data: {
-          grams: amountUnit === 'G' ? amount : null,
           amount,
           amountUnit,
-          ...(dto.amount !== undefined
-            ? {
-                portionKind: dto.portionKind ?? null,
-                portionMultiplier: dto.portionMultiplier ?? null,
-              }
-            : {
-                portionKind:
-                  existing.portionKind === null ? null : ('CUSTOM' as const),
-                portionMultiplier: null,
-              }),
+          portionKind: dto.portionKind ?? null,
+          portionMultiplier: dto.portionMultiplier ?? null,
           mealCategory: dto.mealCategory ?? existing.mealCategory,
           caloriesComputed: computed.calories,
           proteinComputed: computed.protein,
@@ -492,20 +469,19 @@ export class FoodService {
       });
     }
 
-    const amount = dto.amount ?? dto.grams;
+    const amount = dto.amount;
     if (amount === undefined) {
       throw new Error('Validated food-log update did not contain an amount.');
     }
 
-    const amountUnit = dto.amount === undefined ? 'G' : dto.amountUnit;
+    const amountUnit = dto.amountUnit;
     if (amountUnit !== 'G') {
       this.reject(FOOD_LOG_REJECTION_REASONS.MASS_SOURCE_REQUIRES_G);
     }
     this.rejectStructuredPortionForMassSource(dto.portionKind);
 
     // Historical OPEN_FOOD_FACTS rows retain their live provider
-    // re-resolution path solely for legacy compatibility. This does not
-    // endorse its old grams-based semantics, and new entries cannot use it.
+    // re-resolution path; new entries cannot use it.
     const { nutrients } = await this.resolveNutrients(
       userId,
       existing.sourceType,
@@ -515,19 +491,10 @@ export class FoodService {
     return this.prisma.foodLogEntry.update({
       where: { id },
       data: {
-        grams: amount,
         amount,
         amountUnit: 'G',
-        ...(dto.amount !== undefined
-          ? {
-              portionKind: dto.portionKind ?? null,
-              portionMultiplier: dto.portionMultiplier ?? null,
-            }
-          : {
-              portionKind:
-                existing.portionKind === null ? null : ('CUSTOM' as const),
-              portionMultiplier: null,
-            }),
+        portionKind: dto.portionKind ?? null,
+        portionMultiplier: dto.portionMultiplier ?? null,
         mealCategory: dto.mealCategory ?? existing.mealCategory,
         caloriesComputed: computed.calories,
         proteinComputed: computed.protein,

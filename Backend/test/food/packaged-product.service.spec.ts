@@ -49,10 +49,8 @@ describe('PackagedProductService', () => {
       brand: null,
       category: null,
       servingSize: null,
-      servingUnit: null,
       servingBaseUnit: null,
       packageSize: null,
-      packageUnit: null,
       packageBaseUnit: null,
       containerKey: ContainerKey.PACKAGE,
       declaredNutritionBasis: null,
@@ -116,15 +114,12 @@ describe('PackagedProductService', () => {
       const { service, prisma } = buildService();
       const existing = productRow({
         packageSize: new Prisma.Decimal(0),
-        packageUnit: 'g',
         packageBaseUnit: BaseUnit.G,
       });
       const refreshed = productRow({
         packageSize: new Prisma.Decimal(330),
-        packageUnit: 'ml',
         packageBaseUnit: BaseUnit.ML,
         servingSize: new Prisma.Decimal(30),
-        servingUnit: 'g',
         servingBaseUnit: BaseUnit.G,
         containerKey: ContainerKey.CAN,
         lastProviderCheckAt: checkedAt,
@@ -142,12 +137,10 @@ describe('PackagedProductService', () => {
       expect(writes.map(({ data }) => data)).toEqual([
         {
           packageSize: 330,
-          packageUnit: 'ml',
           packageBaseUnit: BaseUnit.ML,
         },
         {
           servingSize: 60,
-          servingUnit: 'g',
           servingBaseUnit: BaseUnit.G,
         },
         { containerKey: ContainerKey.JAR },
@@ -170,10 +163,8 @@ describe('PackagedProductService', () => {
       const { service, prisma } = buildService();
       const existing = productRow({
         packageSize: new Prisma.Decimal(400),
-        packageUnit: 'g',
         packageBaseUnit: BaseUnit.G,
         servingSize: new Prisma.Decimal(50),
-        servingUnit: 'g',
         servingBaseUnit: BaseUnit.G,
         containerKey: ContainerKey.BOX,
       });
@@ -247,7 +238,6 @@ describe('PackagedProductService', () => {
       const stale = productRow();
       const concurrent = productRow({
         packageSize: new Prisma.Decimal(500),
-        packageUnit: 'g',
         packageBaseUnit: BaseUnit.G,
         lastProviderCheckAt: checkedAt,
       });
@@ -280,7 +270,6 @@ describe('PackagedProductService', () => {
         },
         data: {
           packageSize: 330,
-          packageUnit: 'ml',
           packageBaseUnit: BaseUnit.ML,
         },
       });
@@ -345,10 +334,8 @@ describe('PackagedProductService', () => {
       expect(data.verificationStatus).toBe(VerificationStatus.EXTERNAL);
       expect(data.caloriesPer100g).toBe(539);
       expect(data.servingSize).toBe(60);
-      expect(data.servingUnit).toBe('g');
       expect(data.servingBaseUnit).toBe(BaseUnit.G);
       expect(data.packageSize).toBe(330);
-      expect(data.packageUnit).toBe('ml');
       expect(data.packageBaseUnit).toBe(BaseUnit.ML);
       expect(data.containerKey).toBe(ContainerKey.JAR);
     });
@@ -373,10 +360,8 @@ describe('PackagedProductService', () => {
       const data = prisma.packagedProduct.create.mock.calls[0][0].data;
       expect(data).toMatchObject({
         servingSize: null,
-        servingUnit: null,
         servingBaseUnit: null,
         packageSize: null,
-        packageUnit: null,
         packageBaseUnit: null,
         containerKey: ContainerKey.PACKAGE,
       });
@@ -403,10 +388,8 @@ describe('PackagedProductService', () => {
       expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
         {
           servingSize: null,
-          servingUnit: null,
           servingBaseUnit: null,
           packageSize: null,
-          packageUnit: null,
           packageBaseUnit: null,
         },
       );
@@ -476,40 +459,15 @@ describe('PackagedProductService', () => {
       });
     });
 
-    it('treats a legacy submission without a basis as Declared PER_100_G', async () => {
-      const { service, prisma } = buildService();
-      const withoutBasis = { ...validDto } as Partial<typeof validDto>;
-      delete withoutBasis.declaredNutritionBasis;
-      prisma.packagedProduct.create.mockResolvedValue({ id: 'row-1' });
-
-      await service.createUserSubmitted({
-        ...withoutBasis,
-        packageSize: 250,
-        packageUnit: 'g',
-      } as never);
-
-      expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
-        {
-          packageSize: 250,
-          packageBaseUnit: BaseUnit.G,
-          declaredNutritionBasis: NutritionBasis.PER_100_G,
-        },
-      );
-    });
-
-    it('rejects a legacy submission without a basis when its package is VOLUME', async () => {
+    it('rejects a submission without a Declared basis', async () => {
       const { service, prisma } = buildService();
       const withoutBasis = { ...validDto } as Partial<typeof validDto>;
       delete withoutBasis.declaredNutritionBasis;
 
       await expect(
-        service.createUserSubmitted({
-          ...withoutBasis,
-          packageSize: 330,
-          packageUnit: 'ml',
-        } as never),
+        service.createUserSubmitted(withoutBasis as never),
       ).rejects.toMatchObject({
-        response: { reason: 'DIMENSION_BASIS_CONFLICT' },
+        response: { reason: 'DECLARED_NUTRITION_BASIS_REQUIRED' },
       });
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
@@ -600,7 +558,6 @@ describe('PackagedProductService', () => {
       expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
         {
           packageSize: 1500,
-          packageUnit: 'ml',
           packageBaseUnit: BaseUnit.ML,
         },
       );
@@ -619,7 +576,6 @@ describe('PackagedProductService', () => {
       expect(prisma.packagedProduct.create.mock.calls[0][0].data).toMatchObject(
         {
           packageSize: null,
-          packageUnit: null,
           packageBaseUnit: null,
         },
       );
@@ -641,7 +597,6 @@ describe('PackagedProductService', () => {
           prisma.packagedProduct.create.mock.calls[0][0].data,
         ).toMatchObject({
           servingSize: null,
-          servingUnit: null,
           servingBaseUnit: null,
         });
       },

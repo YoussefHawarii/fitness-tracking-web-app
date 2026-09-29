@@ -302,7 +302,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       brand: string;
       imageUrl: string;
       packageSize: number;
-      packageUnit: string;
+      packageBaseUnit: string;
       caloriesPer100g: number;
       proteinPer100g: number;
       carbsPer100g: number;
@@ -329,7 +329,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       brand: 'Test Brand',
       imageUrl: 'https://images.example/test-product.jpg',
       packageSize: 150,
-      packageUnit: 'g',
+      packageBaseUnit: 'G',
       caloriesPer100g: 250,
       proteinPer100g: 5,
       carbsPer100g: 30,
@@ -387,7 +387,7 @@ describe('Food search + barcode reuse (e2e)', () => {
     expect(
       Number((logged.body as { fatComputed: string }).fatComputed),
     ).toBeCloseTo(4, 5);
-    expect((logged.body as { grams: string }).grams).toBe('40');
+    expect((logged.body as { amount: string }).amount).toBe('40');
     expect((logged.body as { mealCategory: string }).mealCategory).toBe(
       'BREAKFAST',
     );
@@ -404,10 +404,8 @@ describe('Food search + barcode reuse (e2e)', () => {
         barcode,
         name: 'Volume logging product',
         packageSize: 330,
-        packageUnit: 'ml',
         packageBaseUnit: 'ML',
         servingSize: 250,
-        servingUnit: 'ml',
         servingBaseUnit: 'ML',
         caloriesPer100g: 42,
         source: ProductSource.OPEN_FOOD_FACTS,
@@ -431,7 +429,6 @@ describe('Food search + barcode reuse (e2e)', () => {
       .expect(201);
 
     expect(logged.body).toMatchObject({
-      grams: null,
       amount: '330',
       amountUnit: 'ML',
       portionKind: 'CUSTOM',
@@ -441,7 +438,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       Number((logged.body as { caloriesComputed: string }).caloriesComputed),
     ).toBeCloseTo(138.6, 5);
 
-    const unsafeLegacy = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/food/logs')
       .set('Authorization', `Bearer ${token}`)
       .send({
@@ -451,10 +448,7 @@ describe('Food search + barcode reuse (e2e)', () => {
         mealCategory: 'BREAKFAST',
         loggedAtUtc: '2026-01-15T08:00:00.000Z',
       })
-      .expect(422);
-    expect(unsafeLegacy.body).toMatchObject({
-      reason: 'AMOUNT_UNIT_BASIS_MISMATCH',
-    });
+      .expect(400);
 
     const malformed = await request(app.getHttpServer())
       .post('/food/logs')
@@ -486,7 +480,6 @@ describe('Food search + barcode reuse (e2e)', () => {
         imageUrl: 'https://images.example/basis-unknown.jpg',
         caloriesPer100g: 100,
         packageSize: 500,
-        packageUnit: 'ml',
         packageBaseUnit: 'ML',
         source: ProductSource.ADMIN,
         verificationStatus: VerificationStatus.UNVERIFIED,
@@ -622,6 +615,7 @@ describe('Food search + barcode reuse (e2e)', () => {
         barcode,
         name: 'Homemade Karkade Concentrate',
         brand: "Grandma's",
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 45,
         proteinPer100g: 0.2,
         carbsPer100g: 11,
@@ -649,6 +643,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         barcode,
         name: 'Duplicate attempt',
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 1,
         proteinPer100g: 1,
         carbsPer100g: 1,
@@ -682,18 +677,18 @@ describe('Food search + barcode reuse (e2e)', () => {
       .expect(400);
   });
 
-  it('treats a legacy product submission with a gram package as Declared PER_100_G', async () => {
+  it('rejects a product submission without a Declared basis', async () => {
     const barcode = ean13WithValidCheckDigit(
       `500012${testSuffix}`.padEnd(12, '2').slice(0, 12),
     );
     const token = await newVerifiedUser('legacy-product-mass');
 
-    await request(app.getHttpServer())
+    const response = await request(app.getHttpServer())
       .post('/food/products')
       .set('Authorization', `Bearer ${token}`)
       .send({
         barcode,
-        name: 'Legacy Mass Product',
+        name: 'Missing Basis Product',
         packageSize: 250,
         packageUnit: 'g',
         caloriesPer100g: 100,
@@ -701,16 +696,17 @@ describe('Food search + barcode reuse (e2e)', () => {
         carbsPer100g: 20,
         fatPer100g: 1,
       })
-      .expect(201);
+      .expect(400);
 
-    const created = await prisma.packagedProduct.findUniqueOrThrow({
-      where: { barcode },
+    expect(response.body).toMatchObject({
+      reason: 'DECLARED_NUTRITION_BASIS_REQUIRED',
     });
-    expect(created.declaredNutritionBasis).toBe(NutritionBasis.PER_100_G);
-    await prisma.packagedProduct.delete({ where: { barcode } });
+    await expect(
+      prisma.packagedProduct.findUnique({ where: { barcode } }),
+    ).resolves.toBeNull();
   });
 
-  it('rejects a legacy product submission whose ml package conflicts with its per-100-g labels', async () => {
+  it('rejects a mass-basis product submission with a volume package', async () => {
     const barcode = ean13WithValidCheckDigit(
       `500013${testSuffix}`.padEnd(12, '3').slice(0, 12),
     );
@@ -721,9 +717,10 @@ describe('Food search + barcode reuse (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .send({
         barcode,
-        name: 'Conflicting Legacy Drink',
+        name: 'Conflicting Drink',
         packageSize: 330,
         packageUnit: 'ml',
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 42,
         proteinPer100g: 0,
         carbsPer100g: 10.5,
@@ -814,6 +811,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         barcode,
         name: 'Manually Entered Product',
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 100,
         proteinPer100g: 2,
         carbsPer100g: 20,
@@ -866,7 +864,8 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         sourceType: 'CANONICAL',
         sourceRef: canonicalId,
-        grams: 200,
+        amount: 200,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-01-15T12:00:00.000Z',
       })

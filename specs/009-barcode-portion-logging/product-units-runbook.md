@@ -1,5 +1,8 @@
 # Product-unit normalization runbook
 
+> Retired by the contract step. This tool references columns removed from the
+> contracted schema and can only be run from a pre-contract commit.
+
 Run the normalizer from `Backend/`. It converts usable legacy package and
 serving pairs to Base-unit values and lowercase compatibility units. It leaves
 unsupported, ambiguous, incomplete, non-finite, zero, or negative legacy pairs

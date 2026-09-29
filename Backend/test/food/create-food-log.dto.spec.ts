@@ -79,11 +79,7 @@ describe('CreateFoodLogDto through the global ValidationPipe', () => {
     },
   );
 
-  it('accepts the legacy grams representation and the explicit representation', async () => {
-    const legacy: unknown = await globalValidationPipe.transform(
-      { ...base, grams: 999_999_999.9 },
-      metadata,
-    );
+  it('accepts the explicit amount representation', async () => {
     const explicit: unknown = await globalValidationPipe.transform(
       {
         ...base,
@@ -94,7 +90,6 @@ describe('CreateFoodLogDto through the global ValidationPipe', () => {
       metadata,
     );
 
-    expect(legacy).toMatchObject({ grams: 999_999_999.9 });
     expect(explicit).toMatchObject({
       amount: 330,
       amountUnit: 'ML',
@@ -102,17 +97,17 @@ describe('CreateFoodLogDto through the global ValidationPipe', () => {
     });
   });
 
+  it('rejects the retired grams request field through the whitelist', async () => {
+    await expect(
+      globalValidationPipe.transform(
+        { ...base, amount: 10, amountUnit: 'G', grams: 10 },
+        metadata,
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it.each([
-    [
-      'neither amount field',
-      {},
-      FOOD_LOG_REJECTION_REASONS.EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED,
-    ],
-    [
-      'both amount fields',
-      { grams: 10, amount: 10, amountUnit: 'G' },
-      FOOD_LOG_REJECTION_REASONS.EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED,
-    ],
+    ['missing amount', {}, FOOD_LOG_REJECTION_REASONS.AMOUNT_REQUIRED],
     [
       'amount without unit',
       { amount: 10 },
@@ -120,13 +115,8 @@ describe('CreateFoodLogDto through the global ValidationPipe', () => {
     ],
     [
       'unit without amount',
-      { grams: 10, amountUnit: 'G' },
+      { amountUnit: 'G' },
       FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_WITHOUT_AMOUNT,
-    ],
-    [
-      'portion fields on legacy grams',
-      { grams: 10, portionKind: 'CUSTOM' },
-      FOOD_LOG_REJECTION_REASONS.LEGACY_GRAMS_PORTION_FIELDS_FORBIDDEN,
     ],
     [
       'structured choice without multiplier',

@@ -57,7 +57,7 @@ test('rich product preview renders provided metadata, every macro, and status-dr
         brand: 'Chipsy',
         imageUrl: 'https://images.example/chipsy.jpg',
         packageSize: 150,
-        packageUnit: 'g',
+        packageBaseUnit: 'G',
         caloriesPer100g: 536,
         proteinPer100g: 6.5,
         carbsPer100g: 53,
@@ -90,7 +90,7 @@ test('preview exposes missing macros as unavailable, shows a unitless size, and 
         carbsPer100g: null,
         fatPer100g: null,
         packageSize: 2,
-        packageUnit: null,
+        packageBaseUnit: null,
         verificationStatus: 'EXTERNAL',
       },
     }),
@@ -233,7 +233,7 @@ test('pending barcode amount fields render the effective MASS basis and g input'
   assert.match(html, /Amount \(g\)/);
 });
 
-test('an older barcode response without resolution keeps the previous grams presentation', () => {
+test('a barcode response without resolution keeps the mass presentation', () => {
   const html = renderToStaticMarkup(
     React.createElement(foodLogModule.PendingAmountFields, {
       item: {
@@ -259,7 +259,6 @@ test('the edit amount field keeps ML amounts editable with their unit', () => {
         sourceType: 'PACKAGED_PRODUCT',
         sourceRef: 'product-1',
         name: 'Test drink',
-        grams: null,
         amount: '330',
         amountUnit: 'ML',
         caloriesComputed: '138.6',
@@ -288,7 +287,6 @@ test('packaged-product edit offers create options and falls back to CUSTOM after
       sourceType: 'PACKAGED_PRODUCT',
       sourceRef: 'product-1',
       name: 'Test drink',
-      grams: null,
       amount: '250',
       amountUnit: 'ML',
       portionKind: 'SERVING',
@@ -313,12 +311,12 @@ test('packaged-product edit offers create options and falls back to CUSTOM after
 test('history amount rendering includes ml and g units', () => {
   const volumeHtml = renderToStaticMarkup(
     React.createElement(foodLogModule.HistoryAmount, {
-      entry: { amount: '330', grams: null, amountUnit: 'ML' },
+      entry: { amount: '330', amountUnit: 'ML' },
     }),
   );
   const massHtml = renderToStaticMarkup(
     React.createElement(foodLogModule.HistoryAmount, {
-      entry: { amount: '150', grams: '150', amountUnit: 'G' },
+      entry: { amount: '150', amountUnit: 'G' },
     }),
   );
 
@@ -343,6 +341,48 @@ test('invalid barcodes stay distinct from confirmed not-found responses', async 
     assert.equal(await foodServiceModule.lookupBarcode('9999999999993'), null);
   } finally {
     apiClientModule.apiClient.get = originalGet;
+  }
+});
+
+test('missing product basis errors preserve the typed reason and server message', async () => {
+  const originalPost = apiClientModule.apiClient.post;
+  try {
+    apiClientModule.apiClient.post = async () => {
+      throw {
+        isAxiosError: true,
+        response: {
+          status: 400,
+          data: {
+            reason: 'DECLARED_NUTRITION_BASIS_REQUIRED',
+            message: 'Choose whether nutrition is per 100 g or per 100 ml.',
+          },
+        },
+      };
+    };
+
+    await assert.rejects(
+      () =>
+        foodServiceModule.createPackagedProduct({
+          barcode: '3017620422003',
+          name: 'Missing basis product',
+          declaredNutritionBasis: 'PER_100_G',
+          caloriesPer100g: 100,
+          proteinPer100g: 2,
+          carbsPer100g: 20,
+          fatPer100g: 1,
+        }),
+      (error) => {
+        assert.ok(error instanceof foodServiceModule.ProductSubmissionError);
+        assert.equal(error.reason, 'DECLARED_NUTRITION_BASIS_REQUIRED');
+        assert.equal(
+          error.message,
+          'Choose whether nutrition is per 100 g or per 100 ml.',
+        );
+        return true;
+      },
+    );
+  } finally {
+    apiClientModule.apiClient.post = originalPost;
   }
 });
 

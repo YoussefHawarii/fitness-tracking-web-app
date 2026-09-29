@@ -75,7 +75,7 @@ export type PendingItem = {
   brand?: string | null;
   imageUrl?: string | null;
   packageSize?: number | null;
-  packageUnit?: string | null;
+  packageBaseUnit?: BaseUnit | null;
   verificationStatus?: PackagedProduct['verificationStatus'] | null;
   resolution?: BarcodeResolution;
 };
@@ -86,9 +86,8 @@ interface FoodLogEntry {
   sourceRef: string;
   packagedProductId?: string | null;
   name: string;
-  grams: string | null;
-  amount?: string | null;
-  amountUnit?: 'G' | 'ML' | null;
+  amount: string;
+  amountUnit: BaseUnit;
   portionKind?: 'PACKAGE' | 'SERVING' | 'CUSTOM' | null;
   portionMultiplier?: string | null;
   caloriesComputed: string;
@@ -126,7 +125,7 @@ function toPackagedPendingItem(product: PackagedProduct): PendingItem {
     brand: product.brand,
     imageUrl: product.imageUrl,
     packageSize: product.packageSize,
-    packageUnit: product.packageUnit,
+    packageBaseUnit: product.packageBaseUnit,
     verificationStatus: product.verificationStatus,
     resolution: product.resolution,
   };
@@ -330,7 +329,9 @@ export function PackagedProductPreview({ product }: { product: PendingItem }) {
           {product.packageSize != null && (
             <p className="text-body text-text-muted">
               {product.packageSize}
-              {product.packageUnit ? ` ${product.packageUnit}` : ''}
+              {product.packageBaseUnit
+                ? ` ${product.packageBaseUnit.toLowerCase()}`
+                : ''}
             </p>
           )}
         </div>

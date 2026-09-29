@@ -69,7 +69,7 @@ describe('Food logs edit/delete (e2e)', () => {
 
   async function createLoggedFoodEntry(
     accessToken: string,
-    overrides: { grams?: number; mealCategory?: string } = {},
+    overrides: { amount?: number; mealCategory?: string } = {},
   ) {
     const localItem = await request(app.getHttpServer())
       .post('/food/local-items')
@@ -84,7 +84,8 @@ describe('Food logs edit/delete (e2e)', () => {
       .send({
         sourceType: 'LOCAL',
         sourceRef: localItemBody.id,
-        grams: overrides.grams ?? 100,
+        amount: overrides.amount ?? 100,
+        amountUnit: 'G',
         mealCategory: overrides.mealCategory ?? 'LUNCH',
         loggedAtUtc: '2026-01-15T12:00:00.000Z',
       })
@@ -99,10 +100,8 @@ describe('Food logs edit/delete (e2e)', () => {
         barcode: `edit-volume-${tag}-${Date.now()}-${Math.random()}`,
         name: 'Editable drink',
         packageSize: 600,
-        packageUnit: 'ml',
         packageBaseUnit: 'ML',
         servingSize: 250,
-        servingUnit: 'ml',
         servingBaseUnit: 'ML',
         caloriesPer100g: 42,
         source: ProductSource.OPEN_FOOD_FACTS,
@@ -126,22 +125,22 @@ describe('Food logs edit/delete (e2e)', () => {
     return { product, entry: logged.body as { id: string } };
   }
 
-  it('PATCH /food/logs/:id recalculates calories when grams change', async () => {
-    const accessToken = await newVerifiedUser('edit-grams');
-    const entry = await createLoggedFoodEntry(accessToken, { grams: 100 });
+  it('PATCH /food/logs/:id recalculates calories when amount changes', async () => {
+    const accessToken = await newVerifiedUser('edit-amount');
+    const entry = await createLoggedFoodEntry(accessToken, { amount: 100 });
     const originalCalories = Number(entry.caloriesComputed);
 
     const edited = await request(app.getHttpServer())
       .patch(`/food/logs/${entry.id}`)
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ grams: 200 })
+      .send({ amount: 200, amountUnit: 'G' })
       .expect(200);
     const editedBody = edited.body as {
-      grams: string;
+      amount: string;
       caloriesComputed: string;
     };
 
-    expect(Number(editedBody.grams)).toBe(200);
+    expect(Number(editedBody.amount)).toBe(200);
     expect(Number(editedBody.caloriesComputed)).toBeCloseTo(
       originalCalories * 2,
       5,
@@ -165,7 +164,6 @@ describe('Food logs edit/delete (e2e)', () => {
       .expect(200);
 
     expect(edited.body).toMatchObject({
-      grams: null,
       amount: '500',
       amountUnit: 'ML',
       portionKind: 'SERVING',
@@ -214,14 +212,13 @@ describe('Food logs edit/delete (e2e)', () => {
     await prisma.packagedProduct.delete({ where: { id: product.id } });
   });
 
-  it('treats unchanged legacy grams as meal-only when a product becomes Not scalable', async () => {
-    const accessToken = await newVerifiedUser('edit-legacy-unchanged');
+  it('treats an unchanged amount as meal-only when a product becomes Not scalable', async () => {
+    const accessToken = await newVerifiedUser('edit-unchanged');
     const product = await prisma.packagedProduct.create({
       data: {
         barcode: `edit-mass-${Date.now()}-${Math.random()}`,
-        name: 'Legacy grams product',
+        name: 'Mass product',
         packageSize: 300,
-        packageUnit: 'g',
         packageBaseUnit: 'G',
         caloriesPer100g: 200,
         source: ProductSource.OPEN_FOOD_FACTS,
@@ -253,7 +250,12 @@ describe('Food logs edit/delete (e2e)', () => {
     const edited = await request(app.getHttpServer())
       .patch(`/food/logs/${entry.id}`)
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ grams: 100, mealCategory: 'DINNER' })
+      .send({
+        amount: 100,
+        amountUnit: 'G',
+        portionKind: 'CUSTOM',
+        mealCategory: 'DINNER',
+      })
       .expect(200);
     const editedBody = edited.body as {
       amount: string;
@@ -285,7 +287,7 @@ describe('Food logs edit/delete (e2e)', () => {
     await prisma.foodLogEntry.delete({ where: { id: entry.id } });
   });
 
-  it('PATCH /food/logs/:id updates mealCategory independently of grams', async () => {
+  it('PATCH /food/logs/:id updates mealCategory independently of amount', async () => {
     const accessToken = await newVerifiedUser('edit-meal');
     const entry = await createLoggedFoodEntry(accessToken, {
       mealCategory: 'LUNCH',
@@ -308,20 +310,31 @@ describe('Food logs edit/delete (e2e)', () => {
     );
   });
 
-  it('PATCH /food/logs/:id rejects a non-positive grams value', async () => {
+  it('PATCH /food/logs/:id rejects a non-positive amount', async () => {
     const accessToken = await newVerifiedUser('edit-invalid');
     const entry = await createLoggedFoodEntry(accessToken);
 
     await request(app.getHttpServer())
       .patch(`/food/logs/${entry.id}`)
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ grams: 0 })
+      .send({ amount: 0, amountUnit: 'G' })
       .expect(400);
 
     await request(app.getHttpServer())
       .patch(`/food/logs/${entry.id}`)
       .set('Authorization', `Bearer ${accessToken}`)
-      .send({ grams: -5 })
+      .send({ amount: -5, amountUnit: 'G' })
+      .expect(400);
+  });
+
+  it('PATCH /food/logs/:id rejects the retired grams field', async () => {
+    const accessToken = await newVerifiedUser('edit-retired-field');
+    const entry = await createLoggedFoodEntry(accessToken);
+
+    await request(app.getHttpServer())
+      .patch(`/food/logs/${entry.id}`)
+      .set('Authorization', `Bearer ${accessToken}`)
+      .send({ grams: 100 })
       .expect(400);
   });
 
@@ -333,7 +346,7 @@ describe('Food logs edit/delete (e2e)', () => {
     await request(app.getHttpServer())
       .patch(`/food/logs/${entry.id}`)
       .set('Authorization', `Bearer ${strangerToken}`)
-      .send({ grams: 50 })
+      .send({ amount: 50, amountUnit: 'G' })
       .expect(404);
   });
 

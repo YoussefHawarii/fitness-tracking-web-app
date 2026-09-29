@@ -39,10 +39,8 @@ function productRow(overrides: Partial<PackagedProduct> = {}): PackagedProduct {
     brand: null,
     category: null,
     servingSize: null,
-    servingUnit: null,
     servingBaseUnit: null,
     packageSize: null,
-    packageUnit: null,
     packageBaseUnit: null,
     containerKey: null,
     declaredNutritionBasis: null,
@@ -93,10 +91,8 @@ function recordedOffProduct(name: string): {
       packageSize: packageMeasurement
         ? new Prisma.Decimal(packageMeasurement.value)
         : null,
-      packageUnit: packageMeasurement?.legacyUnit ?? null,
       packageBaseUnit: packageMeasurement?.baseUnit ?? null,
       servingSize: serving ? new Prisma.Decimal(serving.value) : null,
-      servingUnit: serving?.legacyUnit ?? null,
       servingBaseUnit: serving?.baseUnit ?? null,
       containerKey: mapOffPackagingShapes(fixture.product.packagings),
       sourceId: fixture.code,

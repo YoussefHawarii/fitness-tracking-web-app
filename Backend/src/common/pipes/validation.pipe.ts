@@ -4,13 +4,22 @@ import {
   FOOD_LOG_REJECTION_MESSAGES,
   isFoodLogRejectionReason,
 } from '../../modules/food/food-log-rejection-reasons';
+import {
+  PRODUCT_SUBMISSION_REJECTION_MESSAGES,
+  isProductSubmissionRejectionReason,
+} from '../../modules/food/product-submission-rejection-reasons';
 
-function findFoodLogReason(errors: ValidationError[]): string | undefined {
+function findRejectionReason(errors: ValidationError[]): string | undefined {
   for (const error of errors) {
     for (const message of Object.values(error.constraints ?? {})) {
-      if (isFoodLogRejectionReason(message)) return message;
+      if (
+        isFoodLogRejectionReason(message) ||
+        isProductSubmissionRejectionReason(message)
+      ) {
+        return message;
+      }
     }
-    const nested = findFoodLogReason(error.children ?? []);
+    const nested = findRejectionReason(error.children ?? []);
     if (nested) return nested;
   }
   return undefined;
@@ -31,10 +40,16 @@ export const globalValidationPipe = new ValidationPipe({
   forbidNonWhitelisted: true,
   transform: true,
   exceptionFactory: (errors) => {
-    const reason = findFoodLogReason(errors);
+    const reason = findRejectionReason(errors);
     if (reason && isFoodLogRejectionReason(reason)) {
       return new BadRequestException({
         message: FOOD_LOG_REJECTION_MESSAGES[reason],
+        reason,
+      });
+    }
+    if (reason && isProductSubmissionRejectionReason(reason)) {
+      return new BadRequestException({
+        message: PRODUCT_SUBMISSION_REJECTION_MESSAGES[reason],
         reason,
       });
     }

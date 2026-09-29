@@ -470,6 +470,10 @@ contracts (spec M3). Decided in ticket 01. **Decided (2026-09-25):**
   `amount ?? grams`. Ticket 02's verifier therefore checks G rows for
   `amount = grams` and ML rows for `grams IS NULL`, and ticket 14's gate uses
   the same predicates.
+- *Transition complete (2026-09-29).* The contract release removed the legacy
+  `grams` request/response and storage path, the free-text product-unit
+  columns, and the missing-basis default. Food logs now require `amount` with
+  `amountUnit`, and product submissions require an explicit Declared basis.
 
 9.3 Whether conservative free-text Open Food Facts size parsing remains as a
 fallback beneath the structured numeric fields (spec E1). Decided in ticket 03.

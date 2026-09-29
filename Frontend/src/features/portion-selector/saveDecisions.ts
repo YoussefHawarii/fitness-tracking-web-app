@@ -37,9 +37,8 @@ export type EditSubmittedPayload =
 
 export interface StoredEntryForEdit {
   caloriesComputed: string | number;
-  grams?: string | number | null;
-  amount?: string | number | null;
-  amountUnit?: BaseUnit | null;
+  amount: string | number;
+  amountUnit: BaseUnit;
 }
 
 export type SaveOutcome<TPayload, TValue> =
@@ -110,9 +109,9 @@ export async function saveEditWithPlausibility<TValue>({
     return savePayload(submittedPayload, save);
   }
 
-  const storedAmount = Number(entry.amount ?? entry.grams);
+  const storedAmount = Number(entry.amount);
   const storedCalories = Number(entry.caloriesComputed);
-  const storedUnit = entry.amountUnit ?? 'G';
+  const storedUnit = entry.amountUnit;
   const canUseCurrentProduct =
     product !== null &&
     resolution !== null &&

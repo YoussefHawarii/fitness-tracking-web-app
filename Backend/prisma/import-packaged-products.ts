@@ -33,10 +33,8 @@ export interface PackagedProductImportRecord {
   brand: string | null;
   category: string | null;
   servingSize: number | null;
-  servingUnit: string | null;
   servingBaseUnit: BaseUnit | null;
   packageSize: number | null;
-  packageUnit: string | null;
   packageBaseUnit: BaseUnit | null;
   containerKey: ContainerKey;
   caloriesPer100g: number;
@@ -130,10 +128,8 @@ function toImportRecord(
     brand: null,
     category: null,
     servingSize: null,
-    servingUnit: null,
     servingBaseUnit: null,
     packageSize: null,
-    packageUnit: null,
     packageBaseUnit: null,
     containerKey: ContainerKey.PACKAGE,
     caloriesPer100g: 0,
@@ -166,7 +162,6 @@ function toImportRecord(
   const rawServingUnit = toOptionalString(raw.servingUnit);
   const serving = normalizeMeasurement(rawServingSize, rawServingUnit);
   record.servingSize = serving?.value ?? null;
-  record.servingUnit = serving?.legacyUnit ?? null;
   record.servingBaseUnit = serving?.baseUnit ?? null;
   if (
     rawServingSize !== null &&
@@ -188,7 +183,6 @@ function toImportRecord(
     rawPackageUnit,
   );
   record.packageSize = packageMeasurement?.value ?? null;
-  record.packageUnit = packageMeasurement?.legacyUnit ?? null;
   record.packageBaseUnit = packageMeasurement?.baseUnit ?? null;
   if (
     rawPackageSize !== null &&

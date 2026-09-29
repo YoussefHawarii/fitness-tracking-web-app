@@ -98,7 +98,6 @@ export class PackagedProductService {
         },
         data: {
           packageSize: providerPackage.value,
-          packageUnit: providerPackage.legacyUnit,
           packageBaseUnit: providerPackage.baseUnit,
         },
       });
@@ -124,7 +123,6 @@ export class PackagedProductService {
         },
         data: {
           servingSize: providerServing.value,
-          servingUnit: providerServing.legacyUnit,
           servingBaseUnit: providerServing.baseUnit,
         },
       });
@@ -213,10 +211,8 @@ export class PackagedProductService {
         brand: data.brand,
         category: data.category,
         servingSize: serving?.value ?? null,
-        servingUnit: serving?.legacyUnit ?? null,
         servingBaseUnit: serving?.baseUnit ?? null,
         packageSize: packageMeasurement?.value ?? null,
-        packageUnit: packageMeasurement?.legacyUnit ?? null,
         packageBaseUnit: packageMeasurement?.baseUnit ?? null,
         containerKey: data.containerKey ?? ContainerKey.PACKAGE,
         caloriesPer100g: data.caloriesPer100g,
@@ -249,11 +245,12 @@ export class PackagedProductService {
       );
     }
     const barcode = normalized.canonical;
-    // The older deployed form explicitly labels every nutrition field per
-    // 100 g, so omitting this newer field is still a user declaration of a
-    // mass basis. Explicit values from the current form remain authoritative.
-    const declaredNutritionBasis =
-      dto.declaredNutritionBasis ?? NutritionBasis.PER_100_G;
+    if (!dto.declaredNutritionBasis) {
+      throw productSubmissionError(
+        PRODUCT_SUBMISSION_REJECTION_REASONS.DECLARED_NUTRITION_BASIS_REQUIRED,
+      );
+    }
+    const declaredNutritionBasis = dto.declaredNutritionBasis;
     const serving = normalizeMeasurement(dto.servingSize, dto.servingUnit);
     const packageMeasurement = normalizeMeasurement(
       dto.packageSize,
@@ -282,10 +279,8 @@ export class PackagedProductService {
             brand: dto.brand ?? null,
             category: dto.category ?? null,
             servingSize: serving?.value ?? null,
-            servingUnit: serving?.legacyUnit ?? null,
             servingBaseUnit: serving?.baseUnit ?? null,
             packageSize: packageMeasurement?.value ?? null,
-            packageUnit: packageMeasurement?.legacyUnit ?? null,
             packageBaseUnit: packageMeasurement?.baseUnit ?? null,
             declaredNutritionBasis,
             caloriesPer100g: dto.caloriesPer100g,

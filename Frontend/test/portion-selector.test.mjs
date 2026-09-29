@@ -277,8 +277,8 @@ test('every structured choice stays within backend consistency tolerance', () =>
 
 const MASS_PRODUCT_FIXTURE = JSON.parse(`{
   "id":"mass-1","barcode":"1234567890128","name":"Cereal","nameAr":null,
-  "brand":"Example","category":"Breakfast","servingSize":30,"servingUnit":"g",
-  "servingBaseUnit":"G","packageSize":300,"packageUnit":"g","packageBaseUnit":"G",
+  "brand":"Example","category":"Breakfast","servingSize":30,
+  "servingBaseUnit":"G","packageSize":300,"packageBaseUnit":"G",
   "containerKey":"BOX","caloriesPer100g":380,"proteinPer100g":10,
   "carbsPer100g":72,"fatPer100g":4,"fiberPer100g":8,"sugarPer100g":12,
   "sodiumPer100g":0.2,"imageUrl":null,"country":"Egypt","source":"OPEN_FOOD_FACTS",
@@ -292,8 +292,8 @@ const MASS_PRODUCT_FIXTURE = JSON.parse(`{
 
 const VOLUME_PRODUCT_FIXTURE = JSON.parse(`{
   "id":"volume-1","barcode":"1234567890135","name":"Sparkling water","nameAr":null,
-  "brand":"Example","category":"Drinks","servingSize":330,"servingUnit":"ml",
-  "servingBaseUnit":"ML","packageSize":330,"packageUnit":"ml","packageBaseUnit":"ML",
+  "brand":"Example","category":"Drinks","servingSize":330,
+  "servingBaseUnit":"ML","packageSize":330,"packageBaseUnit":"ML",
   "containerKey":"CAN","caloriesPer100g":0,"proteinPer100g":null,
   "carbsPer100g":null,"fatPer100g":null,"fiberPer100g":null,"sugarPer100g":null,
   "sodiumPer100g":null,"imageUrl":null,"country":null,"source":"OPEN_FOOD_FACTS",

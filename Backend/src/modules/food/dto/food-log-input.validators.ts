@@ -10,7 +10,6 @@ import {
 import { FOOD_LOG_REJECTION_REASONS } from '../food-log-rejection-reasons';
 
 type CreateShape = {
-  grams?: unknown;
   amount?: unknown;
   amountUnit?: unknown;
   portionKind?: unknown;
@@ -21,33 +20,22 @@ function foodLogAmountShapeReason(
   dto: CreateShape,
   amountRequired: boolean,
 ): string | null {
-  const hasGrams = dto.grams !== undefined;
   const hasAmount = dto.amount !== undefined;
   const hasAmountFields =
-    hasGrams ||
     hasAmount ||
     dto.amountUnit !== undefined ||
     dto.portionKind !== undefined ||
     dto.portionMultiplier !== undefined;
 
   if (!amountRequired && !hasAmountFields) return null;
-  if (!hasGrams && !hasAmount && dto.amountUnit !== undefined) {
-    return FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_WITHOUT_AMOUNT;
-  }
-  if (hasGrams === hasAmount) {
-    return FOOD_LOG_REJECTION_REASONS.EXACTLY_ONE_AMOUNT_REPRESENTATION_REQUIRED;
-  }
-  if (hasAmount && dto.amountUnit === undefined) {
-    return FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_REQUIRED;
-  }
   if (!hasAmount && dto.amountUnit !== undefined) {
     return FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_WITHOUT_AMOUNT;
   }
-  if (
-    hasGrams &&
-    (dto.portionKind !== undefined || dto.portionMultiplier !== undefined)
-  ) {
-    return FOOD_LOG_REJECTION_REASONS.LEGACY_GRAMS_PORTION_FIELDS_FORBIDDEN;
+  if (!hasAmount) {
+    return FOOD_LOG_REJECTION_REASONS.AMOUNT_REQUIRED;
+  }
+  if (dto.amountUnit === undefined) {
+    return FOOD_LOG_REJECTION_REASONS.AMOUNT_UNIT_REQUIRED;
   }
   if (
     (dto.portionKind === 'PACKAGE' || dto.portionKind === 'SERVING') &&

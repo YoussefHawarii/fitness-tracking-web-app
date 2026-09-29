@@ -51,7 +51,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
             sourceType: 'PACKAGED_PRODUCT',
             sourceRef: 'product-1',
             packagedProductId: 'product-1',
-            grams: null,
             amount: 330,
             amountUnit: 'ML',
             portionKind: 'PACKAGE',
@@ -156,7 +155,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
     const volume = buildService();
     await volume.service.createFoodLog(userId, baseCreate);
     expect(volume.created[0]).toMatchObject({
-      grams: null,
       amount: 330,
       amountUnit: 'ML',
       portionKind: 'CUSTOM',
@@ -179,7 +177,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
       amountUnit: 'G',
     });
     expect(mass.created[0]).toMatchObject({
-      grams: 100,
       amount: 100,
       amountUnit: 'G',
       caloriesComputed: 42,
@@ -255,7 +252,7 @@ describe('FoodService — unit-safe food-log create and update', () => {
     expect(created).toHaveLength(0);
   });
 
-  it('propagates a create failure without falling back to a grams-only create', async () => {
+  it('propagates a create failure without retrying the create', async () => {
     const failure = new Error('food log create failed');
     const { service, prisma, created } = buildService();
     prisma.foodLogEntry.create.mockRejectedValueOnce(failure);
@@ -354,26 +351,14 @@ describe('FoodService — unit-safe food-log create and update', () => {
     });
   });
 
-  it('rejects a legacy grams request for a volume product', async () => {
-    const { service } = buildService();
-    await expect(
-      service.createFoodLog(userId, {
-        sourceType: 'PACKAGED_PRODUCT',
-        sourceRef: 'product-1',
-        grams: 330,
-        mealCategory: 'LUNCH',
-        loggedAtUtc: baseCreate.loggedAtUtc,
-      }),
-    ).rejects.toMatchObject(expectedReason('AMOUNT_UNIT_BASIS_MISMATCH'));
-  });
-
-  it('rejects new legacy Open Food Facts creates without consulting the provider', async () => {
+  it('rejects new Open Food Facts creates without consulting the provider', async () => {
     const { service, created } = buildService();
     await expect(
       service.createFoodLog(userId, {
         sourceType: 'OPEN_FOOD_FACTS',
         sourceRef: 'barcode',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: baseCreate.loggedAtUtc,
       }),
@@ -382,7 +367,7 @@ describe('FoodService — unit-safe food-log create and update', () => {
   });
 
   it.each(['LOCAL', 'USDA', 'CANONICAL'] as const)(
-    'keeps %s as a grams-only mass source',
+    'keeps %s as a mass-only source',
     async (sourceType) => {
       const { service, created } = buildService();
       const sourceRef =
@@ -400,7 +385,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
         loggedAtUtc: baseCreate.loggedAtUtc,
       });
       expect(created[0]).toMatchObject({
-        grams: 80,
         amount: 80,
         amountUnit: 'G',
       });
@@ -450,7 +434,7 @@ describe('FoodService — unit-safe food-log create and update', () => {
     },
   );
 
-  it('continues to accept a custom portion for a grams-only source', async () => {
+  it('continues to accept a custom portion for a mass-only source', async () => {
     const { service, created } = buildService();
 
     await service.createFoodLog(userId, {
@@ -481,7 +465,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
     });
     expect(updated).toEqual([{ mealCategory: 'DINNER' }]);
     expect(result).toMatchObject({
-      grams: null,
       amount: 330,
       amountUnit: 'ML',
       portionKind: 'PACKAGE',
@@ -503,7 +486,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
     });
 
     expect(updated[0]).toMatchObject({
-      grams: null,
       amount: 500,
       amountUnit: 'ML',
       portionKind: 'SERVING',
@@ -589,90 +571,6 @@ describe('FoodService — unit-safe food-log create and update', () => {
         portionKind: 'CUSTOM',
       }),
     ).rejects.toMatchObject(expectedReason('NUTRITION_BASIS_UNKNOWN'));
-    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
-  });
-
-  it('downgrades PACKAGE x 1 to CUSTOM after a changed legacy grams amount', async () => {
-    const { service, updated } = buildService({
-      product: product({
-        packageSize: 300,
-        packageBaseUnit: 'G',
-        servingSize: 100,
-        servingBaseUnit: 'G',
-      }),
-      existing: {
-        grams: 100,
-        amount: 100,
-        amountUnit: 'G',
-        portionKind: 'PACKAGE',
-        portionMultiplier: 1,
-      },
-    });
-
-    await service.updateFoodLog(userId, 'log-1', { grams: 200 });
-
-    expect(updated[0]).toMatchObject({
-      grams: 200,
-      amount: 200,
-      amountUnit: 'G',
-      portionKind: 'CUSTOM',
-      portionMultiplier: null,
-    });
-  });
-
-  it('keeps a null portion choice null after a changed legacy grams amount', async () => {
-    const { service, updated } = buildService({
-      product: product({
-        packageSize: 300,
-        packageBaseUnit: 'G',
-        servingSize: 100,
-        servingBaseUnit: 'G',
-      }),
-      existing: {
-        grams: 100,
-        amount: 100,
-        amountUnit: 'G',
-        portionKind: null,
-        portionMultiplier: null,
-      },
-    });
-
-    await service.updateFoodLog(userId, 'log-1', { grams: 200 });
-
-    expect(updated[0]).toMatchObject({
-      grams: 200,
-      amount: 200,
-      portionKind: null,
-      portionMultiplier: null,
-    });
-  });
-
-  it('preserves a structured choice and skips safety when legacy grams are unchanged', async () => {
-    const { service, updated } = buildService({
-      product: product({ source: 'ADMIN', declaredNutritionBasis: null }),
-      existing: {
-        grams: 100,
-        amount: 100,
-        amountUnit: 'G',
-        portionKind: 'PACKAGE',
-        portionMultiplier: 1,
-      },
-    });
-
-    await service.updateFoodLog(userId, 'log-1', {
-      grams: 100,
-      mealCategory: 'DINNER',
-    });
-
-    expect(updated).toEqual([{ mealCategory: 'DINNER' }]);
-  });
-
-  it('rejects legacy grams against an equal-valued ML packaged entry', async () => {
-    const { service, prisma } = buildService();
-
-    await expect(
-      service.updateFoodLog(userId, 'log-1', { grams: 330 }),
-    ).rejects.toMatchObject(expectedReason('AMOUNT_UNIT_BASIS_MISMATCH'));
     expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
   });
 

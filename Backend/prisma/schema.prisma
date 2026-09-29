@@ -321,16 +321,8 @@ model FoodLogEntry {
   canonicalFood      CanonicalFood?   @relation(fields: [canonicalFoodId], references: [id], onDelete: SetNull)
   packagedProductId  String?
   packagedProduct    PackagedProduct? @relation(fields: [packagedProductId], references: [id], onDelete: SetNull)
-  // Legacy quantity in grams. Nullable since ticket 01 of
-  // specs/009-barcode-portion-logging: a future ML entry stores grams = NULL
-  // so no column named grams ever holds millilitres (see
-  // docs/portion-model-decisions.md §9.2). Readers must use
-  // `amount ?? grams`.
-  grams              Decimal?
-  // Explicit consumed amount in `amountUnit` (ticket 01 dual-writes
-  // amount = grams, amountUnit = G; backfill of older rows is ticket 02).
-  amount             Decimal?
-  amountUnit         BaseUnit?
+  amount             Decimal
+  amountUnit         BaseUnit
   portionKind        PortionKind?
   portionMultiplier  Decimal?
   caloriesComputed   Decimal
@@ -360,10 +352,8 @@ model PackagedProduct {
   category            String?
 
   servingSize         Decimal?
-  servingUnit         String?
   servingBaseUnit     BaseUnit?
   packageSize         Decimal?
-  packageUnit         String?
   packageBaseUnit     BaseUnit?
   containerKey        ContainerKey?
   declaredNutritionBasis NutritionBasis?
