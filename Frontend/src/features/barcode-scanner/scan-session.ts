@@ -46,7 +46,6 @@ export function createScanSession({
     torch: { available: false, on: false },
     zoom: null,
   };
-  let candidate: string | null = null;
   let camera: CameraHandle | null = null;
   let stopListeningForEnd: (() => void) | undefined;
   let startInFlight: Promise<void> | null = null;
@@ -93,7 +92,6 @@ export function createScanSession({
     stopListeningForEnd = opened.onEnded?.(() => {
       if (camera !== opened) return;
       releaseCamera();
-      candidate = null;
       setState({
         ...state,
         status: 'interrupted',
@@ -138,15 +136,11 @@ export function createScanSession({
     },
     reportDecode(text: string | null) {
       if (state.status !== 'scanning' || text === null) return;
-      if (candidate === text) {
-        // The camera has done its job; FoodLog keeps the scanner mounted
-        // while it shows the product, so release it now rather than on unmount.
-        releaseCamera();
-        setState({ ...state, status: 'decoded', barcode: text });
-        onBarcode(text);
-      } else {
-        candidate = text;
-      }
+      // FoodLog keeps the scanner mounted while it shows the product, so
+      // release the camera as soon as the first valid read confirms the code.
+      releaseCamera();
+      setState({ ...state, status: 'decoded', barcode: text });
+      onBarcode(text);
     },
     async toggleTorch() {
       if (!camera || !state.torch.available) return;

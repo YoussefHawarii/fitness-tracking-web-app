@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { BrowserMultiFormatReader } from '@zxing/browser';
-import {
-  BarcodeFormat,
-  ChecksumException,
-  DecodeHintType,
-  FormatException,
-  NotFoundException,
-} from '@zxing/library';
 import { detectCameraFeatures } from './camera-capabilities';
+import { createCropper } from './cropper';
 import { createElementGate } from './element-gate';
+import { createFrameDecoder } from './frame-decoder';
+import { createFrameLoop } from './frame-loop';
+import {
+  createNativeDetector,
+  type NativeBarcodeDetectorConstructor,
+} from './native-detector';
+import { createRetailDecoder } from './retail-decoder';
 import { SCAN_BOX, computeScanRegion } from './scan-region';
 import {
   createScanSession,
@@ -21,19 +21,6 @@ interface Props {
   onDecoded: (barcode: string) => void;
   onScanError?: (error: unknown) => void;
 }
-
-const hints = new Map([
-  [
-    DecodeHintType.POSSIBLE_FORMATS,
-    [
-      BarcodeFormat.EAN_13,
-      BarcodeFormat.EAN_8,
-      BarcodeFormat.UPC_A,
-      BarcodeFormat.UPC_E,
-      BarcodeFormat.CODE_128,
-    ],
-  ],
-]);
 
 export function BarcodeScanner({ onDecoded, onScanError }: Props) {
   // Fed by the <video>'s callback ref; the camera is only requested once the
@@ -50,11 +37,19 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let failed = false;
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d', { willReadFrequently: true });
-    const reader = new BrowserMultiFormatReader(hints);
+    const cropper = createCropper(() => document.createElement('canvas'));
+    const zxing = createRetailDecoder();
+    let decodeFrame = createFrameDecoder({ native: null, zxing });
+    let frameLoop: ReturnType<typeof createFrameLoop> | null = null;
+    const detectorCtor = (
+      globalThis as typeof globalThis & {
+        BarcodeDetector?: NativeBarcodeDetectorConstructor;
+      }
+    ).BarcodeDetector;
+    void createNativeDetector(detectorCtor).then((native) => {
+      if (!cancelled && native)
+        decodeFrame = createFrameDecoder({ native, zxing });
+    });
 
     const openCamera = async (
       constraints: MediaStreamConstraints,
@@ -123,59 +118,52 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
     });
     sessionRef.current = session;
     const unsubscribe = session.subscribe(() => {
-      if (!cancelled) setState(session.getState());
-    });
-
-    const schedule = () => {
-      if (!cancelled && !failed && session.getState().status === 'scanning') {
-        timer = setTimeout(tick, 120);
-      }
-    };
-    const tick = () => {
-      if (cancelled || failed || session.getState().status !== 'scanning')
+      if (cancelled) return;
+      const next = session.getState();
+      setState(next);
+      if (next.status !== 'scanning') {
+        frameLoop?.stop();
+        frameLoop = null;
         return;
+      }
+      if (frameLoop) return;
       const video = videoGate.current();
-      if (
-        !video ||
-        video.readyState < 2 ||
-        !video.videoWidth ||
-        !video.videoHeight ||
-        !video.clientWidth ||
-        !video.clientHeight
-      ) {
-        schedule();
-        return;
-      }
-      try {
-        if (!context) throw new Error('Canvas 2D context is unavailable');
-        const region = computeScanRegion({
-          videoWidth: video.videoWidth,
-          videoHeight: video.videoHeight,
-          viewWidth: video.clientWidth,
-          viewHeight: video.clientHeight,
-          box: SCAN_BOX,
-        });
-        if (region.width && region.height) {
-          canvas.width = region.width;
-          canvas.height = region.height;
-          context.drawImage(
-            video,
-            region.x,
-            region.y,
-            region.width,
-            region.height,
-            0,
-            0,
-            region.width,
-            region.height,
-          );
-          session.reportDecode(reader.decodeFromCanvas(canvas).getText());
-        }
-      } catch (error) {
-        if (isRetryableDecodeError(error)) {
-          session.reportDecode(null);
-        } else {
-          failed = true;
+      if (!video) return;
+      frameLoop = createFrameLoop({
+        video,
+        requestAnimationFrame: (callback) =>
+          window.requestAnimationFrame(callback),
+        cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
+        onFrame: async () => {
+          if (
+            cancelled ||
+            session.getState().status !== 'scanning' ||
+            video.readyState < 2 ||
+            !video.videoWidth ||
+            !video.videoHeight ||
+            !video.clientWidth ||
+            !video.clientHeight
+          )
+            return;
+          const region = computeScanRegion({
+            videoWidth: video.videoWidth,
+            videoHeight: video.videoHeight,
+            viewWidth: video.clientWidth,
+            viewHeight: video.clientHeight,
+            box: SCAN_BOX,
+          });
+          if (!region.width || !region.height) return;
+          cropper.draw(video, region);
+          const result = await decodeFrame({
+            source: cropper.canvas,
+            pixels: cropper.pixels,
+          });
+          if (!cancelled && session.getState().status === 'scanning')
+            session.reportDecode(result);
+        },
+        onError: (error) => {
+          if (cancelled) return;
+          frameLoop = null;
           const errorDetails = error as { name?: unknown; message?: unknown };
           console.error('Barcode scanner frame processing failed', {
             name:
@@ -193,27 +181,26 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
             paused: video.paused,
           });
           onScanError?.(error);
-        }
-      }
-      schedule();
-    };
+        },
+      });
+      frameLoop.start();
+    });
 
     const start = async () => {
       await session.start();
-      if (!cancelled) schedule();
     };
     restartRef.current = () => void start();
     void start();
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      frameLoop?.stop();
       unsubscribe();
       session.stop();
       sessionRef.current = null;
       restartRef.current = null;
     };
-    // Each mount owns one stream and reader; FoodLog remounts to rescan.
+    // Each mount owns one stream and decoder; FoodLog remounts to rescan.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -225,14 +212,5 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
       videoRef={videoGate.set}
       onRetry={() => restartRef.current?.()}
     />
-  );
-}
-
-function isRetryableDecodeError(error: unknown): boolean {
-  // Exception names are minified in production; prototype identity remains stable.
-  return (
-    error instanceof NotFoundException ||
-    error instanceof ChecksumException ||
-    error instanceof FormatException
   );
 }

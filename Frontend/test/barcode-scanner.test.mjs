@@ -311,7 +311,7 @@ test('confirming a barcode releases the camera exactly once', async () => {
   assert.equal(camera.device.stopCount, 1);
 });
 
-test('a barcode is emitted once, after two matching reads, and again only by a fresh session', async () => {
+test('a barcode is emitted once, on the first valid read, and again only by a fresh session', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = fakeCamera();
   const emitted = [];
@@ -324,9 +324,7 @@ test('a barcode is emitted once, after two matching reads, and again only by a f
   assert.equal(session.getState().status, 'scanning');
 
   session.reportDecode('5901234123457');
-  assert.equal(session.getState().status, 'scanning'); // one read is not enough
-  session.reportDecode('5901234123457');
-  assert.equal(session.getState().status, 'decoded');
+  assert.equal(session.getState().status, 'decoded'); // ZXing/native already validated it
   assert.equal(session.getState().barcode, '5901234123457');
 
   // The camera keeps seeing the same code; nothing more is emitted.
@@ -340,7 +338,6 @@ test('a barcode is emitted once, after two matching reads, and again only by a f
     onBarcode: (code) => emitted.push(code),
   });
   await rescan.start();
-  rescan.reportDecode('5901234123457');
   rescan.reportDecode('5901234123457');
 
   assert.deepEqual(emitted, ['5901234123457', '5901234123457']);
