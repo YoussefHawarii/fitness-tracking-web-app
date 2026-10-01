@@ -12,6 +12,7 @@ import { CalorieBalanceModule } from './modules/calorie-balance/calorie-balance.
 import { WeightPredictionModule } from './modules/weight-prediction/weight-prediction.module';
 import { WorkoutsModule } from './modules/workouts/workouts.module';
 import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
+import { HealthController } from './health.controller';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { UserThrottlerGuard } from './common/guards/user-throttler.guard';
     WeightPredictionModule,
     WorkoutsModule,
   ],
+  controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: UserThrottlerGuard }],
 })
 export class AppModule {}

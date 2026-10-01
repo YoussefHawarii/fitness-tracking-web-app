@@ -1,6 +1,6 @@
 # Ticket plan: unit-aware portion logging for barcode products
 
-Status: **stable — reviewed; owner decisions 1–2 applied (2026-09-21); awaiting owner approval to publish.** Not yet published
+Status: **implemented and deployed — all 14 tickets done (2026-09-29).** Not published
 to the issue tracker.
 
 Source of truth: `spec.md` in this folder (cited as **S§x**), backed by
@@ -8,6 +8,31 @@ Source of truth: `spec.md` in this folder (cited as **S§x**), backed by
 `docs/off-nutrition-basis-evidence.md`, `CONTEXT.md`, and ADRs 0004–0007. The
 spec's own hierarchy applies unchanged: where the spec and those documents
 disagree, the documents win. Tickets use the glossary's terms exactly.
+
+## Implementation progress
+
+Branch `feat/009-barcode-portion-logging`. Each ticket is implemented by Codex,
+reviewed read-only by OpenCode (Muse Spark 1.3) and then by Claude, reworked by
+Codex where the reviews found valid issues, and committed only after the
+shared DoD gates pass locally (unit, e2e against the Docker Postgres, build,
+lint).
+
+| # | Status | Version | Review notes |
+|---|---|---|---|
+| 01 | Done | 0.1.6 | Decision 9.2 recorded. |
+| 02 | Done | 0.1.10–0.1.11 | Backfill runbook tightened after review. |
+| 03 | Done | 0.1.12 | Decisions 9.1 and 9.3 recorded. |
+| 04 | Done | 0.1.13 | — |
+| 05 | Done | 0.1.14 | — |
+| 06 | Done | 0.1.15 | Rework: PACKAGE/SERVING choices rejected for non-barcode sources; a grams edit resets a structured choice to CUSTOM; tests added for persistence failure, `NUTRITION_BASIS_UNKNOWN`, `DIMENSION_BASIS_CONFLICT` and a serving larger than its package. Update-path validation and safety deferred to 08, where the ticket places them. |
+| 07 | Done | 0.1.16 | Rework: the next queued item keeps its scenario default after a save; stored-choice re-resolution checks the unit and keeps valid non-quick multipliers (e.g. SERVING × 1.5) for 08's edit reuse; payload and preview math extracted and tested; OFF fixtures use an INFERRED basis. Rejected: a resolved amount on the custom option's label (unknown until typed). |
+| 08 | Done | 0.1.17 | Adds an authenticated `GET /food/products/:id` so the edit view can re-resolve the product. Rework: legacy OFF entries now reject ML amounts and PACKAGE/SERVING choices instead of storing them as grams; an update resending the stored amount counts as a meal-only change, so an older frontend's `{grams, mealCategory}` edit still works on a Not-scalable product; missing tests added. |
+| 09 | Done | 0.1.18 | Rework: create/edit save decisions extracted into tested pure helpers (OK saves the unchanged payload, Cancel sends nothing, meal-only edits never prompt); an edit whose product is no longer loggable estimates calories from the stored entry, not live figures; guards and tests for negative targets, cross-unit packages and invalid amounts. |
+| 10 | Done | 0.1.19 | Model `IdentifiedBarcode`; subject kind `IDENTIFIED_NOT_CATALOGUED`; decision 9.4 recorded (60-second in-memory per-barcode backoff). Rework: only the client's "temporarily unavailable" error is transient (other errors are logged and never backed off); the first-scan product create also removes any identification record in the same transaction. Accepted as-is: an older deployed frontend shows a blank reason line for `NUTRITION_MISSING` (safe). **Deploy note:** additive schema, apply `prisma db push` to production before this backend deploys. |
+| 11 | Done | 0.1.20 | Adds `PackagedProduct.lastProviderCheckAt`. A generic `PACKAGE` container key counts as absent and may be replaced by a specific one. Rework: the gap-fill writes are conditional in the database (row still OFF and unverified, field still empty), so concurrent changes are never overwritten; tests added for the backoff window and non-transient errors. **Deploy note:** additive schema, apply `prisma db push` to production before this backend deploys. |
+| 12 | Done | 0.1.21 | Compatibility (added to register §9.2): the older deployed form labels every nutrition field "/ 100g", so a submission without a basis is stored as a Declared PER_100_G and still passes every creation rule (an ml package is rejected as a basis/dimension conflict). The new form always requires an explicit choice. Rework: that compatibility path replaces a blanket 400; the scanner is paused and the form keyed by barcode so a background scan can't swap the barcode under a pre-filled form; tests added for serving-side and `portion` units and the submit guard; e2e fixtures updated. |
+| 13 | Done | 0.1.22 | The extraction contract gains an optional `basisSuggestion { basis, confident }`; only a confident suggestion pre-selects, and a user's choice always wins, including one made while extraction is pending. The stub is unchanged. Rework: the extraction-completion handler was extracted and tested with deferred promises. |
+| 14 | Done | 0.1.23 | Gates passed on production 2026-09-29 with tickets 01–13 live (02 verify: 0 violating rows, compare unchanged; 03 verify: 0 violations, idempotent); evidence in both runbook logs. The code drops `FoodLogEntry.grams`, makes `amount`/`amountUnit` required, drops `PackagedProduct.packageUnit`/`servingUnit`, and removes the §9.2 transitional paths (legacy `grams` request field, absent-basis default). The pre-contract backfill and normalization tools were removed; their runbooks say to run them from a pre-contract commit. Rework: two e2e fixtures send an explicit basis; the frontend maps `DECLARED_NUTRITION_BASIS_REQUIRED`. With the owner's approval on 2026-09-29, the data-removing `db push` was applied to production after re-confirming 0 food log entries and 0 packaged products (nothing lost; the snapshot was empty). `master` was then fast-forwarded and Railway and Vercel deployed `3661742`. The production schema diff against the code is empty. |
 
 ## Conventions applying to every ticket
 

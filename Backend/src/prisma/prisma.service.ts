@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { connectWithRetry } from './connect-with-retry';
 
 @Injectable()
 export class PrismaService
@@ -7,7 +8,7 @@ export class PrismaService
   implements OnModuleInit, OnModuleDestroy
 {
   async onModuleInit() {
-    await this.$connect();
+    await connectWithRetry(() => this.$connect());
   }
 
   async onModuleDestroy() {

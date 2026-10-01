@@ -1,11 +1,15 @@
-import type { PackagedProduct } from '@prisma/client';
+import type { IdentifiedBarcode, PackagedProduct } from '@prisma/client';
+import type { PortionResolution } from './portion-resolution';
 
 // Prisma Decimal fields serialize to strings by default (matching this app's
 // existing FoodLogEntry response shape) — but the pre-existing barcode
 // response contract (OpenFoodFactsProduct, a plain object from the OFF
 // client, not Prisma) has always returned real numbers. Converting here
 // keeps that contract intact for the frontend.
-export function serializePackagedProduct(product: PackagedProduct) {
+export function serializePackagedProduct(
+  product: PackagedProduct,
+  resolution?: PortionResolution,
+) {
   return {
     id: product.id,
     barcode: product.barcode,
@@ -14,9 +18,10 @@ export function serializePackagedProduct(product: PackagedProduct) {
     brand: product.brand,
     category: product.category,
     servingSize: product.servingSize ? Number(product.servingSize) : null,
-    servingUnit: product.servingUnit,
+    servingBaseUnit: product.servingBaseUnit,
     packageSize: product.packageSize ? Number(product.packageSize) : null,
-    packageUnit: product.packageUnit,
+    packageBaseUnit: product.packageBaseUnit,
+    containerKey: product.containerKey,
     caloriesPer100g: Number(product.caloriesPer100g),
     proteinPer100g: product.proteinPer100g
       ? Number(product.proteinPer100g)
@@ -30,5 +35,25 @@ export function serializePackagedProduct(product: PackagedProduct) {
     country: product.country,
     source: product.source,
     verificationStatus: product.verificationStatus,
+    ...(resolution ? { resolution } : {}),
+  };
+}
+
+export function serializeIdentifiedBarcode(record: IdentifiedBarcode) {
+  return {
+    barcode: record.barcode,
+    name: record.displayName,
+    brand: record.brand,
+    imageUrl: record.imageUrl,
+    resolution: {
+      outcome: 'NOT_LOGGABLE' as const,
+      display: {
+        name: record.displayName,
+        brand: record.brand,
+        imageUrl: record.imageUrl,
+      },
+      subjectKind: 'IDENTIFIED_NOT_CATALOGUED' as const,
+      primaryReason: record.reason,
+    },
   };
 }

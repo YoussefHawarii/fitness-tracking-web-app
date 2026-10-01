@@ -9,6 +9,11 @@ import { UsdaClient } from '../src/modules/food/clients/usda.client';
 import { OpenFoodFactsClient } from '../src/modules/food/clients/open-food-facts.client';
 import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
 import {
+  NutritionBasis,
+  ProductSource,
+  VerificationStatus,
+} from '@prisma/client';
+import {
   importPackagedProducts,
   parsePackagedProductRecords,
 } from '../prisma/import-packaged-products';
@@ -269,6 +274,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       `500000${testSuffix}`.padEnd(12, '1').slice(0, 12),
     );
     offLookupByBarcode.mockResolvedValueOnce({
+      outcome: 'FOUND_WITH_NUTRITION',
       barcode,
       name: 'Test Product',
       nameAr: 'منتج اختبار',
@@ -296,12 +302,25 @@ describe('Food search + barcode reuse (e2e)', () => {
       brand: string;
       imageUrl: string;
       packageSize: number;
-      packageUnit: string;
+      packageBaseUnit: string;
       caloriesPer100g: number;
       proteinPer100g: number;
       carbsPer100g: number;
       fatPer100g: number;
       verificationStatus: string;
+      resolution: {
+        outcome: string;
+        portionDimension: string;
+        effectiveNutritionBasis: {
+          basis: string;
+          origin: string;
+          source: string;
+          ruleId: string;
+        };
+        package: { size: number; baseUnit: string };
+        serving: null;
+        containerKey: string;
+      };
     };
     const productId = firstBody.id;
     expect(firstBody).toMatchObject({
@@ -310,12 +329,25 @@ describe('Food search + barcode reuse (e2e)', () => {
       brand: 'Test Brand',
       imageUrl: 'https://images.example/test-product.jpg',
       packageSize: 150,
-      packageUnit: 'g',
+      packageBaseUnit: 'G',
       caloriesPer100g: 250,
       proteinPer100g: 5,
       carbsPer100g: 30,
       fatPer100g: 10,
       verificationStatus: 'EXTERNAL',
+      resolution: {
+        outcome: 'LOGGABLE',
+        portionDimension: 'MASS',
+        effectiveNutritionBasis: {
+          basis: 'PER_100_G',
+          origin: 'INFERRED',
+          source: 'OPEN_FOOD_FACTS',
+          ruleId: 'OPEN_FOOD_FACTS_PORTION_DIMENSION',
+        },
+        package: { size: 150, baseUnit: 'G' },
+        serving: null,
+        containerKey: 'PACKAGE',
+      },
     });
 
     // Second scan of the same barcode: local DB hit -> Open Food Facts is
@@ -335,7 +367,9 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         sourceType: 'PACKAGED_PRODUCT',
         sourceRef: productId,
-        grams: 40,
+        amount: 40,
+        amountUnit: 'G',
+        portionKind: 'CUSTOM',
         mealCategory: 'BREAKFAST',
         loggedAtUtc: '2026-01-15T08:00:00.000Z',
       })
@@ -353,7 +387,7 @@ describe('Food search + barcode reuse (e2e)', () => {
     expect(
       Number((logged.body as { fatComputed: string }).fatComputed),
     ).toBeCloseTo(4, 5);
-    expect((logged.body as { grams: string }).grams).toBe('40');
+    expect((logged.body as { amount: string }).amount).toBe('40');
     expect((logged.body as { mealCategory: string }).mealCategory).toBe(
       'BREAKFAST',
     );
@@ -361,11 +395,176 @@ describe('Food search + barcode reuse (e2e)', () => {
     await prisma.packagedProduct.delete({ where: { id: productId } });
   });
 
+  it('creates a volume log in ML and enforces validation and safety at the HTTP boundary', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500006${testSuffix}`.padEnd(12, '6').slice(0, 12),
+    );
+    const product = await prisma.packagedProduct.create({
+      data: {
+        barcode,
+        name: 'Volume logging product',
+        packageSize: 330,
+        packageBaseUnit: 'ML',
+        servingSize: 250,
+        servingBaseUnit: 'ML',
+        caloriesPer100g: 42,
+        source: ProductSource.OPEN_FOOD_FACTS,
+        verificationStatus: VerificationStatus.EXTERNAL,
+      },
+    });
+    const token = await newVerifiedUser('volume-log');
+
+    const logged = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        amount: 330,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-01-15T08:00:00.000Z',
+      })
+      .expect(201);
+
+    expect(logged.body).toMatchObject({
+      amount: '330',
+      amountUnit: 'ML',
+      portionKind: 'CUSTOM',
+      portionMultiplier: null,
+    });
+    expect(
+      Number((logged.body as { caloriesComputed: string }).caloriesComputed),
+    ).toBeCloseTo(138.6, 5);
+
+    await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        grams: 330,
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-01-15T08:00:00.000Z',
+      })
+      .expect(400);
+
+    const malformed = await request(app.getHttpServer())
+      .post('/food/logs')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: product.id,
+        amount: '330',
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-01-15T08:00:00.000Z',
+      })
+      .expect(400);
+    expect(malformed.body).toMatchObject({ reason: 'NOT_NUMERIC' });
+
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
+  });
+
+  it('returns a NOT_LOGGABLE resolution for a Not scalable cached Packaged product', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500008${testSuffix}`.padEnd(12, '8').slice(0, 12),
+    );
+    const product = await prisma.packagedProduct.create({
+      data: {
+        barcode,
+        name: 'Basis unknown product',
+        brand: 'Test Brand',
+        imageUrl: 'https://images.example/basis-unknown.jpg',
+        caloriesPer100g: 100,
+        packageSize: 500,
+        packageBaseUnit: 'ML',
+        source: ProductSource.ADMIN,
+        verificationStatus: VerificationStatus.UNVERIFIED,
+      },
+    });
+    const token = await newVerifiedUser('barcode-not-loggable');
+
+    const response = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      id: product.id,
+      name: 'Basis unknown product',
+      caloriesPer100g: 100,
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Basis unknown product',
+          brand: 'Test Brand',
+          imageUrl: 'https://images.example/basis-unknown.jpg',
+        },
+        subjectKind: 'PACKAGED_PRODUCT',
+        primaryReason: 'NUTRITION_BASIS_UNKNOWN',
+      },
+    });
+
+    await prisma.packagedProduct.delete({ where: { id: product.id } });
+  });
+
+  it('returns and persists a distinct identified-without-nutrition result', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500009${testSuffix}`.padEnd(12, '1').slice(0, 12),
+    );
+    offLookupByBarcode.mockResolvedValueOnce({
+      outcome: 'FOUND_WITHOUT_NUTRITION',
+      identification: {
+        barcode,
+        name: 'Known product without nutrition',
+        brand: 'Known Brand',
+        imageUrl: 'https://images.example/known-no-nutrition.jpg',
+      },
+    });
+    const token = await newVerifiedUser('identified-no-nutrition');
+
+    const response = await request(app.getHttpServer())
+      .get(`/food/barcode/${barcode}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(response.body).toEqual({
+      barcode,
+      name: 'Known product without nutrition',
+      brand: 'Known Brand',
+      imageUrl: 'https://images.example/known-no-nutrition.jpg',
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Known product without nutrition',
+          brand: 'Known Brand',
+          imageUrl: 'https://images.example/known-no-nutrition.jpg',
+        },
+        subjectKind: 'IDENTIFIED_NOT_CATALOGUED',
+        primaryReason: 'NUTRITION_MISSING',
+      },
+    });
+    await expect(
+      prisma.packagedProduct.findUnique({ where: { barcode } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.identifiedBarcode.findUnique({ where: { barcode } }),
+    ).resolves.toMatchObject({
+      displayName: 'Known product without nutrition',
+      reason: 'NUTRITION_MISSING',
+    });
+
+    await prisma.identifiedBarcode.delete({ where: { barcode } });
+  });
+
   it('returns 404 (not 500) when a barcode is unknown to both the local DB and Open Food Facts', async () => {
     const barcode = ean13WithValidCheckDigit(
       `500001${testSuffix}`.padEnd(12, '2').slice(0, 12),
     );
-    offLookupByBarcode.mockResolvedValueOnce(null);
+    offLookupByBarcode.mockResolvedValueOnce({ outcome: 'NOT_FOUND' });
     const token = await newVerifiedUser('barcode-miss');
 
     await request(app.getHttpServer())
@@ -401,7 +600,7 @@ describe('Food search + barcode reuse (e2e)', () => {
     const barcode = ean13WithValidCheckDigit(
       `500002${testSuffix}`.padEnd(12, '3').slice(0, 12),
     );
-    offLookupByBarcode.mockResolvedValueOnce(null); // Open Food Facts doesn't know it either
+    offLookupByBarcode.mockResolvedValueOnce({ outcome: 'NOT_FOUND' });
     const token = await newVerifiedUser('user-submit');
 
     await request(app.getHttpServer())
@@ -416,6 +615,7 @@ describe('Food search + barcode reuse (e2e)', () => {
         barcode,
         name: 'Homemade Karkade Concentrate',
         brand: "Grandma's",
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 45,
         proteinPer100g: 0.2,
         carbsPer100g: 11,
@@ -443,6 +643,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         barcode,
         name: 'Duplicate attempt',
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 1,
         proteinPer100g: 1,
         carbsPer100g: 1,
@@ -476,6 +677,65 @@ describe('Food search + barcode reuse (e2e)', () => {
       .expect(400);
   });
 
+  it('rejects a product submission without a Declared basis', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500012${testSuffix}`.padEnd(12, '2').slice(0, 12),
+    );
+    const token = await newVerifiedUser('legacy-product-mass');
+
+    const response = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Missing Basis Product',
+        packageSize: 250,
+        packageUnit: 'g',
+        caloriesPer100g: 100,
+        proteinPer100g: 2,
+        carbsPer100g: 20,
+        fatPer100g: 1,
+      })
+      .expect(400);
+
+    expect(response.body).toMatchObject({
+      reason: 'DECLARED_NUTRITION_BASIS_REQUIRED',
+    });
+    await expect(
+      prisma.packagedProduct.findUnique({ where: { barcode } }),
+    ).resolves.toBeNull();
+  });
+
+  it('rejects a mass-basis product submission with a volume package', async () => {
+    const barcode = ean13WithValidCheckDigit(
+      `500013${testSuffix}`.padEnd(12, '3').slice(0, 12),
+    );
+    const token = await newVerifiedUser('legacy-product-volume');
+
+    const response = await request(app.getHttpServer())
+      .post('/food/products')
+      .set('Authorization', `Bearer ${token}`)
+      .send({
+        barcode,
+        name: 'Conflicting Drink',
+        packageSize: 330,
+        packageUnit: 'ml',
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
+        caloriesPer100g: 42,
+        proteinPer100g: 0,
+        carbsPer100g: 10.5,
+        fatPer100g: 0,
+      })
+      .expect(400);
+
+    expect(response.body).toMatchObject({
+      reason: 'DIMENSION_BASIS_CONFLICT',
+    });
+    await expect(
+      prisma.packagedProduct.findUnique({ where: { barcode } }),
+    ).resolves.toBeNull();
+  });
+
   it('keeps two pack sizes with the same brand and name as distinct products', async () => {
     const firstBarcode = ean13WithValidCheckDigit(
       `500005${testSuffix}`.padEnd(12, '6').slice(0, 12),
@@ -488,6 +748,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       name: 'Same Branded Drink',
       brand: 'Same Brand',
       packageUnit: 'ml',
+      declaredNutritionBasis: NutritionBasis.PER_100_ML,
       caloriesPer100g: 42,
       proteinPer100g: 0,
       carbsPer100g: 10.5,
@@ -550,6 +811,7 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         barcode,
         name: 'Manually Entered Product',
+        declaredNutritionBasis: NutritionBasis.PER_100_G,
         caloriesPer100g: 100,
         proteinPer100g: 2,
         carbsPer100g: 20,
@@ -602,7 +864,8 @@ describe('Food search + barcode reuse (e2e)', () => {
       .send({
         sourceType: 'CANONICAL',
         sourceRef: canonicalId,
-        grams: 200,
+        amount: 200,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-01-15T12:00:00.000Z',
       })

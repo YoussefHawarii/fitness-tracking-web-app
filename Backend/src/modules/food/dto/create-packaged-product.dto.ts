@@ -1,4 +1,6 @@
 import {
+  IsEnum,
+  IsDefined,
   IsNumber,
   IsOptional,
   IsString,
@@ -6,6 +8,8 @@ import {
   MaxLength,
   MinLength,
 } from 'class-validator';
+import { NutritionBasis } from '@prisma/client';
+import { PRODUCT_SUBMISSION_REJECTION_REASONS } from '../product-submission-rejection-reasons';
 
 // Packaged products carry a full nutrition-facts panel by convention (and by
 // Egyptian labeling requirements), unlike a private LocalFoodItem — so
@@ -58,6 +62,13 @@ export class CreatePackagedProductDto {
   @IsString()
   @MaxLength(20)
   packageUnit?: string;
+
+  @IsDefined({
+    message:
+      PRODUCT_SUBMISSION_REJECTION_REASONS.DECLARED_NUTRITION_BASIS_REQUIRED,
+  })
+  @IsEnum(NutritionBasis)
+  declaredNutritionBasis: NutritionBasis;
 
   @IsNumber()
   @Min(0)

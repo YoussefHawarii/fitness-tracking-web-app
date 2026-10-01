@@ -1,5 +1,8 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { ContainerKey, type BaseUnit } from '@prisma/client';
 import type { NutrientsPer100g } from '../calorie-calculator';
+import { mapOffPackagingShapes } from '../container-key';
+import { normalizeMeasurement } from '../unit-normalizer';
 
 export const OPEN_FOOD_FACTS_TIMEOUT_MS = 8_000;
 
@@ -13,10 +16,13 @@ interface OpenFoodFactsResponse {
     countries?: string;
     image_front_url?: string;
     image_url?: string;
-    // Total quantity of the product as sold, e.g. "330ml" — maps to
-    // packageSize/packageUnit, distinct from serving_size below.
+    product_quantity?: number | string;
+    product_quantity_unit?: string;
+    serving_quantity?: number | string;
+    serving_quantity_unit?: string;
     quantity?: string;
     serving_size?: string;
+    packagings?: Array<{ shape?: string }>;
     nutriments?: {
       'energy-kcal_100g'?: number;
       proteins_100g?: number;
@@ -42,8 +48,11 @@ export interface OpenFoodFactsProduct extends NutrientsPer100g {
   category?: string | null;
   servingSize?: number | null;
   servingUnit?: string | null;
+  servingBaseUnit?: BaseUnit | null;
   packageSize?: number | null;
   packageUnit?: string | null;
+  packageBaseUnit?: BaseUnit | null;
+  containerKey?: ContainerKey | null;
   fiberPer100g?: number | null;
   sugarPer100g?: number | null;
   sodiumPer100g?: number | null;
@@ -51,20 +60,27 @@ export interface OpenFoodFactsProduct extends NutrientsPer100g {
   country?: string | null;
 }
 
-// Best-effort parse of Open Food Facts' free-text size fields (e.g. "30 g",
-// "1 bar (40g)", "330ml"). Only accepts a clean "<number><unit>" match at the
-// start of the string — anything else is left null rather than guessed, per
-// this app's "don't fabricate missing data" rule.
-function parseSize(
-  text: string | undefined,
-): { size: number; unit: string } | null {
-  if (!text) return null;
-  const match = text.trim().match(/^([\d.]+)\s*([a-zA-Zµ]+)/);
-  if (!match) return null;
-  const size = Number(match[1]);
-  if (!Number.isFinite(size) || size <= 0) return null;
-  return { size, unit: match[2].toLowerCase() };
+export interface OpenFoodFactsIdentification {
+  barcode: string;
+  name: string;
+  brand: string | null;
+  imageUrl: string | null;
+  servingSize?: number;
+  servingUnit?: string;
+  servingBaseUnit?: BaseUnit;
+  packageSize?: number;
+  packageUnit?: string;
+  packageBaseUnit?: BaseUnit;
+  containerKey?: ContainerKey;
 }
+
+export type OpenFoodFactsLookupResult =
+  | ({ outcome: 'FOUND_WITH_NUTRITION' } & OpenFoodFactsProduct)
+  | {
+      outcome: 'FOUND_WITHOUT_NUTRITION';
+      identification: OpenFoodFactsIdentification;
+    }
+  | { outcome: 'NOT_FOUND' };
 
 // OFF's `categories`/`countries` are comma-separated tag lists (broadest or
 // most-recently-added first, depending on the field) — take the first
@@ -79,7 +95,7 @@ function firstSegment(text: string | undefined): string | null {
 export class OpenFoodFactsClient {
   private readonly baseUrl = 'https://world.openfoodfacts.org/api/v2/product';
 
-  async lookupByBarcode(barcode: string): Promise<OpenFoodFactsProduct | null> {
+  async lookupByBarcode(barcode: string): Promise<OpenFoodFactsLookupResult> {
     const abortController = new AbortController();
     const timeout = setTimeout(
       () => abortController.abort(),
@@ -114,7 +130,7 @@ export class OpenFoodFactsClient {
     // (5xx, etc.) as an outage.
     if (response.status === 404) {
       clearTimeout(timeout);
-      return null;
+      return { outcome: 'NOT_FOUND' };
     }
     if (!response.ok) {
       clearTimeout(timeout);
@@ -136,38 +152,76 @@ export class OpenFoodFactsClient {
     // Open Food Facts returns HTTP 200 even with no data for the barcode —
     // the body's own `status` field is the real signal (docs/business-logic.md §5).
     if (body.status !== 1 || !body.product) {
-      return null;
+      return { outcome: 'NOT_FOUND' };
     }
 
     const nutriments = body.product.nutriments ?? {};
     const caloriesPer100g = nutriments['energy-kcal_100g'];
-    // Open Food Facts is crowd-sourced — a product can exist with no
-    // nutrition facts submitted at all. Silently showing 0 kcal would be
-    // worse than not offering it; treat it the same as "not found" so the
-    // caller falls back to the existing not-found/manual-search flow.
-    if (caloriesPer100g === undefined) {
-      return null;
+    const name = body.product.product_name ?? 'Unknown product';
+    const brand = body.product.brands?.trim() || null;
+    const imageUrl =
+      body.product.image_front_url ?? body.product.image_url ?? null;
+    const serving = normalizeMeasurement(
+      body.product.serving_quantity,
+      body.product.serving_quantity_unit,
+    );
+    const packageMeasurement = normalizeMeasurement(
+      body.product.product_quantity,
+      body.product.product_quantity_unit,
+    );
+    const containerKey = mapOffPackagingShapes(body.product.packagings);
+    if (
+      typeof caloriesPer100g !== 'number' ||
+      !Number.isFinite(caloriesPer100g) ||
+      caloriesPer100g <= 0
+    ) {
+      return {
+        outcome: 'FOUND_WITHOUT_NUTRITION',
+        identification: {
+          barcode,
+          name,
+          brand,
+          imageUrl,
+          ...(serving
+            ? {
+                servingSize: serving.value,
+                servingUnit: serving.legacyUnit,
+                servingBaseUnit: serving.baseUnit,
+              }
+            : {}),
+          ...(packageMeasurement
+            ? {
+                packageSize: packageMeasurement.value,
+                packageUnit: packageMeasurement.legacyUnit,
+                packageBaseUnit: packageMeasurement.baseUnit,
+              }
+            : {}),
+          ...(containerKey !== ContainerKey.PACKAGE ? { containerKey } : {}),
+        },
+      };
     }
-    const servingSize = parseSize(body.product.serving_size);
-    const packageSize = parseSize(body.product.quantity);
     return {
+      outcome: 'FOUND_WITH_NUTRITION',
       barcode,
-      name: body.product.product_name ?? 'Unknown product',
+      name,
       caloriesPer100g,
       proteinPer100g: nutriments.proteins_100g ?? null,
       carbsPer100g: nutriments.carbohydrates_100g ?? null,
       fatPer100g: nutriments.fat_100g ?? null,
       nameAr: body.product.product_name_ar ?? null,
-      brand: body.product.brands?.trim() || null,
+      brand,
       category: firstSegment(body.product.categories),
-      servingSize: servingSize?.size ?? null,
-      servingUnit: servingSize?.unit ?? null,
-      packageSize: packageSize?.size ?? null,
-      packageUnit: packageSize?.unit ?? null,
+      servingSize: serving?.value ?? null,
+      servingUnit: serving?.legacyUnit ?? null,
+      servingBaseUnit: serving?.baseUnit ?? null,
+      packageSize: packageMeasurement?.value ?? null,
+      packageUnit: packageMeasurement?.legacyUnit ?? null,
+      packageBaseUnit: packageMeasurement?.baseUnit ?? null,
+      containerKey,
       fiberPer100g: nutriments.fiber_100g ?? null,
       sugarPer100g: nutriments.sugars_100g ?? null,
       sodiumPer100g: nutriments.sodium_100g ?? null,
-      imageUrl: body.product.image_front_url ?? body.product.image_url ?? null,
+      imageUrl,
       country: firstSegment(body.product.countries),
     };
   }

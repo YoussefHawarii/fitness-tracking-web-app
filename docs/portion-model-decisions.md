@@ -83,11 +83,13 @@ dimension/basis conflict, nutrition missing.
 scaled safely; its non-null calorie invariant stays intact.
 
 3.2 A barcode that is identified but cannot become a loggable product keeps a
-lightweight record — identification, diagnostics, retry state, and enough to
-explain itself to the user. An identified product is not automatically a
-loggable one, and a nutrition-less one is structurally unable to reach the
-calculator. Missing nutrients are never represented as zero, and package or
-serving metadata never makes such a product loggable.
+lightweight `IdentifiedBarcode` record — identification, diagnostics, retry
+state, and enough to explain itself to the user. The name describes the known
+identity without presenting the row as a catalogued product. An identified
+product is not automatically a loggable one, and a nutrition-less one is
+structurally unable to reach the calculator. Missing nutrients are never
+represented as zero, and package or serving metadata never makes such a
+product loggable.
 
 3.3 Lazy re-hydration fills gaps only, never overwrites, and never touches
 `USER_SUBMITTED` or `VERIFIED` rows. Nutrition refresh is explicitly out of
@@ -410,7 +412,24 @@ recorded here by the ticket named, with its evidence. None may override a
 settled requirement above or in the spec; if one would, the owner is asked.
 
 9.1 Final app-owned container keys and the Open Food Facts shape-tag mapping
-(spec G6). Decided in ticket 03. *Pending.*
+(spec G6). Decided in ticket 03. **Decided (2026-09-28):**
+
+- *Evidence.* Across 24 recorded single-product responses, the observed shape
+  counts were: `en:bottle` 6; `en:bag` 5; `en:drink-can` 4; `en:sleeve` 4;
+  `en:bottle-cap` 3; `en:box` 3; `en:can`, `en:envelope` and `en:film` 2 each;
+  and `en:Container`, `en:fastener`, `en:individual-bag`, `en:jar`, `en:label`,
+  `en:lid`, `en:packet`, `en:pot`, `en:seal` and `en:sheet` 1 each.
+- *Keys and mapping.* The closed app-owned key set is `PACKAGE`, `CAN`,
+  `BOTTLE`, `JAR`, `BOX`, `BAG`. `en:can` and `en:drink-can` map to `CAN`;
+  `en:bottle` to `BOTTLE`; `en:jar` and `en:pot` to `JAR`; `en:box` to `BOX`;
+  and `en:bag` and `en:packet` to `BAG`. Matching is case-insensitive, so the
+  inconsistent `en:Container` is recognized as generic rather than persisted.
+- *Primary-container rule.* Preserve provider order and choose the first
+  mapped physical container after ignoring closures and secondary wraps
+  (`bottle-cap`, `film`, `sleeve`, `individual-bag`, `envelope`, `lid`, plus
+  the observed `fastener`, `label`, `seal` and `sheet`). Unknown and generic
+  tags do not mask a later meaningful shape. If nothing maps, use `PACKAGE`.
+  These keys are presentation-only and raw tags are never persisted.
 
 9.2 Deployment-compatibility mechanism for the staged food-log rollout,
 including the create-path release batch, the transitional representation of ML
@@ -432,6 +451,12 @@ contracts (spec M3). Decided in ticket 01. **Decided (2026-09-25):**
   ever gain fields during the transition, so an older frontend keeps working.
   This applies to the log create/update contracts (tickets 06, 08), the
   barcode-lookup response (05, 10) and the product-submission contract (12).
+- *Legacy product submission without a basis.* The deployed Add Product form
+  labels every nutrition field per 100 g, so an omitted basis is accepted as
+  a user-declared `PER_100_G`. The normal creation-time safety check still
+  rejects a volume package as `DIMENSION_BASIS_CONFLICT`; an explicitly
+  invalid basis is rejected by request validation. The current form requires
+  an explicit basis choice and never defaults the control.
 - *Release batch 05 + 06.* Ticket 05's resolver may merge first, but the
   frontend step that lets a user save an ML amount ships only with 06's
   server-side safety enforcement already live. Because the backend always
@@ -445,13 +470,53 @@ contracts (spec M3). Decided in ticket 01. **Decided (2026-09-25):**
   `amount ?? grams`. Ticket 02's verifier therefore checks G rows for
   `amount = grams` and ML rows for `grams IS NULL`, and ticket 14's gate uses
   the same predicates.
+- *Transition complete (2026-09-29).* The contract release removed the legacy
+  `grams` request/response and storage path, the free-text product-unit
+  columns, and the missing-basis default. Food logs now require `amount` with
+  `amountUnit`, and product submissions require an explicit Declared basis.
 
 9.3 Whether conservative free-text Open Food Facts size parsing remains as a
 fallback beneath the structured numeric fields (spec E1). Decided in ticket 03.
-*Pending.*
+**Decided (2026-09-28):** Do not retain a free-text fallback.
+
+- *Evidence.* All 24 recorded found-product responses had both
+  `product_quantity` and `product_quantity_unit` (0/24 incomplete package
+  pairs). Five of 24 lacked a complete structured serving pair:
+  `serving_quantity` was absent in 5/24 and `serving_quantity_unit` in 4/24.
+  None of those five had a free-text `serving_size` that would yield a usable
+  value (0/5 recovered). The package free text therefore recovered 0 cases,
+  and serving free text recovered 0 cases.
+- *Rule.* Only the structured numeric value/unit pairs are normalized. A
+  missing or unusable structured pair remains absent. This removes an
+  unneeded parsing surface and preserves the no-guessing rule for ambiguous
+  or unsupported units. Explicit spelling aliases are accepted only when they
+  name the same unit (including common English/French spellings,
+  abbreviations, and the recorded Arabic vocabulary); ambiguous tokens such
+  as bare `oz` or a lone `fl` remain absent.
 
 9.4 The short-lived transient-provider-error backoff mechanism, if repeated
 provider calls during an outage need limiting (3.4) — whether one is needed,
 its mechanism and its duration. It must never reuse or advance the 30-day
 completed-check timestamp. Decided in ticket 10, and reused by ticket 11.
-*Pending.*
+**Decided (2026-09-28):** Apply a 60-second in-memory backoff per provider and
+canonical barcode after a transient failure.
+
+- *Evidence.* Open Food Facts publishes a limit of 15 product-read requests
+  per minute per IP and may return HTTP 503 when global limits are exceeded
+  (https://openfoodfacts.github.io/documentation/docs/Product-Opener/api/).
+  Calls from this backend share its outbound IP. Its 50-request rolling
+  five-minute user/IP throttle does not cap the aggregate from different
+  authenticated users below OFF's limit, and each failed provider call can
+  occupy the existing client timeout for up to 8 seconds. Because transient
+  failures deliberately do not advance the 30-day timestamp, repeated scans
+  of one stale barcode would otherwise each call the unavailable provider.
+- *Mechanism.* Record only an ephemeral failure deadline keyed by provider and
+  canonical barcode. Until 60 seconds have elapsed, return the cached
+  identification result unchanged; where there is no cached subject, retain
+  the existing unavailable outcome. A completed response clears the backoff.
+  The state is deliberately per process: it needs no database table or
+  distributed cache, and a restart merely loses a short-lived optimization.
+- *Separation.* The backoff has its own clock and stores no completed-check
+  timestamp. It never writes or advances `lastProviderCheckAt`; after it
+  expires, the same 30-day eligibility decision still applies. Ticket 11 uses
+  the same mechanism for portion re-hydration.

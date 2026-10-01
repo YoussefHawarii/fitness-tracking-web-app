@@ -71,7 +71,8 @@ describe('FoodService — name capture on createFoodLog', () => {
     await service.createFoodLog(userId, {
       sourceType: 'USDA',
       sourceRef: '123',
-      grams: 100,
+      amount: 100,
+      amountUnit: 'G',
       mealCategory: 'BREAKFAST',
       loggedAtUtc: '2026-08-30T08:00:00.000Z',
     });
@@ -79,24 +80,31 @@ describe('FoodService — name capture on createFoodLog', () => {
     expect(created[0].name).toBe('Banana, raw');
   });
 
-  it('captures the Open Food Facts product name', async () => {
+  it('does not resolve or create a new Open Food Facts log entry', async () => {
+    const lookupByBarcode = jest
+      .fn()
+      .mockResolvedValue({ name: 'Cheerios', caloriesPer100g: 375 });
     const { service, created } = buildService({
       openFoodFacts: {
-        lookupByBarcode: jest
-          .fn()
-          .mockResolvedValue({ name: 'Cheerios', caloriesPer100g: 375 }),
+        lookupByBarcode,
       },
     });
 
-    await service.createFoodLog(userId, {
-      sourceType: 'OPEN_FOOD_FACTS',
-      sourceRef: '0000000000000',
-      grams: 40,
-      mealCategory: 'BREAKFAST',
-      loggedAtUtc: '2026-08-30T08:00:00.000Z',
+    await expect(
+      service.createFoodLog(userId, {
+        sourceType: 'OPEN_FOOD_FACTS',
+        sourceRef: '0000000000000',
+        amount: 40,
+        amountUnit: 'G',
+        mealCategory: 'BREAKFAST',
+        loggedAtUtc: '2026-08-30T08:00:00.000Z',
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'OPEN_FOOD_FACTS_CREATE_RETIRED' },
     });
 
-    expect(created[0].name).toBe('Cheerios');
+    expect(lookupByBarcode).not.toHaveBeenCalled();
+    expect(created).toHaveLength(0);
   });
 
   it('captures the local food item name', async () => {
@@ -118,7 +126,8 @@ describe('FoodService — name capture on createFoodLog', () => {
     await service.createFoodLog(userId, {
       sourceType: 'LOCAL',
       sourceRef: 'local-1',
-      grams: 250,
+      amount: 250,
+      amountUnit: 'G',
       mealCategory: 'DINNER',
       loggedAtUtc: '2026-08-30T19:00:00.000Z',
     });
@@ -158,7 +167,8 @@ describe('FoodService — name capture on createFoodLog', () => {
       await service.createFoodLog(userId, {
         sourceType: 'CANONICAL',
         sourceRef: 'canon-1',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-08-30T12:00:00.000Z',
       });
@@ -173,7 +183,8 @@ describe('FoodService — name capture on createFoodLog', () => {
         sourceType: 'CANONICAL',
         sourceRef: 'canon-1',
         name: 'صدر فراخ نيء',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-08-30T12:00:00.000Z',
       });
@@ -188,7 +199,8 @@ describe('FoodService — name capture on createFoodLog', () => {
         sourceType: 'CANONICAL',
         sourceRef: 'canon-1',
         name: 'Ice cream',
-        grams: 100,
+        amount: 100,
+        amountUnit: 'G',
         mealCategory: 'LUNCH',
         loggedAtUtc: '2026-08-30T12:00:00.000Z',
       });
