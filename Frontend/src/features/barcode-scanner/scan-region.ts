@@ -1,6 +1,15 @@
-export const SCAN_BOX = { x: 0.1, y: 0.35, width: 0.8, height: 0.3 };
+export const SCAN_SLOT = { x: 0.15, y: 0.4125, width: 0.7, height: 0.175 };
 
-type ScanBox = typeof SCAN_BOX;
+// ZXing needs blank quiet zones beside the guard bars when users fill the slot edge to edge.
+const QUIET_ZONE_MARGIN = 0.12;
+export const DECODE_REGION = {
+  x: SCAN_SLOT.x - SCAN_SLOT.width * QUIET_ZONE_MARGIN,
+  y: SCAN_SLOT.y,
+  width: SCAN_SLOT.width * (1 + 2 * QUIET_ZONE_MARGIN),
+  height: SCAN_SLOT.height,
+};
+
+type ScanBox = typeof SCAN_SLOT;
 
 export function computeScanRegion({
   videoWidth,

@@ -438,7 +438,7 @@ test('scanning view shows a centred horizontal scan frame and no torch button wi
   );
 
   assert.match(html, /aria-label="Barcode scan area"/);
-  assert.match(html, /left:10%;top:35%;width:80%;height:30%/);
+  assert.match(html, /left:15%;top:41.25%;width:70%;height:17.5%/);
   assert.doesNotMatch(html, /flashlight/i);
 });
 

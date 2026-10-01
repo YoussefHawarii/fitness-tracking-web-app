@@ -1,5 +1,5 @@
 import type { Ref } from 'react';
-import { SCAN_BOX } from './scan-region';
+import { SCAN_SLOT } from './scan-region';
 import type { ScanStatus } from './scan-session';
 
 type Props = {
@@ -45,16 +45,36 @@ export function ScannerView({
         autoPlay
       />
       <div
+        role="img"
         aria-label="Barcode scan area"
-        className="absolute rounded-xl border-2 border-white shadow-[0_0_0_100vmax_rgba(0,0,0,0.48)]"
+        className="absolute rounded-sm border border-accent/30 shadow-[0_0_0_100vmax_rgba(0,0,0,0.55)]"
         style={{
-          left: `${SCAN_BOX.x * 100}%`,
-          top: `${SCAN_BOX.y * 100}%`,
-          width: `${SCAN_BOX.width * 100}%`,
-          height: `${SCAN_BOX.height * 100}%`,
+          left: `${SCAN_SLOT.x * 100}%`,
+          top: `${SCAN_SLOT.y * 100}%`,
+          width: `${SCAN_SLOT.width * 100}%`,
+          height: `${SCAN_SLOT.height * 100}%`,
         }}
       >
-        <span className="absolute left-3 right-3 top-1/2 h-px bg-white/80" />
+        <span
+          aria-hidden="true"
+          data-slot-corner="top-left"
+          className="absolute left-0 top-0 h-[32%] w-[14%] rounded-tl-sm border-l-2 border-t-2 border-accent drop-shadow-[0_0_2px_rgba(0,0,0,0.85)]"
+        />
+        <span
+          aria-hidden="true"
+          data-slot-corner="top-right"
+          className="absolute right-0 top-0 h-[32%] w-[14%] rounded-tr-sm border-r-2 border-t-2 border-accent drop-shadow-[0_0_2px_rgba(0,0,0,0.85)]"
+        />
+        <span
+          aria-hidden="true"
+          data-slot-corner="bottom-left"
+          className="absolute bottom-0 left-0 h-[32%] w-[14%] rounded-bl-sm border-b-2 border-l-2 border-accent drop-shadow-[0_0_2px_rgba(0,0,0,0.85)]"
+        />
+        <span
+          aria-hidden="true"
+          data-slot-corner="bottom-right"
+          className="absolute bottom-0 right-0 h-[32%] w-[14%] rounded-br-sm border-b-2 border-r-2 border-accent drop-shadow-[0_0_2px_rgba(0,0,0,0.85)]"
+        />
       </div>
       {torch.available && status !== 'decoded' && (
         <button

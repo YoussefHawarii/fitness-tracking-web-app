@@ -9,7 +9,7 @@ import {
   type NativeBarcodeDetectorConstructor,
 } from './native-detector';
 import { createRetailDecoder } from './retail-decoder';
-import { SCAN_BOX, computeScanRegion } from './scan-region';
+import { DECODE_REGION, computeScanRegion } from './scan-region';
 import {
   createScanSession,
   type CameraHandle,
@@ -150,7 +150,7 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
             videoHeight: video.videoHeight,
             viewWidth: video.clientWidth,
             viewHeight: video.clientHeight,
-            box: SCAN_BOX,
+            box: DECODE_REGION,
           });
           if (!region.width || !region.height) return;
           cropper.draw(video, region);
