@@ -34,6 +34,7 @@ import { ListFoodLogsQueryDto } from './dto/list-food-logs-query.dto';
 import { SearchFoodQueryDto } from './dto/search-food-query.dto';
 import { SearchFoodTranscriptQueryDto } from './dto/search-food-transcript-query.dto';
 import { CreatePackagedProductDto } from './dto/create-packaged-product.dto';
+import { resolvePackagedProductPortion } from './portion-resolution';
 
 const NUTRITION_LABEL_MAX_BYTES = 5 * 1024 * 1024;
 const NUTRITION_LABEL_ALLOWED_MIME = /^image\/(jpeg|png|webp)$/;
@@ -54,6 +55,11 @@ export class FoodController {
     return this.foodService.lookupBarcode(code);
   }
 
+  @Get('products/:id')
+  getProduct(@Param('id') id: string) {
+    return this.foodService.getPackagedProduct(id);
+  }
+
   // Unknown-barcode fallback (section 14 of the Egyptian-catalog spec): once
   // a scan misses everywhere, the user can submit the product themselves.
   // Requires auth like every other /food route — same trust model as
@@ -61,7 +67,8 @@ export class FoodController {
   @Post('products')
   async createProduct(@Body() dto: CreatePackagedProductDto) {
     const product = await this.packagedProductService.createUserSubmitted(dto);
-    return serializePackagedProduct(product);
+    const { resolution } = resolvePackagedProductPortion(product);
+    return serializePackagedProduct(product, resolution);
   }
 
   // Nutrition-label scanning foundation (prepared, not wired to a real OCR

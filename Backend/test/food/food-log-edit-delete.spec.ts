@@ -22,7 +22,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
       sourceRef: 'local-1',
       name: "Mom's lasagna",
       localFoodItemId: 'local-1',
-      grams: 100,
+      amount: 100,
+      amountUnit: 'G',
+      portionKind: null,
+      portionMultiplier: null,
       mealCategory: 'LUNCH',
       ...overrides.existing,
     };
@@ -56,9 +59,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     const openFoodFacts = {
       lookupByBarcode: jest.fn().mockResolvedValue(
         overrides.openFoodFactsProduct === null
-          ? null
+          ? { outcome: 'NOT_FOUND' }
           : overrides.openFoodFactsProduct
             ? {
+                outcome: 'FOUND_WITH_NUTRITION',
                 name: 'Legacy barcode product',
                 caloriesPer100g: 250,
                 proteinPer100g: 5,
@@ -85,25 +89,71 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     return { service, prisma, updateCalls, openFoodFacts, packagedProducts };
   }
 
-  it('recomputes calories proportionally to the new grams', async () => {
-    const { service, updateCalls } = buildService({
-      existing: { grams: 100 },
+  it('recomputes calories proportionally to the new amount', async () => {
+    const { service, updateCalls } = buildService();
+
+    await service.updateFoodLog(userId, 'log-1', {
+      amount: 250,
+      amountUnit: 'G',
     });
 
-    await service.updateFoodLog(userId, 'log-1', { grams: 250 });
-
-    expect(updateCalls[0].grams).toBe(250);
+    expect(updateCalls[0].amount).toBe(250);
     // 200 cal/100g * 250g = 500
     expect(updateCalls[0].caloriesComputed).toBe(500);
   });
 
-  it('updates mealCategory without requiring grams', async () => {
-    const { service, updateCalls } = buildService();
+  it('updates mealCategory without requiring an amount', async () => {
+    const { service, updateCalls, prisma } = buildService();
 
     await service.updateFoodLog(userId, 'log-1', { mealCategory: 'DINNER' });
 
-    expect(updateCalls[0].mealCategory).toBe('DINNER');
-    expect(updateCalls[0].grams).toBe(100); // unchanged, from existing entry
+    expect(updateCalls[0]).toEqual({ mealCategory: 'DINNER' });
+    expect(prisma.localFoodItem.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('accepts the explicit G update shape for a mass source', async () => {
+    const { service, updateCalls } = buildService();
+
+    await service.updateFoodLog(userId, 'log-1', {
+      amount: 80,
+      amountUnit: 'G',
+      portionKind: 'CUSTOM',
+      mealCategory: 'DINNER',
+    });
+
+    expect(updateCalls[0]).toMatchObject({
+      amount: 80,
+      amountUnit: 'G',
+      portionKind: 'CUSTOM',
+      portionMultiplier: null,
+      caloriesComputed: 160,
+      mealCategory: 'DINNER',
+    });
+  });
+
+  it('rejects ML and structured package choices for mass sources', async () => {
+    const { service, prisma } = buildService();
+
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'MASS_SOURCE_REQUIRES_G' },
+    });
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'G',
+        portionKind: 'PACKAGE',
+        portionMultiplier: 1,
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'PACKAGE_PORTION_UNAVAILABLE' },
+    });
+    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
   });
 
   it('still edits a pre-feature OPEN_FOOD_FACTS log without a PackagedProduct relation', async () => {
@@ -118,11 +168,61 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
         openFoodFactsProduct: {},
       });
 
-    await service.updateFoodLog(userId, 'log-1', { grams: 40 });
+    await service.updateFoodLog(userId, 'log-1', {
+      amount: 40,
+      amountUnit: 'G',
+    });
 
     expect(openFoodFacts.lookupByBarcode).toHaveBeenCalledWith('3017620422003');
     expect(packagedProducts.findById).not.toHaveBeenCalled();
     expect(updateCalls[0].caloriesComputed).toBe(100);
+  });
+
+  it('rejects an ML amount for a legacy OPEN_FOOD_FACTS entry', async () => {
+    const { service, prisma, openFoodFacts } = buildService({
+      existing: {
+        sourceType: 'OPEN_FOOD_FACTS',
+        sourceRef: '3017620422003',
+        localFoodItemId: null,
+        packagedProductId: null,
+      },
+    });
+
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'ML',
+        portionKind: 'CUSTOM',
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'MASS_SOURCE_REQUIRES_G' },
+    });
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
+  });
+
+  it('rejects a structured package choice for a legacy OPEN_FOOD_FACTS entry', async () => {
+    const { service, prisma, openFoodFacts } = buildService({
+      existing: {
+        sourceType: 'OPEN_FOOD_FACTS',
+        sourceRef: '3017620422003',
+        localFoodItemId: null,
+        packagedProductId: null,
+      },
+    });
+
+    await expect(
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 80,
+        amountUnit: 'G',
+        portionKind: 'PACKAGE',
+        portionMultiplier: 1,
+      }),
+    ).rejects.toMatchObject({
+      response: { reason: 'PACKAGE_PORTION_UNAVAILABLE' },
+    });
+    expect(openFoodFacts.lookupByBarcode).not.toHaveBeenCalled();
+    expect(prisma.foodLogEntry.update).not.toHaveBeenCalled();
   });
 
   it('throws NotFoundException when updating an entry not owned by the user', async () => {
@@ -130,7 +230,10 @@ describe('FoodService — updateFoodLog / deleteFoodLog', () => {
     prisma.foodLogEntry.findFirst.mockResolvedValueOnce(null);
 
     await expect(
-      service.updateFoodLog(userId, 'log-1', { grams: 50 }),
+      service.updateFoodLog(userId, 'log-1', {
+        amount: 50,
+        amountUnit: 'G',
+      }),
     ).rejects.toThrow(NotFoundException);
   });
 

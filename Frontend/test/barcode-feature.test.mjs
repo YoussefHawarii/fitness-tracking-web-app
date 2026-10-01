@@ -9,6 +9,10 @@ let foodLogModule;
 let addProductModule;
 let foodServiceModule;
 let apiClientModule;
+let editPortionOptionsModule;
+let addProductGuardModule;
+let extractionFormValuesModule;
+let scannerLifecycleModule;
 
 before(async () => {
   vite = await createServer({
@@ -17,13 +21,25 @@ before(async () => {
     server: { middlewareMode: true },
     ssr: { noExternal: ['@zxing/browser', '@zxing/library'] },
   });
-  [foodLogModule, addProductModule, foodServiceModule, apiClientModule] =
-    await Promise.all([
-      vite.ssrLoadModule('/src/pages/FoodLog.tsx'),
-      vite.ssrLoadModule('/src/features/add-product/AddProductForm.tsx'),
-      vite.ssrLoadModule('/src/services/foodService.ts'),
-      vite.ssrLoadModule('/src/services/apiClient.ts'),
-    ]);
+  [
+    foodLogModule,
+    addProductModule,
+    foodServiceModule,
+    apiClientModule,
+    editPortionOptionsModule,
+    addProductGuardModule,
+    extractionFormValuesModule,
+    scannerLifecycleModule,
+  ] = await Promise.all([
+    vite.ssrLoadModule('/src/pages/FoodLog.tsx'),
+    vite.ssrLoadModule('/src/features/add-product/AddProductForm.tsx'),
+    vite.ssrLoadModule('/src/services/foodService.ts'),
+    vite.ssrLoadModule('/src/services/apiClient.ts'),
+    vite.ssrLoadModule('/src/features/portion-selector/editPortionOptions.ts'),
+    vite.ssrLoadModule('/src/features/add-product/submissionGuard.ts'),
+    vite.ssrLoadModule('/src/features/add-product/extractionFormValues.ts'),
+    vite.ssrLoadModule('/src/features/barcode-scanner/scannerLifecycle.ts'),
+  ]);
 });
 
 after(async () => {
@@ -41,7 +57,7 @@ test('rich product preview renders provided metadata, every macro, and status-dr
         brand: 'Chipsy',
         imageUrl: 'https://images.example/chipsy.jpg',
         packageSize: 150,
-        packageUnit: 'g',
+        packageBaseUnit: 'G',
         caloriesPer100g: 536,
         proteinPer100g: 6.5,
         carbsPer100g: 53,
@@ -74,7 +90,7 @@ test('preview exposes missing macros as unavailable, shows a unitless size, and 
         carbsPer100g: null,
         fatPer100g: null,
         packageSize: 2,
-        packageUnit: null,
+        packageBaseUnit: null,
         verificationStatus: 'EXTERNAL',
       },
     }),
@@ -101,6 +117,213 @@ test('not-found actions retain add-product, manual-search, and rescan choices', 
   assert.match(html, /Scan again/);
 });
 
+test('Not scalable panel renders identity and safe fallbacks without logging controls', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.NotLoggableProductPanel, {
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Conflicting Cola',
+          brand: 'Example Drinks',
+          imageUrl: 'https://images.example/conflicting-cola.jpg',
+        },
+        subjectKind: 'PACKAGED_PRODUCT',
+        primaryReason: 'DIMENSION_BASIS_CONFLICT',
+      },
+      onAdd: () => undefined,
+      onSearch: () => undefined,
+      onRescan: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Conflicting Cola/);
+  assert.match(html, /Example Drinks/);
+  assert.match(html, /https:\/\/images\.example\/conflicting-cola\.jpg/);
+  assert.match(html, /portion unit conflicts with its nutrition basis/);
+  assert.match(html, /can&#x27;t be logged safely/);
+  assert.match(html, /Search manually instead/);
+  assert.match(html, /Scan again/);
+  assert.doesNotMatch(html, /Add this product/);
+  assert.doesNotMatch(html, /Save entry/);
+  assert.doesNotMatch(html, />Grams</);
+});
+
+test('identified-without-nutrition panel is distinct and offers both fallbacks', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.NotLoggableProductPanel, {
+      resolution: {
+        outcome: 'NOT_LOGGABLE',
+        display: {
+          name: 'Known Regional Snack',
+          brand: 'Regional Foods',
+          imageUrl: 'https://images.example/known-regional-snack.jpg',
+        },
+        subjectKind: 'IDENTIFIED_NOT_CATALOGUED',
+        primaryReason: 'NUTRITION_MISSING',
+      },
+      onAdd: () => undefined,
+      onSearch: () => undefined,
+      onRescan: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Known Regional Snack/);
+  assert.match(html, /Regional Foods/);
+  assert.match(html, /https:\/\/images\.example\/known-regional-snack\.jpg/);
+  assert.match(html, /identified, but no usable nutrition data is available/);
+  assert.match(html, /Add this product/);
+  assert.match(html, /Search manually instead/);
+  assert.match(html, /Scan again/);
+  assert.doesNotMatch(html, /Save entry/);
+});
+
+function loggableResolution(basis) {
+  const volume = basis === 'PER_100_ML';
+  return {
+    outcome: 'LOGGABLE',
+    portionDimension: volume ? 'VOLUME' : 'MASS',
+    effectiveNutritionBasis: {
+      basis,
+      origin: 'INFERRED',
+      source: 'OPEN_FOOD_FACTS',
+      ruleId: 'OPEN_FOOD_FACTS_PORTION_DIMENSION',
+    },
+    package: { size: volume ? 330 : 125, baseUnit: volume ? 'ML' : 'G' },
+    serving: null,
+    containerKey: volume ? 'CAN' : 'PACKAGE',
+  };
+}
+
+test('pending barcode amount fields render the effective VOLUME basis and ml input', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.PendingAmountFields, {
+      item: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'drink-1',
+        name: 'Test drink',
+        caloriesPer100g: 42,
+        resolution: loggableResolution('PER_100_ML'),
+      },
+      amount: '330',
+      onAmountChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /42 kcal \/ 100 ml/);
+  assert.match(html, /Amount \(ml\)/);
+  assert.match(html, /step="0\.1"/);
+});
+
+test('pending barcode amount fields render the effective MASS basis and g input', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.PendingAmountFields, {
+      item: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'food-1',
+        name: 'Test food',
+        caloriesPer100g: 250,
+        resolution: loggableResolution('PER_100_G'),
+      },
+      amount: '125',
+      onAmountChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /250 kcal \/ 100 g/);
+  assert.match(html, /Amount \(g\)/);
+});
+
+test('a barcode response without resolution keeps the mass presentation', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.PendingAmountFields, {
+      item: {
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'legacy-1',
+        name: 'Legacy product',
+        caloriesPer100g: 100,
+      },
+      amount: '',
+      onAmountChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /100 kcal\/100g/);
+  assert.match(html, /Amount \(g\)/);
+});
+
+test('the edit amount field keeps ML amounts editable with their unit', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(foodLogModule.EditAmountField, {
+      entry: {
+        id: 'log-1',
+        sourceType: 'PACKAGED_PRODUCT',
+        sourceRef: 'product-1',
+        name: 'Test drink',
+        amount: '330',
+        amountUnit: 'ML',
+        caloriesComputed: '138.6',
+        mealCategory: 'LUNCH',
+        loggedAtUtc: '2026-09-28T12:00:00.000Z',
+      },
+      value: '330',
+      onChange: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Amount \(ml\)/);
+  assert.doesNotMatch(html, /disabled=""/);
+});
+
+test('packaged-product edit offers create options and falls back to CUSTOM after serving metadata changes', () => {
+  const currentResolution = {
+    ...loggableResolution('PER_100_ML'),
+    package: { size: 600, baseUnit: 'ML' },
+    serving: { size: 300, baseUnit: 'ML' },
+    containerKey: 'BOTTLE',
+  };
+  const model = editPortionOptionsModule.buildEditPortionOptions(
+    {
+      id: 'log-1',
+      sourceType: 'PACKAGED_PRODUCT',
+      sourceRef: 'product-1',
+      name: 'Test drink',
+      amount: '250',
+      amountUnit: 'ML',
+      portionKind: 'SERVING',
+      portionMultiplier: '1',
+      caloriesComputed: '105',
+      mealCategory: 'LUNCH',
+      loggedAtUtc: '2026-09-28T12:00:00.000Z',
+    },
+    currentResolution,
+  );
+
+  assert.deepEqual(
+    model.options.map(({ id }) => id),
+    ['SERVING_HALF', 'SERVING_ONE', 'SERVING_TWO', 'PACKAGE_ONE', 'CUSTOM'],
+  );
+  assert.deepEqual(model.defaultSelection, {
+    optionId: 'CUSTOM',
+    choice: { portionKind: 'CUSTOM', amount: 250 },
+  });
+});
+
+test('history amount rendering includes ml and g units', () => {
+  const volumeHtml = renderToStaticMarkup(
+    React.createElement(foodLogModule.HistoryAmount, {
+      entry: { amount: '330', amountUnit: 'ML' },
+    }),
+  );
+  const massHtml = renderToStaticMarkup(
+    React.createElement(foodLogModule.HistoryAmount, {
+      entry: { amount: '150', amountUnit: 'G' },
+    }),
+  );
+
+  assert.equal(volumeHtml, '330 ml');
+  assert.equal(massHtml, '150 g');
+});
+
 test('invalid barcodes stay distinct from confirmed not-found responses', async () => {
   const originalGet = apiClientModule.apiClient.get;
   try {
@@ -121,8 +344,50 @@ test('invalid barcodes stay distinct from confirmed not-found responses', async 
   }
 });
 
+test('missing product basis errors preserve the typed reason and server message', async () => {
+  const originalPost = apiClientModule.apiClient.post;
+  try {
+    apiClientModule.apiClient.post = async () => {
+      throw {
+        isAxiosError: true,
+        response: {
+          status: 400,
+          data: {
+            reason: 'DECLARED_NUTRITION_BASIS_REQUIRED',
+            message: 'Choose whether nutrition is per 100 g or per 100 ml.',
+          },
+        },
+      };
+    };
+
+    await assert.rejects(
+      () =>
+        foodServiceModule.createPackagedProduct({
+          barcode: '3017620422003',
+          name: 'Missing basis product',
+          declaredNutritionBasis: 'PER_100_G',
+          caloriesPer100g: 100,
+          proteinPer100g: 2,
+          carbsPer100g: 20,
+          fatPer100g: 1,
+        }),
+      (error) => {
+        assert.ok(error instanceof foodServiceModule.ProductSubmissionError);
+        assert.equal(error.reason, 'DECLARED_NUTRITION_BASIS_REQUIRED');
+        assert.equal(
+          error.message,
+          'Choose whether nutrition is per 100 g or per 100 ml.',
+        );
+        return true;
+      },
+    );
+  } finally {
+    apiClientModule.apiClient.post = originalPost;
+  }
+});
+
 test('nutrition extraction candidates become editable form values without creating a product', () => {
-  const values = addProductModule.nutritionCandidateToFormValues({
+  const values = extractionFormValuesModule.nutritionCandidateToFormValues({
     caloriesPer100g: 0,
     proteinPer100g: 5,
     carbsPer100g: 12,
@@ -152,7 +417,250 @@ test('nutrition extraction candidates become editable form values without creati
   );
   assert.match(formHtml, /Scan nutrition label \(optional\)/);
   assert.match(formHtml, /Product name \(required\)/);
-  assert.match(formHtml, /Calories \/ 100g \(required\)/);
+  assert.match(formHtml, /Nutrition basis \(required\)/);
+  assert.match(formHtml, /<select[^>]*required=""/);
+  assert.match(formHtml, /Per 100 g/);
+  assert.match(formHtml, /Per 100 ml/);
+  assert.match(formHtml, /Calories \/ selected basis \(required\)/);
   assert.match(formHtml, /Country/);
   assert.match(formHtml, /Create product/);
+});
+
+test('a confident nutrition-label basis suggestion pre-selects the form basis', () => {
+  const values = extractionFormValuesModule.nutritionExtractionToFormValues({
+    available: true,
+    candidate: { caloriesPer100g: 42 },
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: true,
+    },
+  });
+
+  assert.deepEqual(values, {
+    caloriesPer100g: '42',
+    declaredNutritionBasis: 'PER_100_ML',
+  });
+});
+
+test('a missing nutrition-label basis suggestion leaves submission blocked', () => {
+  const extraction = {
+    available: true,
+    candidate: { caloriesPer100g: 42 },
+  };
+  const basis = extractionFormValuesModule.nutritionBasisAfterExtraction(
+    extraction,
+    '',
+    false,
+  );
+  let requests = 0;
+  const result = addProductGuardModule.withDeclaredNutritionBasis(basis, () => {
+    requests += 1;
+  });
+
+  assert.equal(basis, '');
+  assert.deepEqual(result, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('an unconfident nutrition-label basis suggestion leaves submission blocked', () => {
+  const extraction = {
+    available: true,
+    candidate: { caloriesPer100g: 42 },
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: false,
+    },
+  };
+  const basis = extractionFormValuesModule.nutritionBasisAfterExtraction(
+    extraction,
+    '',
+    false,
+  );
+  let requests = 0;
+  const result = addProductGuardModule.withDeclaredNutritionBasis(basis, () => {
+    requests += 1;
+  });
+
+  assert.equal(basis, '');
+  assert.deepEqual(result, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('the user can replace a suggested basis and submits the replacement', () => {
+  const extraction = {
+    available: true,
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: true,
+    },
+  };
+  const suggestedBasis =
+    extractionFormValuesModule.nutritionBasisAfterExtraction(
+      extraction,
+      '',
+      false,
+    );
+  const userBasis = extractionFormValuesModule.nutritionBasisAfterExtraction(
+    extraction,
+    'PER_100_G',
+    true,
+  );
+  let submittedBasis;
+
+  assert.equal(suggestedBasis, 'PER_100_ML');
+  assert.equal(userBasis, 'PER_100_G');
+  const result = addProductGuardModule.withDeclaredNutritionBasis(
+    userBasis,
+    (basis) => {
+      submittedBasis = basis;
+      return basis;
+    },
+  );
+
+  assert.deepEqual(result, { allowed: true, value: 'PER_100_G' });
+  assert.equal(submittedBasis, 'PER_100_G');
+});
+
+test('Add Product keeps and submits a user basis selected while extraction is pending', async () => {
+  let resolveExtraction;
+  const extraction = new Promise((resolve) => {
+    resolveExtraction = resolve;
+  });
+  let basis = '';
+  let basisSelectedByUser = false;
+
+  const completion =
+    extractionFormValuesModule.completeNutritionLabelExtraction(extraction, {
+      applyValues: () => undefined,
+      updateBasis: (resolveBasis) => {
+        basis = resolveBasis(basis, basisSelectedByUser);
+      },
+      setUnavailableReason: () => undefined,
+    });
+
+  basis = 'PER_100_G';
+  basisSelectedByUser = true;
+  resolveExtraction({
+    available: true,
+    basisSuggestion: {
+      basis: 'PER_100_ML',
+      confident: true,
+    },
+  });
+  await completion;
+
+  let submittedBasis;
+  const submission = addProductGuardModule.withDeclaredNutritionBasis(
+    basis,
+    (selectedBasis) => {
+      submittedBasis = selectedBasis;
+      return selectedBasis;
+    },
+  );
+  assert.equal(basis, 'PER_100_G');
+  assert.deepEqual(submission, { allowed: true, value: 'PER_100_G' });
+  assert.equal(submittedBasis, 'PER_100_G');
+});
+
+test('Add Product keeps the basis empty and blocks submit after the unavailable stub resolves', async () => {
+  let resolveExtraction;
+  const extraction = new Promise((resolve) => {
+    resolveExtraction = resolve;
+  });
+  let basis = '';
+  let unavailableReason;
+  let appliedValues = false;
+
+  const completion =
+    extractionFormValuesModule.completeNutritionLabelExtraction(extraction, {
+      applyValues: () => {
+        appliedValues = true;
+      },
+      updateBasis: (resolveBasis) => {
+        basis = resolveBasis(basis, false);
+      },
+      setUnavailableReason: (reason) => {
+        unavailableReason = reason;
+      },
+    });
+
+  resolveExtraction({
+    available: false,
+    reason:
+      'Automatic nutrition label scanning is not set up for this deployment yet — enter the values manually below.',
+  });
+  await completion;
+
+  let requests = 0;
+  const submission = addProductGuardModule.withDeclaredNutritionBasis(
+    basis,
+    () => {
+      requests += 1;
+    },
+  );
+  assert.equal(basis, '');
+  assert.equal(appliedValues, false);
+  assert.equal(
+    unavailableReason,
+    'Automatic nutrition label scanning is not set up for this deployment yet — enter the values manually below.',
+  );
+  assert.deepEqual(submission, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('identified product identity pre-fills Add Product while basis remains user-supplied', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(addProductModule.AddProductForm, {
+      barcode: '3017620422003',
+      initialName: 'Known Regional Snack',
+      initialBrand: 'Regional Foods',
+      onCreated: () => undefined,
+    }),
+  );
+
+  assert.match(html, /Barcode: 3017620422003/);
+  assert.match(html, /value="Known Regional Snack"/);
+  assert.match(html, /value="Regional Foods"/);
+  assert.match(html, /<option value="" selected="">Choose a basis<\/option>/);
+});
+
+test('Add Product blocks a missing basis without starting a request', () => {
+  let requests = 0;
+  const result = addProductGuardModule.withDeclaredNutritionBasis('', () => {
+    requests += 1;
+    return Promise.resolve();
+  });
+
+  assert.deepEqual(result, {
+    allowed: false,
+    error: addProductGuardModule.DECLARED_BASIS_REQUIRED_MESSAGE,
+  });
+  assert.equal(requests, 0);
+});
+
+test('barcode scanning is paused for identified results and while Add Product is open', () => {
+  assert.equal(
+    scannerLifecycleModule.shouldMountBarcodeScanner(
+      'identified-no-nutrition',
+      false,
+    ),
+    false,
+  );
+  assert.equal(
+    scannerLifecycleModule.shouldMountBarcodeScanner('idle', true),
+    false,
+  );
+  assert.equal(
+    scannerLifecycleModule.shouldMountBarcodeScanner('idle', false),
+    true,
+  );
 });

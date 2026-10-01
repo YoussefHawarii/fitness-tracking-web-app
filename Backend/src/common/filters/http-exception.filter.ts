@@ -25,10 +25,20 @@ export class HttpExceptionFilter implements ExceptionFilter {
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
 
-    const message =
+    const exceptionResponse =
       exception instanceof HttpException
         ? exception.getResponse()
         : 'Internal server error';
+    const reason =
+      typeof exceptionResponse === 'object' &&
+      exceptionResponse !== null &&
+      'reason' in exceptionResponse &&
+      typeof exceptionResponse.reason === 'string'
+        ? exceptionResponse.reason
+        : undefined;
+    const message = reason
+      ? (exceptionResponse as { message: unknown }).message
+      : exceptionResponse;
 
     if (status >= 500) {
       this.logger.error(
@@ -42,6 +52,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
       path: request.url,
       timestamp: new Date().toISOString(),
       message,
+      ...(reason ? { reason } : {}),
     });
   }
 }

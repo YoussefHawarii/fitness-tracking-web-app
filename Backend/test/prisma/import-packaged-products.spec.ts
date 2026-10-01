@@ -1,8 +1,15 @@
 import {
+  countUnrecognizedUnitTokens,
+  formatUnrecognizedUnitTokens,
   importPackagedProducts,
   parsePackagedProductRecords,
 } from '../../prisma/import-packaged-products';
-import { ProductSource, VerificationStatus } from '@prisma/client';
+import {
+  BaseUnit,
+  ContainerKey,
+  ProductSource,
+  VerificationStatus,
+} from '@prisma/client';
 
 describe('parsePackagedProductRecords', () => {
   it('parses a valid JSON array', () => {
@@ -49,6 +56,135 @@ describe('parsePackagedProductRecords', () => {
     );
 
     expect(records[0].barcode).toBe('0012345678905');
+  });
+
+  it('normalizes package and serving pairs into Base units', () => {
+    const [record] = parsePackagedProductRecords(
+      JSON.stringify([
+        {
+          barcode: '3017620422003',
+          name: 'Normalized Product',
+          packageSize: 0.33,
+          packageUnit: 'L',
+          servingSize: 60000,
+          servingUnit: 'mg',
+          containerKey: 'box',
+          caloriesPer100g: 100,
+          proteinPer100g: 1,
+          carbsPer100g: 1,
+          fatPer100g: 1,
+        },
+      ]),
+      'json',
+    );
+
+    expect(record).toMatchObject({
+      packageSize: 330,
+      packageBaseUnit: BaseUnit.ML,
+      servingSize: 60,
+      servingBaseUnit: BaseUnit.G,
+      containerKey: ContainerKey.BOX,
+    });
+  });
+
+  it('drops unsupported or incomplete imported measurement pairs', () => {
+    const [record] = parsePackagedProductRecords(
+      JSON.stringify([
+        {
+          barcode: '3017620422003',
+          name: 'Incomplete Product',
+          packageSize: 12,
+          servingSize: 1,
+          servingUnit: 'bar',
+          caloriesPer100g: 100,
+          proteinPer100g: 1,
+          carbsPer100g: 1,
+          fatPer100g: 1,
+        },
+      ]),
+      'json',
+    );
+
+    expect(record).toMatchObject({
+      packageSize: null,
+      packageBaseUnit: null,
+      servingSize: null,
+      servingBaseUnit: null,
+      unrecognizedUnitTokens: ['bar'],
+    });
+  });
+
+  it.each([
+    ['packageSize', 'not-a-number'],
+    ['servingSize', 'NaN'],
+  ])('rejects a non-numeric non-empty %s', (field, value) => {
+    expect(() =>
+      parsePackagedProductRecords(
+        JSON.stringify([
+          {
+            barcode: '3017620422003',
+            name: 'Invalid size',
+            [field]: value,
+            caloriesPer100g: 100,
+            proteinPer100g: 1,
+            carbsPer100g: 1,
+            fatPer100g: 1,
+          },
+        ]),
+        'json',
+      ),
+    ).toThrow(new RegExp(field));
+  });
+
+  it.each(['packageSize', 'servingSize'])('rejects a negative %s', (field) => {
+    expect(() =>
+      parsePackagedProductRecords(
+        JSON.stringify([
+          {
+            barcode: '3017620422003',
+            name: 'Negative size',
+            [field]: -1,
+            caloriesPer100g: 100,
+            proteinPer100g: 1,
+            carbsPer100g: 1,
+            fatPer100g: 1,
+          },
+        ]),
+        'json',
+      ),
+    ).toThrow(new RegExp(`${field}.*negative`));
+  });
+
+  it('counts unrecognized units while leaving their pairs absent', () => {
+    const records = parsePackagedProductRecords(
+      JSON.stringify([
+        {
+          barcode: '3017620422003',
+          name: 'Unknown units',
+          packageSize: 12,
+          packageUnit: 'Stone.',
+          servingSize: 1,
+          servingUnit: 'stone',
+          caloriesPer100g: 100,
+          proteinPer100g: 1,
+          carbsPer100g: 1,
+          fatPer100g: 1,
+        },
+      ]),
+      'json',
+    );
+
+    expect(records[0]).toMatchObject({
+      packageSize: null,
+      packageBaseUnit: null,
+      servingSize: null,
+      servingBaseUnit: null,
+      unrecognizedUnitTokens: ['stone', 'stone'],
+    });
+    expect(countUnrecognizedUnitTokens(records)).toEqual({ stone: 2 });
+    expect(formatUnrecognizedUnitTokens({ stone: 2, bar: 1 })).toBe(
+      'bar → 1, stone → 2',
+    );
   });
 
   it('parses a valid CSV file', () => {
@@ -185,6 +321,8 @@ describe('importPackagedProducts', () => {
         {
           barcode: '3017620422003',
           name: 'New Product',
+          packageSize: 0.33,
+          packageUnit: 'L',
           caloriesPer100g: 100,
           proteinPer100g: 1,
           carbsPer100g: 1,
@@ -223,5 +361,8 @@ describe('importPackagedProducts', () => {
     const data = prisma.packagedProduct.create.mock.calls[0][0].data;
     expect(data.source).toBe(ProductSource.ADMIN);
     expect(data.verificationStatus).toBe(VerificationStatus.EXTERNAL);
+    expect(data.containerKey).toBe(ContainerKey.PACKAGE);
+    expect(data.packageSize).toBe(330);
+    expect(data.packageBaseUnit).toBe(BaseUnit.ML);
   });
 });

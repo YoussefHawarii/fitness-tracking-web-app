@@ -13,6 +13,48 @@ export type FoodMatchSourceType = Exclude<
   'OPEN_FOOD_FACTS' | 'PACKAGED_PRODUCT'
 >;
 export type MealCategory = 'BREAKFAST' | 'LUNCH' | 'DINNER' | 'SNACKS';
+export type BaseUnit = 'G' | 'ML';
+export type PortionKind = 'PACKAGE' | 'SERVING' | 'CUSTOM';
+export type ContainerKey = 'PACKAGE' | 'CAN' | 'BOTTLE' | 'JAR' | 'BOX' | 'BAG';
+export type PortionDimension = 'MASS' | 'VOLUME' | 'UNKNOWN';
+export type NutritionBasis = 'PER_100_G' | 'PER_100_ML';
+export type NotLoggableReason =
+  | 'NUTRITION_MISSING'
+  | 'DIMENSION_BASIS_CONFLICT'
+  | 'PORTION_DIMENSION_UNKNOWN'
+  | 'NUTRITION_BASIS_UNKNOWN';
+export type EffectiveNutritionBasis =
+  | {
+      basis: NutritionBasis;
+      origin: 'DECLARED';
+    }
+  | {
+      basis: NutritionBasis;
+      origin: 'INFERRED';
+      source: 'OPEN_FOOD_FACTS' | 'USER_SUBMITTED' | 'ADMIN';
+      ruleId:
+        | 'OPEN_FOOD_FACTS_PORTION_DIMENSION'
+        | 'LEGACY_USER_SUBMITTED_MASS_GRANDFATHERING';
+    };
+export type BarcodeResolution =
+  | {
+      outcome: 'LOGGABLE';
+      portionDimension: Exclude<PortionDimension, 'UNKNOWN'>;
+      effectiveNutritionBasis: EffectiveNutritionBasis;
+      package: { size: number; baseUnit: BaseUnit } | null;
+      serving: { size: number; baseUnit: BaseUnit } | null;
+      containerKey: ContainerKey;
+    }
+  | {
+      outcome: 'NOT_LOGGABLE';
+      display: {
+        name: string;
+        brand: string | null;
+        imageUrl: string | null;
+      };
+      subjectKind: 'PACKAGED_PRODUCT' | 'IDENTIFIED_NOT_CATALOGUED';
+      primaryReason: NotLoggableReason;
+    };
 
 export interface NutrientsPer100g {
   caloriesPer100g: number;
@@ -34,9 +76,10 @@ export interface PackagedProduct {
   brand: string | null;
   category: string | null;
   servingSize: number | null;
-  servingUnit: string | null;
+  servingBaseUnit: BaseUnit | null;
   packageSize: number | null;
-  packageUnit: string | null;
+  packageBaseUnit: BaseUnit | null;
+  containerKey?: ContainerKey | null;
   caloriesPer100g: number;
   proteinPer100g: number | null;
   carbsPer100g: number | null;
@@ -48,7 +91,21 @@ export interface PackagedProduct {
   country: string | null;
   source: 'OPEN_FOOD_FACTS' | 'USER_SUBMITTED' | 'ADMIN';
   verificationStatus: 'UNVERIFIED' | 'EXTERNAL' | 'VERIFIED';
+  resolution?: BarcodeResolution;
 }
+
+export interface IdentifiedBarcodeLookup {
+  barcode: string;
+  name: string;
+  brand: string | null;
+  imageUrl: string | null;
+  resolution: Extract<BarcodeResolution, { outcome: 'NOT_LOGGABLE' }> & {
+    subjectKind: 'IDENTIFIED_NOT_CATALOGUED';
+    primaryReason: 'NUTRITION_MISSING';
+  };
+}
+
+export type BarcodeLookupResult = PackagedProduct | IdentifiedBarcodeLookup;
 
 export interface LocalFoodItem extends NutrientsPer100g {
   id: string;
@@ -99,7 +156,7 @@ export class InvalidBarcodeError extends Error {
 
 export async function lookupBarcode(
   barcode: string,
-): Promise<PackagedProduct | null> {
+): Promise<BarcodeLookupResult | null> {
   try {
     const { data } = await apiClient.get(
       `/food/barcode/${encodeURIComponent(barcode)}`,
@@ -114,6 +171,13 @@ export async function lookupBarcode(
     }
     throw new BarcodeLookupUnavailableError();
   }
+}
+
+export async function getPackagedProduct(id: string): Promise<PackagedProduct> {
+  const { data } = await apiClient.get(
+    `/food/products/${encodeURIComponent(id)}`,
+  );
+  return data;
 }
 
 export async function searchFood(term: string): Promise<FoodSearchResult> {
@@ -148,34 +212,39 @@ export async function listLocalFoodItems(): Promise<LocalFoodItem[]> {
   return data;
 }
 
-export async function createFoodLog(input: {
+type CreateFoodLogBase = {
   sourceType: FoodSourceType;
   sourceRef: string;
   // CANONICAL only — the display name already resolved by search, passed
   // through so history shows whichever language (EN/AR) the user searched in.
   name?: string;
-  grams: number;
   mealCategory: MealCategory;
   loggedAtUtc: string;
-}) {
+};
+
+export type CreateFoodLogInput = CreateFoodLogBase & {
+  amount: number;
+  amountUnit: BaseUnit;
+  portionKind?: PortionKind;
+  portionMultiplier?: number;
+};
+
+export async function createFoodLog(input: CreateFoodLogInput) {
   const { data } = await apiClient.post('/food/logs', input);
   return data;
 }
-
-export type BaseUnit = 'G' | 'ML';
 
 export interface FoodLogEntry {
   id: string;
   sourceType: FoodSourceType;
   sourceRef: string;
   localFoodItemId: string | null;
+  packagedProductId?: string | null;
   name: string;
-  grams: string | null;
-  // Explicit consumed amount, dual-written by the backend alongside grams
-  // (specs/009-barcode-portion-logging ticket 01). Absent/null on rows (or
-  // older backends) that only carry grams.
-  amount?: string | null;
-  amountUnit?: BaseUnit | null;
+  amount: string;
+  amountUnit: BaseUnit;
+  portionKind?: PortionKind | null;
+  portionMultiplier?: string | null;
   caloriesComputed: string;
   proteinComputed: string | null;
   carbsComputed: string | null;
@@ -184,32 +253,31 @@ export interface FoodLogEntry {
   loggedAtUtc: string;
 }
 
-// Displayed quantity for history rendering and edit pre-fill: prefer the
-// explicit amount, falling back to grams when amount is null/absent (a
-// grams-only response from a row or backend predating dual-write). Display
-// stays "N g" — ML rendering is a later ticket.
 export function getEntryDisplayAmount(entry: {
-  amount?: string | number | null;
-  grams?: string | number | null;
-}): string | number | null | undefined {
-  return entry.amount ?? entry.grams;
+  amount: string | number;
+}): string | number {
+  return entry.amount;
 }
 
-// Exact history text FoodLog renders today: "N g" with toFixed(0) rounding,
-// "0 g" when neither amount nor grams is present.
+// G entries retain the existing whole-gram display. ML entries expose their
+// stored Base unit and preserve the supported one-decimal input precision.
 export function formatEntryAmount(entry: {
-  amount?: string | number | null;
-  grams?: string | number | null;
+  amount: string | number;
+  amountUnit: BaseUnit;
 }): string {
-  return `${Number(getEntryDisplayAmount(entry) ?? 0).toFixed(0)} g`;
+  const value = Number(getEntryDisplayAmount(entry) ?? 0);
+  if (entry.amountUnit === 'ML') {
+    const displayed = Number.isInteger(value)
+      ? value.toFixed(0)
+      : value.toFixed(1);
+    return `${displayed} ml`;
+  }
+  return `${value.toFixed(0)} g`;
 }
 
 // Exact string FoodLog's startEdit puts in the edit input.
-export function getEditPrefill(entry: {
-  amount?: string | number | null;
-  grams?: string | number | null;
-}): string {
-  return String(getEntryDisplayAmount(entry) ?? '');
+export function getEditPrefill(entry: { amount: string | number }): string {
+  return String(getEntryDisplayAmount(entry));
 }
 
 export async function listFoodLogsForDay(
@@ -221,7 +289,15 @@ export async function listFoodLogsForDay(
 
 export async function updateFoodLog(
   id: string,
-  input: { grams?: number; mealCategory?: MealCategory },
+  input:
+    | { mealCategory: MealCategory }
+    | {
+        amount: number;
+        amountUnit: BaseUnit;
+        portionKind?: PortionKind;
+        portionMultiplier?: number;
+        mealCategory: MealCategory;
+      },
 ): Promise<FoodLogEntry> {
   const { data } = await apiClient.patch(`/food/logs/${id}`, input);
   return data;
@@ -238,6 +314,19 @@ export class ProductConflictError extends Error {
   }
 }
 
+export type ProductSubmissionRejectionReason =
+  'DECLARED_NUTRITION_BASIS_REQUIRED' | 'DIMENSION_BASIS_CONFLICT';
+
+export class ProductSubmissionError extends Error {
+  readonly reason: ProductSubmissionRejectionReason;
+
+  constructor(message: string, reason: ProductSubmissionRejectionReason) {
+    super(message);
+    this.name = 'ProductSubmissionError';
+    this.reason = reason;
+  }
+}
+
 export async function createPackagedProduct(input: {
   barcode: string;
   name: string;
@@ -248,6 +337,7 @@ export async function createPackagedProduct(input: {
   servingUnit?: string;
   packageSize?: number;
   packageUnit?: string;
+  declaredNutritionBasis: NutritionBasis;
   caloriesPer100g: number;
   proteinPer100g: number;
   carbsPer100g: number;
@@ -264,25 +354,52 @@ export async function createPackagedProduct(input: {
     if (isAxiosError(err) && err.response?.status === 409) {
       throw new ProductConflictError();
     }
+    const reason = isAxiosError(err) ? err.response?.data?.reason : undefined;
+    if (
+      isAxiosError(err) &&
+      err.response?.status === 400 &&
+      (reason === 'DECLARED_NUTRITION_BASIS_REQUIRED' ||
+        reason === 'DIMENSION_BASIS_CONFLICT')
+    ) {
+      const message = err.response?.data?.message;
+      throw new ProductSubmissionError(
+        typeof message === 'string'
+          ? message
+          : 'The product cannot be created with these portion details.',
+        reason,
+      );
+    }
     throw err;
   }
 }
 
-export async function extractNutritionLabel(file: File): Promise<{
+export interface ExtractedNutritionCandidate {
+  caloriesPer100g?: number;
+  proteinPer100g?: number;
+  carbsPer100g?: number;
+  fatPer100g?: number;
+  fiberPer100g?: number;
+  sugarPer100g?: number;
+  sodiumPer100g?: number;
+  servingSize?: number;
+  servingUnit?: string;
+}
+
+export interface DeclaredNutritionBasisSuggestion {
+  basis: NutritionBasis;
+  confident: boolean;
+}
+
+export interface NutritionLabelExtractionResult {
   available: boolean;
   reason?: string;
-  candidate?: {
-    caloriesPer100g?: number;
-    proteinPer100g?: number;
-    carbsPer100g?: number;
-    fatPer100g?: number;
-    fiberPer100g?: number;
-    sugarPer100g?: number;
-    sodiumPer100g?: number;
-    servingSize?: number;
-    servingUnit?: string;
-  };
-}> {
+  basisSuggestion?: DeclaredNutritionBasisSuggestion;
+  candidate?: ExtractedNutritionCandidate;
+}
+
+export async function extractNutritionLabel(
+  file: File,
+): Promise<NutritionLabelExtractionResult> {
   const formData = new FormData();
   formData.append('image', file);
   const { data } = await apiClient.post(

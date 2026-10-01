@@ -1,18 +1,27 @@
-import type { ProductSource } from '@prisma/client';
+import type { BaseUnit, ContainerKey, ProductSource } from '@prisma/client';
 
 // What a barcode provider hands back to ProductResolverService — already
 // mapped into this app's own field names, so the resolver never needs to
 // know which provider a result came from beyond the `source` tag it attaches
 // itself (see OpenFoodFactsProvider.source).
-export interface ProductLookupResult {
+export interface PortionMetadataLookup {
+  // Size values are expressed in the Base units named by the corresponding
+  // *BaseUnit fields. The compatibility free-text unit fields are not trusted
+  // by the persistence upsert; it derives lowercase units from the enums.
+  servingSize?: number | null;
+  servingUnit?: string | null;
+  servingBaseUnit?: BaseUnit | null;
+  packageSize?: number | null;
+  packageUnit?: string | null;
+  packageBaseUnit?: BaseUnit | null;
+  containerKey?: ContainerKey | null;
+}
+
+export interface CataloguableProductLookup extends PortionMetadataLookup {
   name: string;
   nameAr?: string | null;
   brand?: string | null;
   category?: string | null;
-  servingSize?: number | null;
-  servingUnit?: string | null;
-  packageSize?: number | null;
-  packageUnit?: string | null;
   caloriesPer100g: number;
   proteinPer100g?: number | null;
   carbsPer100g?: number | null;
@@ -28,13 +37,25 @@ export interface ProductLookupResult {
   sourceId?: string | null;
 }
 
+export interface IdentifiedProductLookup extends PortionMetadataLookup {
+  name: string;
+  brand: string | null;
+  imageUrl: string | null;
+}
+
+export type ProductLookupResult =
+  | { outcome: 'FOUND_WITH_NUTRITION'; product: CataloguableProductLookup }
+  | {
+      outcome: 'FOUND_WITHOUT_NUTRITION';
+      identification: IdentifiedProductLookup;
+    }
+  | { outcome: 'NOT_FOUND' };
+
 // A barcode-lookup data source, deliberately narrow (this is the only
 // operation ProductResolverService needs). Implement this for any future
 // Egyptian product source with legitimate API access — GS1 Egypt, a licensed
 // FMCG database, etc. — without touching the resolver or the controller.
 export interface ProductProvider {
   readonly source: ProductSource;
-  lookupByBarcode(
-    canonicalBarcode: string,
-  ): Promise<ProductLookupResult | null>;
+  lookupByBarcode(canonicalBarcode: string): Promise<ProductLookupResult>;
 }

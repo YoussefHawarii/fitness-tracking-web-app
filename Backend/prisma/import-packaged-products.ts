@@ -13,12 +13,18 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import {
+  BaseUnit,
+  ContainerKey,
   PrismaClient,
   ProductSource,
   VerificationStatus,
 } from '@prisma/client';
 import { parseCsv } from './egyptian-food-catalog';
 import { normalizeBarcode } from '../src/modules/food/barcode-normalizer';
+import {
+  normalizeMeasurement,
+  normalizeUnitToken,
+} from '../src/modules/food/unit-normalizer';
 
 export interface PackagedProductImportRecord {
   barcode: string;
@@ -27,9 +33,10 @@ export interface PackagedProductImportRecord {
   brand: string | null;
   category: string | null;
   servingSize: number | null;
-  servingUnit: string | null;
+  servingBaseUnit: BaseUnit | null;
   packageSize: number | null;
-  packageUnit: string | null;
+  packageBaseUnit: BaseUnit | null;
+  containerKey: ContainerKey;
   caloriesPer100g: number;
   proteinPer100g: number;
   carbsPer100g: number;
@@ -39,6 +46,7 @@ export interface PackagedProductImportRecord {
   sodiumPer100g: number | null;
   imageUrl: string | null;
   country: string | null;
+  unrecognizedUnitTokens: string[];
 }
 
 const REQUIRED_NUMERIC_FIELDS = [
@@ -48,8 +56,6 @@ const REQUIRED_NUMERIC_FIELDS = [
   'fatPer100g',
 ] as const;
 const OPTIONAL_NUMERIC_FIELDS = [
-  'servingSize',
-  'packageSize',
   'fiberPer100g',
   'sugarPer100g',
   'sodiumPer100g',
@@ -58,8 +64,6 @@ const OPTIONAL_STRING_FIELDS = [
   'nameAr',
   'brand',
   'category',
-  'servingUnit',
-  'packageUnit',
   'imageUrl',
   'country',
 ] as const;
@@ -124,9 +128,10 @@ function toImportRecord(
     brand: null,
     category: null,
     servingSize: null,
-    servingUnit: null,
+    servingBaseUnit: null,
     packageSize: null,
-    packageUnit: null,
+    packageBaseUnit: null,
+    containerKey: ContainerKey.PACKAGE,
     caloriesPer100g: 0,
     proteinPer100g: 0,
     carbsPer100g: 0,
@@ -136,6 +141,7 @@ function toImportRecord(
     sodiumPer100g: null,
     imageUrl: null,
     country: null,
+    unrecognizedUnitTokens: [],
   };
 
   for (const field of REQUIRED_NUMERIC_FIELDS) {
@@ -146,6 +152,58 @@ function toImportRecord(
   }
   for (const field of OPTIONAL_STRING_FIELDS) {
     record[field] = toOptionalString(raw[field]);
+  }
+
+  const rawServingSize = toOptionalNumber(
+    raw.servingSize,
+    'servingSize',
+    index,
+  );
+  const rawServingUnit = toOptionalString(raw.servingUnit);
+  const serving = normalizeMeasurement(rawServingSize, rawServingUnit);
+  record.servingSize = serving?.value ?? null;
+  record.servingBaseUnit = serving?.baseUnit ?? null;
+  if (
+    rawServingSize !== null &&
+    rawServingUnit !== null &&
+    normalizeMeasurement(1, rawServingUnit) === null
+  ) {
+    const token = normalizeUnitToken(rawServingUnit);
+    if (token !== null) record.unrecognizedUnitTokens.push(token);
+  }
+
+  const rawPackageSize = toOptionalNumber(
+    raw.packageSize,
+    'packageSize',
+    index,
+  );
+  const rawPackageUnit = toOptionalString(raw.packageUnit);
+  const packageMeasurement = normalizeMeasurement(
+    rawPackageSize,
+    rawPackageUnit,
+  );
+  record.packageSize = packageMeasurement?.value ?? null;
+  record.packageBaseUnit = packageMeasurement?.baseUnit ?? null;
+  if (
+    rawPackageSize !== null &&
+    rawPackageUnit !== null &&
+    normalizeMeasurement(1, rawPackageUnit) === null
+  ) {
+    const token = normalizeUnitToken(rawPackageUnit);
+    if (token !== null) record.unrecognizedUnitTokens.push(token);
+  }
+
+  if (raw.containerKey !== undefined && raw.containerKey !== null) {
+    if (typeof raw.containerKey !== 'string') {
+      throw new Error(`record ${index}: "containerKey" must be a string`);
+    }
+    const containerKey = raw.containerKey.trim().toUpperCase();
+    if (!Object.values(ContainerKey).includes(containerKey as ContainerKey)) {
+      throw new Error(
+        `record ${index}: "containerKey" is not a recognized container key`,
+      );
+    }
+    record.containerKey = containerKey as ContainerKey;
   }
 
   return record;
@@ -211,9 +269,11 @@ export async function importPackagedProducts(
       skipped++;
       continue;
     }
+    const { unrecognizedUnitTokens, ...data } = record;
+    void unrecognizedUnitTokens;
     await prisma.packagedProduct.create({
       data: {
-        ...record,
+        ...data,
         source: ProductSource.ADMIN,
         sourceId: null,
         verificationStatus: VerificationStatus.EXTERNAL,
@@ -222,6 +282,29 @@ export async function importPackagedProducts(
     created++;
   }
   return { created, skipped };
+}
+
+export function countUnrecognizedUnitTokens(
+  records: PackagedProductImportRecord[],
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const token of records.flatMap(
+    (record) => record.unrecognizedUnitTokens,
+  )) {
+    counts[token] = (counts[token] ?? 0) + 1;
+  }
+  return counts;
+}
+
+export function formatUnrecognizedUnitTokens(
+  counts: Record<string, number>,
+): string {
+  const entries = Object.entries(counts).sort(([left], [right]) =>
+    left.localeCompare(right),
+  );
+  return entries.length === 0
+    ? '(none)'
+    : entries.map(([token, count]) => `${token} → ${count}`).join(', ');
 }
 
 async function main() {
@@ -243,6 +326,11 @@ async function main() {
     const { created, skipped } = await importPackagedProducts(records, prisma);
     console.log(
       `Imported ${created} new packaged product(s); skipped ${skipped} already-known barcode(s).`,
+    );
+    console.log(
+      `Unrecognized unit tokens left absent: ${formatUnrecognizedUnitTokens(
+        countUnrecognizedUnitTokens(records),
+      )}.`,
     );
   } finally {
     await prisma.$disconnect();

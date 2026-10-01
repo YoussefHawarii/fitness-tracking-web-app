@@ -1,4 +1,7 @@
-import { calculateNutrientsForGrams } from '../../src/modules/food/calorie-calculator';
+import {
+  calculateNutrientsForAmount,
+  calculateNutrientsForGrams,
+} from '../../src/modules/food/calorie-calculator';
 
 describe('calorie-calculator', () => {
   it('scales calories per 100g to the entered gram amount', () => {
@@ -33,5 +36,26 @@ describe('calorie-calculator', () => {
   it('returns zero calories for a zero-calorie item, not null', () => {
     const result = calculateNutrientsForGrams({ caloriesPer100g: 0 }, 100);
     expect(result.calories).toBe(0);
+  });
+
+  it('scales a matching ml amount without rounding intermediate values', () => {
+    const result = calculateNutrientsForAmount(
+      { caloriesPer100g: 42.25 },
+      330.5,
+      'ML',
+      'PER_100_ML',
+    );
+    expect(result.calories).toBe((42.25 / 100) * 330.5);
+  });
+
+  it('refuses to calculate with a mismatched unit and basis', () => {
+    expect(() =>
+      calculateNutrientsForAmount(
+        { caloriesPer100g: 42 },
+        330,
+        'G',
+        'PER_100_ML',
+      ),
+    ).toThrow('Consumed amount unit does not match nutrition basis.');
   });
 });

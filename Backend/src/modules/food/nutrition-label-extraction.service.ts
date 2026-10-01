@@ -12,9 +12,15 @@ export interface ExtractedNutritionCandidate {
   servingUnit?: string;
 }
 
+export interface DeclaredNutritionBasisSuggestion {
+  basis: 'PER_100_G' | 'PER_100_ML';
+  confident: boolean;
+}
+
 export interface NutritionLabelExtractionResult {
   available: boolean;
   reason?: string;
+  basisSuggestion?: DeclaredNutritionBasisSuggestion;
   // Present only when available is true. Always a starting point for the
   // user to review/correct, never auto-saved — the frontend must show these
   // in the same editable Add Product form used for manual entry.

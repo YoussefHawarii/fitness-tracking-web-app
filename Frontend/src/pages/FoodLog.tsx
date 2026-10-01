@@ -1,14 +1,40 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import { isAxiosError } from 'axios';
 import { BarcodeScanner } from '../features/barcode-scanner/BarcodeScanner';
+import {
+  shouldMountBarcodeScanner,
+  type ScanStatus,
+} from '../features/barcode-scanner/scannerLifecycle';
 import { VoiceLogger } from '../features/voice-logger/VoiceLogger';
 import { ManualFoodSearch } from '../features/manual-food-search/ManualFoodSearch';
 import { AddProductForm } from '../features/add-product/AddProductForm';
+import { PortionSelector } from '../features/portion-selector/PortionSelector';
+import { buildEditPortionOptions } from '../features/portion-selector/editPortionOptions';
+import {
+  buildPortionCreatePayload,
+  calculatePortionNutrition,
+  isValidPortionAmountInput,
+  type PortionNutrition,
+} from '../features/portion-selector/portionCalculations';
+import {
+  baseUnitForResolution,
+  buildPortionOptions,
+  type LoggableBarcodeResolution,
+  type PortionOptionId,
+  type PortionOptionsResult,
+} from '../features/portion-selector/portionOptions';
+import {
+  saveCreateWithPlausibility,
+  saveEditWithPlausibility,
+  type CreateSubmittedPayload,
+  type EditSubmittedPayload,
+} from '../features/portion-selector/saveDecisions';
 import {
   createFoodLog,
   deleteFoodLog,
   formatEntryAmount,
+  getPackagedProduct,
   getEditPrefill,
   listFoodLogsForDay,
   lookupBarcode,
@@ -16,8 +42,11 @@ import {
   InvalidBarcodeError,
   type FoodMatch,
   type FoodSourceType,
+  type BaseUnit,
+  type BarcodeResolution,
   type LocalFoodItem,
   type MealCategory,
+  type NotLoggableReason,
   type PackagedProduct,
 } from '../services/foodService';
 import { Card, SegmentedControl } from '../components/ui/Card';
@@ -31,9 +60,10 @@ import {
   TrashIcon,
 } from '../components/ui/icons';
 import { useAccountTimezone } from '../hooks/useAccountTimezone';
+import { getGoals } from '../services/userService';
 
 type InputMode = 'barcode' | 'voice' | 'manual';
-type PendingItem = {
+export type PendingItem = {
   sourceType: FoodSourceType;
   sourceRef: string;
   name: string;
@@ -45,25 +75,21 @@ type PendingItem = {
   brand?: string | null;
   imageUrl?: string | null;
   packageSize?: number | null;
-  packageUnit?: string | null;
+  packageBaseUnit?: BaseUnit | null;
   verificationStatus?: PackagedProduct['verificationStatus'] | null;
+  resolution?: BarcodeResolution;
 };
-
-type ScanStatus =
-  | 'idle'
-  | 'looking-up'
-  | 'found'
-  | 'not-found'
-  | 'invalid'
-  | 'unavailable'
-  | 'scanner-failed';
 
 interface FoodLogEntry {
   id: string;
+  sourceType: FoodSourceType;
+  sourceRef: string;
+  packagedProductId?: string | null;
   name: string;
-  grams: string | null;
-  amount?: string | null;
-  amountUnit?: 'G' | 'ML' | null;
+  amount: string;
+  amountUnit: BaseUnit;
+  portionKind?: 'PACKAGE' | 'SERVING' | 'CUSTOM' | null;
+  portionMultiplier?: string | null;
   caloriesComputed: string;
   mealCategory: MealCategory;
   loggedAtUtc: string;
@@ -99,9 +125,182 @@ function toPackagedPendingItem(product: PackagedProduct): PendingItem {
     brand: product.brand,
     imageUrl: product.imageUrl,
     packageSize: product.packageSize,
-    packageUnit: product.packageUnit,
+    packageBaseUnit: product.packageBaseUnit,
     verificationStatus: product.verificationStatus,
+    resolution: product.resolution,
   };
+}
+
+function getPendingAmountUnit(item: PendingItem): BaseUnit {
+  if (item.resolution?.outcome === 'LOGGABLE') {
+    return item.resolution.effectiveNutritionBasis.basis === 'PER_100_ML'
+      ? 'ML'
+      : 'G';
+  }
+  return 'G';
+}
+
+function nutritionBasisText(item: PendingItem): string {
+  if (item.resolution?.outcome === 'LOGGABLE') {
+    return item.resolution.effectiveNutritionBasis.basis === 'PER_100_ML'
+      ? `${item.caloriesPer100g} kcal / 100 ml`
+      : `${item.caloriesPer100g} kcal / 100 g`;
+  }
+  return `${item.caloriesPer100g} kcal/100g`;
+}
+
+function defaultPortionOptionId(
+  item: PendingItem | undefined,
+): PortionOptionId | null {
+  const resolution =
+    item?.sourceType === 'PACKAGED_PRODUCT' &&
+    item.resolution?.outcome === 'LOGGABLE'
+      ? item.resolution
+      : null;
+  return resolution
+    ? (buildPortionOptions(resolution).defaultSelection?.optionId ?? null)
+    : null;
+}
+
+export function PendingAmountFields({
+  item,
+  amount,
+  onAmountChange,
+  inputRef,
+}: {
+  item: PendingItem;
+  amount: string;
+  onAmountChange: (value: string) => void;
+  inputRef?: Ref<HTMLInputElement>;
+}) {
+  const unit = getPendingAmountUnit(item);
+  const unitLabel = unit === 'ML' ? 'ml' : 'g';
+  return (
+    <>
+      <p className="text-body text-text-muted">{nutritionBasisText(item)}</p>
+      <FieldLabel>
+        Amount ({unitLabel})
+        <Input
+          ref={inputRef}
+          type="number"
+          min={0.1}
+          step={0.1}
+          value={amount}
+          onChange={(event) => onAmountChange(event.target.value)}
+        />
+      </FieldLabel>
+    </>
+  );
+}
+
+function displayNutrient(value: number): string {
+  return value.toFixed(1).replace(/\.0$/, '');
+}
+
+function PortionNutritionPreview({
+  nutrition,
+}: {
+  nutrition: PortionNutrition | null;
+}) {
+  if (nutrition === null) {
+    return (
+      <p className="text-body text-text-muted">
+        Select a valid portion to preview calories and macros.
+      </p>
+    );
+  }
+
+  return (
+    <div className="rounded-xl border border-border bg-surface p-4">
+      <p className="mb-2 text-label text-text-muted normal-case tracking-normal">
+        This portion
+      </p>
+      <div className="grid grid-cols-2 gap-2 text-body text-text sm:grid-cols-4">
+        <span>{displayNutrient(nutrition.calories)} kcal</span>
+        <span>
+          {nutrition.protein != null
+            ? `${displayNutrient(nutrition.protein)} g protein`
+            : 'Protein: not available'}
+        </span>
+        <span>
+          {nutrition.carbs != null
+            ? `${displayNutrient(nutrition.carbs)} g carbs`
+            : 'Carbs: not available'}
+        </span>
+        <span>
+          {nutrition.fat != null
+            ? `${displayNutrient(nutrition.fat)} g fat`
+            : 'Fat: not available'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export function EditAmountField({
+  entry,
+  value,
+  onChange,
+}: {
+  entry: FoodLogEntry;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const isMillilitreEntry = entry.amountUnit === 'ML';
+  return (
+    <FieldLabel>
+      Amount ({isMillilitreEntry ? 'ml' : 'g'})
+      <Input
+        type="number"
+        min={0.1}
+        step={0.1}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </FieldLabel>
+  );
+}
+
+export function HistoryAmount({ entry }: { entry: FoodLogEntry }) {
+  return <>{formatEntryAmount(entry)}</>;
+}
+
+const SAVE_REJECTION_MESSAGES: Record<string, string> = {
+  AMOUNT_UNIT_BASIS_MISMATCH:
+    "The amount unit does not match this product's nutrition basis.",
+  MASS_SOURCE_REQUIRES_G: 'This food can only be logged in grams.',
+  PACKAGE_PORTION_UNAVAILABLE: 'This product has no usable package size.',
+  SERVING_PORTION_UNAVAILABLE: 'This product has no usable serving size.',
+  PORTION_AMOUNT_MISMATCH:
+    'The amount does not match the selected package or serving.',
+  PORTION_DIMENSION_UNKNOWN:
+    'This product does not have a usable portion unit.',
+  NUTRITION_BASIS_UNKNOWN:
+    'This product does not have a usable nutrition basis.',
+  DIMENSION_BASIS_CONFLICT:
+    "This product's portion unit conflicts with its nutrition basis.",
+  OPEN_FOOD_FACTS_CREATE_RETIRED: 'Scan this barcode again before saving it.',
+};
+
+function foodLogSaveErrorMessage(error: unknown): string {
+  if (!isAxiosError(error)) return 'Could not save this entry.';
+  const data = error.response?.data as
+    { reason?: unknown; message?: unknown } | undefined;
+  const nested =
+    typeof data?.message === 'object' && data.message !== null
+      ? (data.message as { reason?: unknown })
+      : undefined;
+  const reason =
+    typeof data?.reason === 'string'
+      ? data.reason
+      : typeof nested?.reason === 'string'
+        ? nested.reason
+        : undefined;
+  if (reason && SAVE_REJECTION_MESSAGES[reason]) {
+    return SAVE_REJECTION_MESSAGES[reason];
+  }
+  if (typeof data?.message === 'string') return data.message;
+  return 'Could not save this entry.';
 }
 
 export function PackagedProductPreview({ product }: { product: PendingItem }) {
@@ -130,7 +329,9 @@ export function PackagedProductPreview({ product }: { product: PendingItem }) {
           {product.packageSize != null && (
             <p className="text-body text-text-muted">
               {product.packageSize}
-              {product.packageUnit ? ` ${product.packageUnit}` : ''}
+              {product.packageBaseUnit
+                ? ` ${product.packageBaseUnit.toLowerCase()}`
+                : ''}
             </p>
           )}
         </div>
@@ -192,6 +393,71 @@ export function BarcodeNotFoundActions({
   );
 }
 
+const NOT_LOGGABLE_EXPLANATIONS: Record<NotLoggableReason, string> = {
+  NUTRITION_MISSING:
+    "This barcode was identified, but no usable nutrition data is available, so it can't be logged safely.",
+  DIMENSION_BASIS_CONFLICT:
+    "This product's portion unit conflicts with its nutrition basis, so it can't be logged safely.",
+  PORTION_DIMENSION_UNKNOWN:
+    "This product doesn't include a usable package or serving unit, so it can't be logged safely.",
+  NUTRITION_BASIS_UNKNOWN:
+    "The nutrition information doesn't say whether values are per 100 g or per 100 ml, so this product can't be logged safely.",
+};
+
+type NotLoggableResolution = Extract<
+  NonNullable<PackagedProduct['resolution']>,
+  { outcome: 'NOT_LOGGABLE' }
+>;
+
+export function NotLoggableProductPanel({
+  resolution,
+  onAdd,
+  onSearch,
+  onRescan,
+}: {
+  resolution: NotLoggableResolution;
+  onAdd: () => void;
+  onSearch: () => void;
+  onRescan: () => void;
+}) {
+  const { display } = resolution;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-warn bg-surface p-4">
+      <div className="flex items-start gap-3">
+        {display.imageUrl && (
+          <img
+            src={display.imageUrl}
+            alt={display.name}
+            className="h-16 w-16 shrink-0 rounded-lg object-cover"
+          />
+        )}
+        <div className="flex flex-col gap-1">
+          <p className="text-heading">{display.name}</p>
+          {display.brand && (
+            <p className="text-body text-text-muted">{display.brand}</p>
+          )}
+        </div>
+      </div>
+      <p className="text-body text-warn">
+        {NOT_LOGGABLE_EXPLANATIONS[resolution.primaryReason]}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {resolution.subjectKind !== 'PACKAGED_PRODUCT' && (
+          <PrimaryButton type="button" onClick={onAdd}>
+            Add this product
+          </PrimaryButton>
+        )}
+        <SecondaryButton type="button" onClick={onSearch}>
+          Search manually instead
+        </SecondaryButton>
+        <SecondaryButton type="button" onClick={onRescan}>
+          Scan again
+        </SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
 export function FoodLog() {
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -208,12 +474,17 @@ export function FoodLog() {
   const [pendingItems, setPendingItems] = useState<PendingItem[]>([]);
   const pendingItem = pendingItems[0] ?? null;
   const pendingCardRef = useRef<HTMLDivElement>(null);
-  const gramsInputRef = useRef<HTMLInputElement>(null);
+  const amountInputRef = useRef<HTMLInputElement>(null);
 
-  const [grams, setGrams] = useState('');
+  const [amountInput, setAmountInput] = useState('');
+  const [selectedPortionOptionId, setSelectedPortionOptionId] =
+    useState<PortionOptionId | null>(null);
   const [mealCategory, setMealCategory] = useState<MealCategory>('BREAKFAST');
   const [status, setStatus] = useState<string | null>(null);
   const [entries, setEntries] = useState<FoodLogEntry[]>([]);
+  const [dailyCalorieTarget, setDailyCalorieTarget] = useState<number | null>(
+    null,
+  );
 
   // Barcode scan state machine — see docs/food-log-input-modes-diagnosis.md
   // §1.4/§1.6: a successful scan needs its own visible "found"/"not found"
@@ -231,15 +502,75 @@ export function FoodLog() {
   // in progress) so a lookup abandoned by a rescan/mode-switch can't apply
   // its result after something newer has already taken its place.
   const scanRequestIdRef = useRef(0);
-  const [manualBarcodeContext, setManualBarcodeContext] = useState<
-    string | null
-  >(null);
+  const [manualBarcodeContext, setManualBarcodeContext] = useState<{
+    barcode: string;
+    kind: 'not-found' | 'not-loggable';
+  } | null>(null);
   const [showAddProduct, setShowAddProduct] = useState(false);
+  const [notLoggableResolution, setNotLoggableResolution] =
+    useState<NotLoggableResolution | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editGrams, setEditGrams] = useState('');
   const [editMeal, setEditMeal] = useState<MealCategory>('BREAKFAST');
   const [editError, setEditError] = useState<string | null>(null);
+  const [editProduct, setEditProduct] = useState<PackagedProduct | null>(null);
+  const [editProductLoading, setEditProductLoading] = useState(false);
+  const [editPortionModel, setEditPortionModel] =
+    useState<PortionOptionsResult | null>(null);
+  const [editPortionOptionId, setEditPortionOptionId] =
+    useState<PortionOptionId | null>(null);
+  const [editAmountDirty, setEditAmountDirty] = useState(false);
+  const editProductRequestIdRef = useRef(0);
+
+  const loggableResolution: LoggableBarcodeResolution | null =
+    pendingItem?.sourceType === 'PACKAGED_PRODUCT' &&
+    pendingItem.resolution?.outcome === 'LOGGABLE'
+      ? pendingItem.resolution
+      : null;
+  const portionModel = loggableResolution
+    ? buildPortionOptions(loggableResolution)
+    : null;
+  const selectedPortionOption = portionModel?.options.find(
+    ({ id }) => id === selectedPortionOptionId,
+  );
+  const portionCreatePayload = loggableResolution
+    ? buildPortionCreatePayload(
+        loggableResolution,
+        selectedPortionOption?.choice ?? null,
+        amountInput,
+      )
+    : null;
+  const portionNutritionPreview =
+    portionCreatePayload && pendingItem
+      ? calculatePortionNutrition(pendingItem, portionCreatePayload.amount)
+      : null;
+  const packagedPortionInvalid =
+    loggableResolution !== null && portionCreatePayload === null;
+  const editResolution: LoggableBarcodeResolution | null =
+    editProduct?.resolution?.outcome === 'LOGGABLE'
+      ? editProduct.resolution
+      : null;
+  const editPortionOption = editPortionModel?.options.find(
+    ({ id }) => id === editPortionOptionId,
+  );
+  const editPortionPayload = editResolution
+    ? buildPortionCreatePayload(
+        editResolution,
+        editPortionOption?.choice ?? null,
+        editGrams,
+      )
+    : null;
+  const editNutritionPreview =
+    editProduct && editPortionPayload
+      ? calculatePortionNutrition(editProduct, editPortionPayload.amount)
+      : null;
+
+  function replacePendingItems(items: PendingItem[]) {
+    setPendingItems(items);
+    setAmountInput('');
+    setSelectedPortionOptionId(defaultPortionOptionId(items[0]));
+  }
 
   const refreshEntries = useCallback(() => {
     listFoodLogsForDay(date)
@@ -250,6 +581,18 @@ export function FoodLog() {
   useEffect(() => {
     refreshEntries();
   }, [refreshEntries]);
+
+  useEffect(() => {
+    let ignore = false;
+    getGoals()
+      .then((baseline) => {
+        if (!ignore) setDailyCalorieTarget(baseline.dailyCalorieTarget);
+      })
+      .catch(() => undefined);
+    return () => {
+      ignore = true;
+    };
+  }, []);
 
   useEffect(
     () => () => {
@@ -266,33 +609,129 @@ export function FoodLog() {
         behavior: 'smooth',
         block: 'nearest',
       });
-      // Selecting an item (scan/voice/manual) means grams is the very next
+      // Selecting an item (scan/voice/manual) means amount is the very next
       // thing to fill in — see docs/food-log-input-modes-diagnosis.md §1.6
       // item 5.
-      gramsInputRef.current?.focus();
+      amountInputRef.current?.focus();
     }
   }, [pendingItems.length]);
 
   function startEdit(entry: FoodLogEntry) {
+    const requestId = ++editProductRequestIdRef.current;
     setEditingId(entry.id);
     setEditGrams(getEditPrefill(entry));
     setEditMeal(entry.mealCategory);
     setEditError(null);
+    setEditProduct(null);
+    setEditProductLoading(entry.sourceType === 'PACKAGED_PRODUCT');
+    setEditPortionModel(null);
+    setEditPortionOptionId(null);
+    setEditAmountDirty(false);
+
+    if (entry.sourceType !== 'PACKAGED_PRODUCT') return;
+    getPackagedProduct(entry.packagedProductId ?? entry.sourceRef)
+      .then((product) => {
+        if (editProductRequestIdRef.current !== requestId) return;
+        setEditProductLoading(false);
+        setEditProduct(product);
+        if (product.resolution?.outcome !== 'LOGGABLE') return;
+        const model = buildEditPortionOptions(entry, product.resolution);
+        setEditPortionModel(model);
+        setEditPortionOptionId(model.defaultSelection?.optionId ?? null);
+      })
+      .catch(() => {
+        if (editProductRequestIdRef.current !== requestId) return;
+        setEditProductLoading(false);
+        setEditError('This product is no longer available for editing.');
+      });
   }
 
   function cancelEdit() {
+    editProductRequestIdRef.current += 1;
     setEditingId(null);
     setEditError(null);
+    setEditProduct(null);
+    setEditProductLoading(false);
+    setEditPortionModel(null);
+    setEditPortionOptionId(null);
   }
 
   async function saveEdit(id: string) {
-    const gramsValue = Number(editGrams);
-    if (!editGrams || !Number.isFinite(gramsValue) || gramsValue <= 0) {
-      setEditError('Enter a valid gram amount greater than 0.');
+    const entry = entries.find((item) => item.id === id);
+    if (!entry) return;
+    if (!editAmountDirty) {
+      try {
+        await saveEditWithPlausibility({
+          entry,
+          product: editProduct,
+          submittedPayload: { mealCategory: editMeal },
+          resolution: editResolution,
+          dailyCalorieTarget,
+          confirm: (message) => window.confirm(message),
+          save: (payload) => updateFoodLog(id, payload),
+        });
+        setEditingId(null);
+        setEditError(null);
+        refreshEntries();
+      } catch (error) {
+        setEditError(foodLogSaveErrorMessage(error));
+      }
       return;
     }
+
+    let amountPayload:
+      | {
+          amount: number;
+          amountUnit: BaseUnit;
+          portionKind: 'PACKAGE' | 'SERVING';
+          portionMultiplier: number;
+        }
+      | {
+          amount: number;
+          amountUnit: BaseUnit;
+          portionKind: 'CUSTOM';
+        };
+    if (editResolution) {
+      if (!editPortionPayload) {
+        setEditError(
+          'Choose a portion and enter a valid amount with at most one decimal place.',
+        );
+        return;
+      }
+      amountPayload = editPortionPayload;
+    } else {
+      if (!isValidPortionAmountInput(editGrams)) {
+        setEditError(
+          'Enter a valid amount greater than 0 with at most one decimal place.',
+        );
+        return;
+      }
+      amountPayload = {
+        amount: Number(editGrams),
+        amountUnit: entry.amountUnit ?? 'G',
+        portionKind: 'CUSTOM',
+      };
+    }
+
+    if (!Number.isFinite(amountPayload.amount) || amountPayload.amount <= 0) {
+      setEditError('Enter a valid amount greater than 0.');
+      return;
+    }
+    const submittedPayload: EditSubmittedPayload = {
+      ...amountPayload,
+      mealCategory: editMeal,
+    };
     try {
-      await updateFoodLog(id, { grams: gramsValue, mealCategory: editMeal });
+      const outcome = await saveEditWithPlausibility({
+        entry,
+        product: editProduct,
+        submittedPayload,
+        resolution: editResolution,
+        dailyCalorieTarget,
+        confirm: (message) => window.confirm(message),
+        save: (payload) => updateFoodLog(id, payload),
+      });
+      if (!outcome.saved) return;
       setEditingId(null);
       setEditError(null);
       refreshEntries();
@@ -303,7 +742,7 @@ export function FoodLog() {
         refreshEntries();
         return;
       }
-      setEditError('Could not save this change.');
+      setEditError(foodLogSaveErrorMessage(err));
     }
   }
 
@@ -323,7 +762,7 @@ export function FoodLog() {
   }
 
   async function handleBarcodeDecoded(barcode: string) {
-    if (scanStatus === 'looking-up') return; // single-flight guard
+    if (showAddProduct || scanStatus === 'looking-up') return;
     cancelPendingScanRestart();
     const requestId = ++scanRequestIdRef.current;
     setLastScannedBarcode(barcode);
@@ -335,7 +774,23 @@ export function FoodLog() {
         setScanStatus('not-found');
         return;
       }
-      setPendingItems([toPackagedPendingItem(product)]);
+      if (product.resolution?.outcome === 'NOT_LOGGABLE') {
+        replacePendingItems([]);
+        setNotLoggableResolution(product.resolution);
+        setScanStatus(
+          product.resolution.subjectKind === 'IDENTIFIED_NOT_CATALOGUED'
+            ? 'identified-no-nutrition'
+            : 'not-loggable',
+        );
+        setStatus(null);
+        return;
+      }
+      if (!('id' in product)) {
+        setScanStatus('unavailable');
+        return;
+      }
+      replacePendingItems([toPackagedPendingItem(product)]);
+      setNotLoggableResolution(null);
       setScanStatus('found');
       setStatus(null);
     } catch (error) {
@@ -364,6 +819,7 @@ export function FoodLog() {
     setLastScannedBarcode(null);
     setScanAttempt((n) => n + 1);
     setShowAddProduct(false);
+    setNotLoggableResolution(null);
   }
 
   function cancelPendingScanRestart() {
@@ -404,18 +860,18 @@ export function FoodLog() {
   }
 
   function handleFoodMatchSelected(match: FoodMatch) {
-    setPendingItems([toPendingItem(match)]);
+    replacePendingItems([toPendingItem(match)]);
     setStatus(null);
   }
 
   function handleFoodMatchesSelected(matches: FoodMatch[]) {
     if (matches.length === 0) return;
-    setPendingItems(matches.map(toPendingItem));
+    replacePendingItems(matches.map(toPendingItem));
     setStatus(null);
   }
 
   function handleLocalItemCreated(item: LocalFoodItem) {
-    setPendingItems([
+    replacePendingItems([
       {
         sourceType: 'LOCAL',
         sourceRef: item.id,
@@ -427,7 +883,8 @@ export function FoodLog() {
   }
 
   function handleProductCreated(product: PackagedProduct) {
-    setPendingItems([toPackagedPendingItem(product)]);
+    replacePendingItems([toPackagedPendingItem(product)]);
+    setNotLoggableResolution(null);
     setShowAddProduct(false);
     setScanStatus('found');
     setStatus(null);
@@ -435,19 +892,58 @@ export function FoodLog() {
 
   async function handleSaveLog() {
     const current = pendingItems[0];
-    if (!current || !grams || Number(grams) <= 0) {
-      setStatus('Choose a food item and enter a valid gram amount.');
+    if (loggableResolution && !selectedPortionOption) {
+      setStatus('Choose a portion before saving.');
+      return;
+    }
+    if (
+      selectedPortionOption?.choice.portionKind === 'CUSTOM' &&
+      !portionCreatePayload
+    ) {
+      setStatus('Enter a valid custom amount with at most one decimal place.');
+      return;
+    }
+
+    if (!current || (loggableResolution && !portionCreatePayload)) {
+      setStatus(
+        'Choose a food item and enter a valid amount with at most one decimal place.',
+      );
+      return;
+    }
+    if (!loggableResolution && !isValidPortionAmountInput(amountInput)) {
+      setStatus(
+        'Choose a food item and enter a valid amount with at most one decimal place.',
+      );
       return;
     }
     try {
-      await createFoodLog({
+      const amountPayload =
+        loggableResolution && portionCreatePayload
+          ? portionCreatePayload
+          : {
+              amount: Number(amountInput),
+              amountUnit: getPendingAmountUnit(current),
+              ...(current.sourceType === 'PACKAGED_PRODUCT'
+                ? ({ portionKind: 'CUSTOM' } as const)
+                : {}),
+            };
+      const submittedPayload: CreateSubmittedPayload = {
         sourceType: current.sourceType,
         sourceRef: current.sourceRef,
         name: current.sourceType === 'CANONICAL' ? current.name : undefined,
-        grams: Number(grams),
+        ...amountPayload,
         mealCategory,
         loggedAtUtc: new Date().toISOString(),
+      };
+      const outcome = await saveCreateWithPlausibility({
+        pendingItem: current,
+        submittedPayload,
+        resolution: loggableResolution,
+        dailyCalorieTarget,
+        confirm: (message) => window.confirm(message),
+        save: createFoodLog,
       });
+      if (!outcome.saved) return;
       const remaining = pendingItems.length - 1;
       setStatus(
         remaining > 0
@@ -455,8 +951,10 @@ export function FoodLog() {
           : `Logged ${current.name} under ${mealCategory}.`,
       );
       const stillQueued = remaining > 0;
+      const nextPendingItem = pendingItems[1];
       setPendingItems((prev) => prev.slice(1));
-      setGrams('');
+      setAmountInput('');
+      setSelectedPortionOptionId(defaultPortionOptionId(nextPendingItem));
       refreshEntries();
       // A scanned item was just saved and nothing else is queued — return
       // the scan card to a ready-to-scan-again state instead of leaving the
@@ -464,8 +962,8 @@ export function FoodLog() {
       if (current.sourceType === 'PACKAGED_PRODUCT' && !stillQueued) {
         rescan();
       }
-    } catch {
-      setStatus('Could not save this entry.');
+    } catch (error) {
+      setStatus(foodLogSaveErrorMessage(error));
     }
   }
 
@@ -493,17 +991,16 @@ export function FoodLog() {
         {mode === 'barcode' && (
           <div className="flex flex-col gap-3">
             <div className="hud-frame overflow-hidden rounded-xl bg-black">
-              {scanStatus !== 'not-found' &&
-                scanStatus !== 'invalid' &&
-                scanStatus !== 'unavailable' &&
-                scanStatus !== 'scanner-failed' && (
-                  <BarcodeScanner
-                    key={scanAttempt}
-                    onDecoded={handleBarcodeDecoded}
-                    onScanError={handleScannerError}
-                  />
-                )}
+              {shouldMountBarcodeScanner(scanStatus, showAddProduct) && (
+                <BarcodeScanner
+                  key={scanAttempt}
+                  onDecoded={handleBarcodeDecoded}
+                  onScanError={handleScannerError}
+                />
+              )}
               {(scanStatus === 'not-found' ||
+                scanStatus === 'not-loggable' ||
+                scanStatus === 'identified-no-nutrition' ||
                 scanStatus === 'invalid' ||
                 scanStatus === 'unavailable' ||
                 scanStatus === 'scanner-failed') && (
@@ -526,25 +1023,64 @@ export function FoodLog() {
               pendingItem?.sourceType === 'PACKAGED_PRODUCT' && (
                 <PackagedProductPreview product={pendingItem} />
               )}
+            {(scanStatus === 'not-loggable' ||
+              scanStatus === 'identified-no-nutrition') &&
+              notLoggableResolution &&
+              !showAddProduct && (
+                <NotLoggableProductPanel
+                  resolution={notLoggableResolution}
+                  onAdd={() => setShowAddProduct(true)}
+                  onSearch={() => {
+                    setManualBarcodeContext(
+                      lastScannedBarcode
+                        ? {
+                            barcode: lastScannedBarcode,
+                            kind: 'not-loggable',
+                          }
+                        : null,
+                    );
+                    setMode('manual');
+                  }}
+                  onRescan={rescan}
+                />
+              )}
             {scanStatus === 'not-found' && !showAddProduct && (
               <BarcodeNotFoundActions
                 onAdd={() => setShowAddProduct(true)}
                 onSearch={() => {
-                  setManualBarcodeContext(lastScannedBarcode);
+                  setManualBarcodeContext(
+                    lastScannedBarcode
+                      ? { barcode: lastScannedBarcode, kind: 'not-found' }
+                      : null,
+                  );
                   setMode('manual');
                 }}
                 onRescan={rescan}
               />
             )}
-            {scanStatus === 'not-found' && showAddProduct && (
-              <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
-                <AddProductForm
-                  barcode={lastScannedBarcode ?? ''}
-                  onCreated={handleProductCreated}
-                  onCancel={() => setShowAddProduct(false)}
-                />
-              </div>
-            )}
+            {(scanStatus === 'not-found' ||
+              scanStatus === 'not-loggable' ||
+              scanStatus === 'identified-no-nutrition') &&
+              showAddProduct && (
+                <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
+                  <AddProductForm
+                    key={lastScannedBarcode ?? ''}
+                    barcode={lastScannedBarcode ?? ''}
+                    initialName={
+                      scanStatus === 'identified-no-nutrition'
+                        ? notLoggableResolution?.display.name
+                        : undefined
+                    }
+                    initialBrand={
+                      scanStatus === 'identified-no-nutrition'
+                        ? (notLoggableResolution?.display.brand ?? undefined)
+                        : undefined
+                    }
+                    onCreated={handleProductCreated}
+                    onCancel={() => setShowAddProduct(false)}
+                  />
+                </div>
+              )}
             {scanStatus === 'unavailable' && (
               <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
                 <p className="text-body text-warn">
@@ -618,8 +1154,17 @@ export function FoodLog() {
             </p>
             {manualBarcodeContext && (
               <p className="text-body text-text-muted">
-                Barcode {manualBarcodeContext} wasn't found — search for the
-                product by name instead.
+                {manualBarcodeContext.kind === 'not-found' ? (
+                  <>
+                    Barcode {manualBarcodeContext.barcode} wasn't found — search
+                    for the product by name instead.
+                  </>
+                ) : (
+                  <>
+                    Barcode {manualBarcodeContext.barcode} can't be logged
+                    safely — search for the product by name instead.
+                  </>
+                )}
               </p>
             )}
             <ManualFoodSearch
@@ -639,19 +1184,33 @@ export function FoodLog() {
               </p>
             )}
             <p className="text-heading">{pendingItem.name}</p>
-            <p className="text-body text-text-muted">
-              {pendingItem.caloriesPer100g} kcal/100g
-            </p>
-            <FieldLabel>
-              Grams
-              <Input
-                ref={gramsInputRef}
-                type="number"
-                min={1}
-                value={grams}
-                onChange={(e) => setGrams(e.target.value)}
+            {portionModel && loggableResolution ? (
+              <>
+                <p className="text-body text-text-muted">
+                  {nutritionBasisText(pendingItem)}
+                </p>
+                <PortionSelector
+                  options={portionModel.options}
+                  selectedOptionId={selectedPortionOptionId}
+                  customAmount={amountInput}
+                  baseUnit={baseUnitForResolution(loggableResolution)}
+                  onSelectionChange={(optionId) => {
+                    setSelectedPortionOptionId(optionId);
+                    setStatus(null);
+                  }}
+                  onCustomAmountChange={setAmountInput}
+                  customInputRef={amountInputRef}
+                />
+                <PortionNutritionPreview nutrition={portionNutritionPreview} />
+              </>
+            ) : (
+              <PendingAmountFields
+                item={pendingItem}
+                amount={amountInput}
+                onAmountChange={setAmountInput}
+                inputRef={amountInputRef}
               />
-            </FieldLabel>
+            )}
             <FieldLabel>
               Meal
               <Select
@@ -666,7 +1225,11 @@ export function FoodLog() {
                 <option value="SNACKS">Snacks</option>
               </Select>
             </FieldLabel>
-            <PrimaryButton onClick={handleSaveLog} className="self-start">
+            <PrimaryButton
+              onClick={handleSaveLog}
+              disabled={packagedPortionInvalid}
+              className="self-start"
+            >
               Save entry
             </PrimaryButton>
           </Card>
@@ -701,15 +1264,41 @@ export function FoodLog() {
                       <span className="truncate font-medium">
                         {item.name || 'Unnamed item'}
                       </span>
-                      <FieldLabel>
-                        Grams
-                        <Input
-                          type="number"
-                          min={1}
+                      {editProductLoading ? (
+                        <p className="text-body text-text-muted">
+                          Loading current portion options…
+                        </p>
+                      ) : editPortionModel && editResolution ? (
+                        <>
+                          <PortionSelector
+                            options={editPortionModel.options}
+                            selectedOptionId={editPortionOptionId}
+                            customAmount={editGrams}
+                            baseUnit={baseUnitForResolution(editResolution)}
+                            onSelectionChange={(optionId) => {
+                              setEditPortionOptionId(optionId);
+                              setEditAmountDirty(true);
+                              setEditError(null);
+                            }}
+                            onCustomAmountChange={(value) => {
+                              setEditGrams(value);
+                              setEditAmountDirty(true);
+                            }}
+                          />
+                          <PortionNutritionPreview
+                            nutrition={editNutritionPreview}
+                          />
+                        </>
+                      ) : (
+                        <EditAmountField
+                          entry={item}
                           value={editGrams}
-                          onChange={(e) => setEditGrams(e.target.value)}
+                          onChange={(value) => {
+                            setEditGrams(value);
+                            setEditAmountDirty(true);
+                          }}
                         />
-                      </FieldLabel>
+                      )}
                       <FieldLabel>
                         Meal
                         <Select
@@ -748,7 +1337,9 @@ export function FoodLog() {
                         {item.name || 'Unnamed item'}
                       </span>
                       <span className="flex shrink-0 items-center gap-3 text-readout">
-                        <span>{formatEntryAmount(item)}</span>
+                        <span>
+                          <HistoryAmount entry={item} />
+                        </span>
                         <span>
                           {Number(item.caloriesComputed).toFixed(0)} kcal
                         </span>

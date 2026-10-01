@@ -39,6 +39,10 @@ enum ProductSource {
   ADMIN
 }
 
+enum IdentifiedBarcodeReason {
+  NUTRITION_MISSING
+}
+
 // Data-quality state for a PackagedProduct, independent of ProductSource — an
 // Open Food Facts import is EXTERNAL (structured but not hand-checked), a
 // fresh user submission is UNVERIFIED, and VERIFIED is reserved for
@@ -60,6 +64,25 @@ enum MealCategory {
 enum BaseUnit {
   G
   ML
+}
+
+// Denominator explicitly stated by a trustworthy source for a Packaged
+// product's per-100 nutrition values. Inferred nutrition bases are resolved
+// from source-specific rules and are never persisted in this column.
+enum NutritionBasis {
+  PER_100_G
+  PER_100_ML
+}
+
+// Presentation-only package noun derived from structured provider metadata.
+// PACKAGE is the generic fallback when no specific container is known.
+enum ContainerKey {
+  PACKAGE
+  CAN
+  BOTTLE
+  JAR
+  BOX
+  BAG
 }
 
 // How the consumed amount was chosen (specs/009-barcode-portion-logging).
@@ -298,16 +321,8 @@ model FoodLogEntry {
   canonicalFood      CanonicalFood?   @relation(fields: [canonicalFoodId], references: [id], onDelete: SetNull)
   packagedProductId  String?
   packagedProduct    PackagedProduct? @relation(fields: [packagedProductId], references: [id], onDelete: SetNull)
-  // Legacy quantity in grams. Nullable since ticket 01 of
-  // specs/009-barcode-portion-logging: a future ML entry stores grams = NULL
-  // so no column named grams ever holds millilitres (see
-  // docs/portion-model-decisions.md §9.2). Readers must use
-  // `amount ?? grams`.
-  grams              Decimal?
-  // Explicit consumed amount in `amountUnit` (ticket 01 dual-writes
-  // amount = grams, amountUnit = G; backfill of older rows is ticket 02).
-  amount             Decimal?
-  amountUnit         BaseUnit?
+  amount             Decimal
+  amountUnit         BaseUnit
   portionKind        PortionKind?
   portionMultiplier  Decimal?
   caloriesComputed   Decimal
@@ -337,17 +352,17 @@ model PackagedProduct {
   category            String?
 
   servingSize         Decimal?
-  servingUnit         String?
+  servingBaseUnit     BaseUnit?
   packageSize         Decimal?
-  packageUnit         String?
+  packageBaseUnit     BaseUnit?
+  containerKey        ContainerKey?
+  declaredNutritionBasis NutritionBasis?
 
-  // Per 100g, matching this app's one existing nutrition convention
-  // (docs/business-logic.md §4) — including for liquids, since Open Food
-  // Facts' own `_100g` nutriment fields (the only ones this app reads) are
-  // populated for beverages too. caloriesPer100g is required: a product
-  // without usable calorie data is treated as "not found" at resolution time
-  // (see ProductResolverService), the same data-quality bar Open Food
-  // Facts/USDA lookups already enforce elsewhere in this module.
+  // Per 100 Base units: 100 g for MASS or 100 ml for VOLUME (ADR 0006).
+  // The existing column names remain unchanged, and Open Food Facts' `_100g`
+  // fields are interpreted using its documented provider-specific rule.
+  // caloriesPer100g is required: a product without usable calorie data is
+  // retained only as an IdentifiedBarcode and cannot reach nutrition math.
   caloriesPer100g     Decimal
   proteinPer100g      Decimal?
   carbsPer100g        Decimal?
@@ -368,6 +383,7 @@ model PackagedProduct {
   // provider's id differs from the barcode itself.
   sourceId            String?
   verificationStatus  VerificationStatus @default(UNVERIFIED)
+  lastProviderCheckAt DateTime?
 
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt
@@ -378,6 +394,25 @@ model PackagedProduct {
   @@index([brand])
   @@index([sourceId])
   @@map("packaged_products")
+}
+
+// Provider-confirmed barcode identity that cannot enter PackagedProduct
+// because usable calorie data is absent. This model intentionally has no
+// nutrition fields and no relation from FoodLogEntry.
+model IdentifiedBarcode {
+  id                  String                  @id @default(uuid())
+  barcode             String                  @unique
+  displayName         String
+  brand               String?
+  imageUrl            String?
+  reason              IdentifiedBarcodeReason
+  source              ProductSource
+  lastProviderCheckAt DateTime
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+
+  @@index([source, lastProviderCheckAt])
+  @@map("identified_barcodes")
 }
 
 model ExerciseLogEntry {
