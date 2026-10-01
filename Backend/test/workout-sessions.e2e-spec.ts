@@ -328,13 +328,17 @@ describe('Workouts (e2e)', () => {
         })
         .expect(201);
 
-      expect(res.body.muscleGroups).toEqual(['CHEST', 'TRICEPS']);
-      expect(res.body.exercises).toHaveLength(2);
+      const body = res.body as {
+        muscleGroups: string[];
+        exercises: {
+          exerciseType: string;
+          sets: { reps: number; weightKg: string | null }[];
+        }[];
+      };
+      expect(body.muscleGroups).toEqual(['CHEST', 'TRICEPS']);
+      expect(body.exercises).toHaveLength(2);
 
-      const [benchPress, pushUps] = res.body.exercises as {
-        exerciseType: string;
-        sets: { reps: number; weightKg: string | null }[];
-      }[];
+      const [benchPress, pushUps] = body.exercises;
 
       expect(benchPress.exerciseType).toBe('BARBELL_BENCH_PRESS');
       expect(benchPress.sets).toHaveLength(2);
@@ -804,8 +808,8 @@ describe('Workouts (e2e)', () => {
         .expect(200);
 
       const exerciseTypes = (
-        res.body.exercises as { exerciseType: string }[]
-      ).map((e) => e.exerciseType);
+        res.body as { exercises: { exerciseType: string }[] }
+      ).exercises.map((e) => e.exerciseType);
       expect(exerciseTypes).toEqual([
         'BARBELL_BENCH_PRESS',
         'CABLE_TRICEPS_PUSHDOWN',
@@ -853,11 +857,14 @@ describe('Workouts (e2e)', () => {
         })
         .expect(200);
 
-      expect(res.body.id).toBe(created.id);
-      expect(res.body.muscleGroups).toEqual(['BACK', 'BICEPS']);
-      const exerciseTypes = (
-        res.body.exercises as { exerciseType: string }[]
-      ).map((e) => e.exerciseType);
+      const body = res.body as {
+        id: string;
+        muscleGroups: string[];
+        exercises: { exerciseType: string }[];
+      };
+      expect(body.id).toBe(created.id);
+      expect(body.muscleGroups).toEqual(['BACK', 'BICEPS']);
+      const exerciseTypes = body.exercises.map((e) => e.exerciseType);
       expect(exerciseTypes).toEqual(['LAT_PULLDOWN', 'BARBELL_CURL']);
     });
 
