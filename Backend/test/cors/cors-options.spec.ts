@@ -1,6 +1,7 @@
 import { Controller, Get, INestApplication, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import request from 'supertest';
+import { App } from 'supertest/types';
 import { corsOptionsFromEnv } from '../../src/common/cors/cors-options';
 
 // Exercised through a real Nest app and the same app.enableCors() call that
@@ -24,13 +25,15 @@ const PREVIEW =
 const ATTACKER = 'https://evil.example';
 
 async function appWith(frontendOrigin: string | undefined) {
-  const app = await NestFactory.create(PingModule, { logger: false });
+  const app = await NestFactory.create<INestApplication<App>>(PingModule, {
+    logger: false,
+  });
   app.enableCors(corsOptionsFromEnv(frontendOrigin));
   await app.init();
   return app;
 }
 
-function allowOrigin(app: INestApplication, origin?: string) {
+function allowOrigin(app: INestApplication<App>, origin?: string) {
   const req = request(app.getHttpServer()).get('/ping');
   return (origin ? req.set('Origin', origin) : req).then((res) => ({
     status: res.status,
@@ -40,7 +43,7 @@ function allowOrigin(app: INestApplication, origin?: string) {
 }
 
 describe('corsOptionsFromEnv', () => {
-  let app: INestApplication | undefined;
+  let app: INestApplication<App> | undefined;
   afterEach(async () => {
     await app?.close();
     app = undefined;
