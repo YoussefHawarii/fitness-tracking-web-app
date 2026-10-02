@@ -24,6 +24,7 @@ export function computeScanRegion({
   viewHeight: number;
   box: ScanBox;
 }) {
+  // object-cover scales to fill the view, hiding the centered excess of the source frame.
   const scale = Math.max(viewWidth / videoWidth, viewHeight / videoHeight);
   const visibleWidth = viewWidth / scale;
   const visibleHeight = viewHeight / scale;

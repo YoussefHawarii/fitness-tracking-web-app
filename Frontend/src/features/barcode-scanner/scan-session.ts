@@ -11,14 +11,25 @@ export type ScanStatus =
   | 'decoded'
   | 'permission-denied'
   | 'unavailable'
+  | 'camera-busy'
+  | 'unsupported'
   | 'error'
   | 'interrupted';
+
+export type TorchState = { available: boolean; on: boolean };
 
 export type ScanState = {
   status: ScanStatus;
   barcode: string | null;
-  torch: { available: boolean; on: boolean };
+  torch: TorchState;
   zoom: number | null;
+};
+
+export const INITIAL_SCAN_STATE: ScanState = {
+  status: 'idle',
+  barcode: null,
+  torch: { available: false, on: false },
+  zoom: null,
 };
 
 export type CameraHandle = {
@@ -40,12 +51,7 @@ export function createScanSession({
   ) => Promise<CameraHandle>;
   onBarcode: (text: string) => void;
 }) {
-  let state: ScanState = {
-    status: 'idle',
-    barcode: null,
-    torch: { available: false, on: false },
-    zoom: null,
-  };
+  let state: ScanState = INITIAL_SCAN_STATE;
   let camera: CameraHandle | null = null;
   let stopListeningForEnd: (() => void) | undefined;
   let startInFlight: Promise<void> | null = null;
@@ -69,18 +75,23 @@ export function createScanSession({
       camera = await openCamera(buildCameraConstraints());
     } catch (error) {
       if (stopped) return;
-      const name = error instanceof Error ? error.name : '';
+      const name =
+        error !== null &&
+        typeof error === 'object' &&
+        'name' in error &&
+        typeof error.name === 'string'
+          ? error.name
+          : '';
       const status: ScanStatus =
         name === 'NotAllowedError' || name === 'SecurityError'
           ? 'permission-denied'
-          : [
-                'NotFoundError',
-                'OverconstrainedError',
-                'NotReadableError',
-                'NotSupportedError',
-              ].includes(name)
-            ? 'unavailable'
-            : 'error';
+          : name === 'NotReadableError'
+            ? 'camera-busy'
+            : name === 'NotSupportedError'
+              ? 'unsupported'
+              : ['NotFoundError', 'OverconstrainedError'].includes(name)
+                ? 'unavailable'
+                : 'error';
       setState({ ...state, status });
       return;
     }
@@ -136,8 +147,9 @@ export function createScanSession({
     },
     reportDecode(text: string | null) {
       if (state.status !== 'scanning' || text === null) return;
-      // FoodLog keeps the scanner mounted while it shows the product, so
-      // release the camera as soon as the first valid read confirms the code.
+      // ZXing/native already validate check digits, so the first read confirms
+      // the code. FoodLog keeps the scanner mounted while it shows the product,
+      // so release the camera now rather than on unmount.
       releaseCamera();
       setState({ ...state, status: 'decoded', barcode: text });
       onBarcode(text);

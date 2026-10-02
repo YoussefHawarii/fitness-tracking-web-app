@@ -49,7 +49,9 @@ const IOS_SAFARI_CAPABILITIES = {
 // ---------------------------------------------------------------- A
 
 test('camera request prefers the rear camera at 1080p without demanding it', async () => {
-  const { buildCameraConstraints } = await load(`${FEATURE}/camera-capabilities.ts`);
+  const { buildCameraConstraints } = await load(
+    `${FEATURE}/camera-capabilities.ts`,
+  );
 
   const constraints = buildCameraConstraints();
 
@@ -116,7 +118,10 @@ test('portrait frame in a square view: crop skips the top and bottom instead', a
 
 // Fake at the system boundary (getUserMedia + MediaStreamTrack). Records what
 // was asked of the device so tests can check effects on the camera itself.
-function fakeCamera({ capabilities = ANDROID_CHROME_CAPABILITIES, openError } = {}) {
+function fakeCamera({
+  capabilities = ANDROID_CHROME_CAPABILITIES,
+  openError,
+} = {}) {
   const endedListeners = new Set();
   const device = {
     requested: null,
@@ -178,7 +183,10 @@ function deferredCamera(capabilities = IOS_SAFARI_CAPABILITIES) {
 test('a camera taken away mid-scan leaves a recoverable interrupted state, not a fake scanning one', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = fakeCamera({ capabilities: ANDROID_CHROME_CAPABILITIES });
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
 
   await session.start();
   camera.device.end();
@@ -198,7 +206,10 @@ test('a camera taken away mid-scan leaves a recoverable interrupted state, not a
 test('stopping the session removes its ended listener', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = fakeCamera();
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
 
   await session.start();
   assert.equal(camera.device.endedListenerCount(), 1);
@@ -209,7 +220,10 @@ test('stopping the session removes its ended listener', async () => {
 test('stopping while the camera is still opening releases the late camera and never scans', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = deferredCamera();
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
   const seen = [];
   session.subscribe(() => seen.push(session.getState().status));
 
@@ -284,7 +298,10 @@ test('retrying after a permission denial reaches scanning once the camera opens'
 test('overlapping start attempts open only one camera', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = deferredCamera();
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
 
   const first = session.start();
   const second = session.start();
@@ -299,7 +316,10 @@ test('overlapping start attempts open only one camera', async () => {
 test('confirming a barcode releases the camera exactly once', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = fakeCamera();
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
 
   await session.start();
   session.reportDecode('5901234123457');
@@ -346,7 +366,10 @@ test('a barcode is emitted once, on the first valid read, and again only by a fr
 test('supported zoom is applied on start and the torch can be toggled', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = fakeCamera({ capabilities: ANDROID_CHROME_CAPABILITIES });
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
 
   await session.start();
   assert.equal(camera.device.zoom, 2);
@@ -360,7 +383,10 @@ test('supported zoom is applied on start and the torch can be toggled', async ()
 test('a camera without zoom or torch is left alone', async () => {
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
   const camera = fakeCamera({ capabilities: IOS_SAFARI_CAPABILITIES });
-  const session = createScanSession({ openCamera: camera.openCamera, onBarcode: () => {} });
+  const session = createScanSession({
+    openCamera: camera.openCamera,
+    onBarcode: () => {},
+  });
 
   await session.start();
 
@@ -372,20 +398,67 @@ test('denied permission and a missing camera are distinct failure states', async
   const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
 
   const denied = createScanSession({
-    openCamera: fakeCamera({ openError: new DOMException('denied', 'NotAllowedError') })
-      .openCamera,
+    openCamera: fakeCamera({
+      openError: new DOMException('denied', 'NotAllowedError'),
+    }).openCamera,
     onBarcode: () => {},
   });
   await denied.start();
   assert.equal(denied.getState().status, 'permission-denied');
 
   const missing = createScanSession({
-    openCamera: fakeCamera({ openError: new DOMException('none', 'NotFoundError') })
-      .openCamera,
+    openCamera: fakeCamera({
+      openError: new DOMException('none', 'NotFoundError'),
+    }).openCamera,
     onBarcode: () => {},
   });
   await missing.start();
   assert.equal(missing.getState().status, 'unavailable');
+});
+
+test('a busy camera and unsupported camera access have distinct failure states', async () => {
+  const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
+  for (const [name, status] of [
+    ['NotReadableError', 'camera-busy'],
+    ['NotSupportedError', 'unsupported'],
+  ]) {
+    const session = createScanSession({
+      openCamera: fakeCamera({ openError: { name } }).openCamera,
+      onBarcode: () => {},
+    });
+    await session.start();
+    assert.equal(session.getState().status, status);
+  }
+});
+
+test('a non-Error camera denial still reports permission denied', async () => {
+  const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
+  const session = createScanSession({
+    openCamera: fakeCamera({ openError: { name: 'NotAllowedError' } })
+      .openCamera,
+    onBarcode: () => {},
+  });
+
+  await session.start();
+  assert.equal(session.getState().status, 'permission-denied');
+});
+
+test('a new scan session starts from the shared initial state', async () => {
+  const { createScanSession, INITIAL_SCAN_STATE } = await load(
+    `${FEATURE}/scan-session.ts`,
+  );
+  const session = createScanSession({
+    openCamera: fakeCamera().openCamera,
+    onBarcode: () => {},
+  });
+
+  assert.deepEqual(INITIAL_SCAN_STATE, {
+    status: 'idle',
+    barcode: null,
+    torch: { available: false, on: false },
+    zoom: null,
+  });
+  assert.deepEqual(session.getState(), INITIAL_SCAN_STATE);
 });
 
 // The camera must not be requested until the <video> it plays into is in the
@@ -497,6 +570,42 @@ test('interrupted view says the camera stopped and offers a retry instead of a s
   assert.doesNotMatch(html, /aria-label="Barcode scan area"/);
 });
 
+test('starting view announces camera startup but scanning view does not', async () => {
+  const { ScannerView } = await load(`${FEATURE}/ScannerView.tsx`);
+  const props = {
+    torch: { available: false, on: false },
+    onToggleTorch: () => {},
+  };
+  const starting = renderToStaticMarkup(
+    React.createElement(ScannerView, { ...props, status: 'starting' }),
+  );
+  const scanning = renderToStaticMarkup(
+    React.createElement(ScannerView, { ...props, status: 'scanning' }),
+  );
+
+  assert.match(
+    starting,
+    /role="status"[^>]*aria-live="polite"[^>]*>Starting camera…<\/[^>]+>/,
+  );
+  assert.match(starting, /aria-label="Barcode scan area"/);
+  assert.doesNotMatch(scanning, /Starting camera/);
+  assert.doesNotMatch(scanning, /role="status"/);
+});
+
+test('retry is a type button with the same label', async () => {
+  const { ScannerView } = await load(`${FEATURE}/ScannerView.tsx`);
+  const html = renderToStaticMarkup(
+    React.createElement(ScannerView, {
+      status: 'error',
+      torch: { available: false, on: false },
+      onToggleTorch: () => {},
+      onRetry: () => {},
+    }),
+  );
+
+  assert.match(html, /<button[^>]*type="button"[^>]*>Try again<\/button>/);
+});
+
 test('permission-denied view explains how to allow the camera instead of a scan frame', async () => {
   const { ScannerView } = await load(`${FEATURE}/ScannerView.tsx`);
 
@@ -510,4 +619,23 @@ test('permission-denied view explains how to allow the camera instead of a scan 
 
   assert.match(html, /camera permission/i);
   assert.doesNotMatch(html, /aria-label="Barcode scan area"/);
+});
+
+test('busy and unsupported camera views explain the problem and offer retry', async () => {
+  const { ScannerView } = await load(`${FEATURE}/ScannerView.tsx`);
+  for (const [status, message] of [
+    ['camera-busy', /camera is being used by another app/i],
+    ['unsupported', /secure \(https\) page in a supported browser/i],
+  ]) {
+    const html = renderToStaticMarkup(
+      React.createElement(ScannerView, {
+        status,
+        torch: { available: false, on: false },
+        onToggleTorch: () => {},
+        onRetry: () => {},
+      }),
+    );
+    assert.match(html, message);
+    assert.match(html, /<button[^>]*type="button"[^>]*>Try again<\/button>/);
+  }
 });
