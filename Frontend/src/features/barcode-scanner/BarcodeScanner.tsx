@@ -11,6 +11,7 @@ import {
 import { createRetailDecoder } from './retail-decoder';
 import { DECODE_REGION, computeScanRegion } from './scan-region';
 import {
+  INITIAL_SCAN_STATE,
   createScanSession,
   type CameraHandle,
   type ScanState,
@@ -23,17 +24,19 @@ interface Props {
 }
 
 export function BarcodeScanner({ onDecoded, onScanError }: Props) {
+  const onDecodedRef = useRef(onDecoded);
+  const onScanErrorRef = useRef(onScanError);
+  useEffect(() => {
+    onDecodedRef.current = onDecoded;
+    onScanErrorRef.current = onScanError;
+  }, [onDecoded, onScanError]);
+
   // Fed by the <video>'s callback ref; the camera is only requested once the
   // element exists, including when "Try again" swaps the error view back out.
   const [videoGate] = useState(() => createElementGate<HTMLVideoElement>());
   const sessionRef = useRef<ReturnType<typeof createScanSession> | null>(null);
   const restartRef = useRef<(() => void) | null>(null);
-  const [state, setState] = useState<ScanState>({
-    status: 'idle',
-    barcode: null,
-    torch: { available: false, on: false },
-    zoom: null,
-  });
+  const [state, setState] = useState<ScanState>(INITIAL_SCAN_STATE);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,7 +116,7 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
     const session = createScanSession({
       openCamera,
       onBarcode: (text) => {
-        if (!cancelled) onDecoded(text);
+        if (!cancelled) onDecodedRef.current(text);
       },
     });
     sessionRef.current = session;
@@ -180,7 +183,7 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
             currentTime: video.currentTime,
             paused: video.paused,
           });
-          onScanError?.(error);
+          onScanErrorRef.current?.(error);
         },
       });
       frameLoop.start();

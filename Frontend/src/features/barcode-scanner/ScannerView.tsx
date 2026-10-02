@@ -1,14 +1,15 @@
 import type { Ref } from 'react';
+import { SecondaryButton } from '../../components/ui/Button';
 import { SCAN_SLOT } from './scan-region';
-import type { ScanStatus } from './scan-session';
+import type { ScanStatus, TorchState } from './scan-session';
 
-type Props = {
+interface Props {
   status: ScanStatus;
-  torch: { available: boolean; on: boolean };
+  torch: TorchState;
   onToggleTorch: () => void;
   videoRef?: Ref<HTMLVideoElement>;
   onRetry?: () => void;
-};
+}
 
 export function ScannerView({
   status,
@@ -25,13 +26,21 @@ export function ScannerView({
           ? 'No camera is available. Check that a camera is connected and accessible.'
           : status === 'error'
             ? 'The camera could not start. Please try again.'
-            : status === 'interrupted'
-              ? 'The camera stopped, for example because the screen locked or another app took it. Try again to resume scanning.'
-              : null;
+            : status === 'camera-busy'
+              ? 'The camera is being used by another app. Close it and try again.'
+              : status === 'unsupported'
+                ? 'The camera needs a secure (https) page in a supported browser.'
+                : status === 'interrupted'
+                  ? 'The camera stopped, for example because the screen locked or another app took it. Try again to resume scanning.'
+                  : null;
     return message ? (
       <div className="p-4 text-body text-warn">
         <p>{message}</p>
-        {onRetry && <button onClick={onRetry}>Try again</button>}
+        {onRetry && (
+          <SecondaryButton type="button" onClick={onRetry}>
+            Try again
+          </SecondaryButton>
+        )}
       </div>
     ) : null;
   }
@@ -76,6 +85,15 @@ export function ScannerView({
           className="absolute bottom-0 right-0 h-[32%] w-[14%] rounded-br-sm border-b-2 border-r-2 border-accent drop-shadow-[0_0_2px_rgba(0,0,0,0.85)]"
         />
       </div>
+      {status === 'starting' && (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute bottom-4 left-4 rounded-md bg-surface-raised/90 px-3 py-2 text-body text-text-muted"
+        >
+          Starting camera…
+        </div>
+      )}
       {torch.available && status !== 'decoded' && (
         <button
           type="button"
