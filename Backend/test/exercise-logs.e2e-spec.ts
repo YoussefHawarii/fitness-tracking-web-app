@@ -8,6 +8,16 @@ import { globalValidationPipe } from '../src/common/pipes/validation.pipe';
 
 // Covers specs/004-exercise-tracking-page/contracts/exercise-logs-api.md:
 // POST/PATCH/DELETE/GET /exercise-logs and GET /sports.
+
+// caloriesBurned is a Prisma Decimal, serialized as a string.
+type ExerciseLogBody = {
+  id: string;
+  sportType: string;
+  customSportName: string | null;
+  durationMinutes: number;
+  caloriesBurned: string;
+};
+
 describe('Exercise logs (e2e)', () => {
   let app: INestApplication<App>;
   const sentOtpEmails: { to: string; code: string }[] = [];
@@ -118,7 +128,9 @@ describe('Exercise logs (e2e)', () => {
       sportType: 'RUNNING',
       durationMinutes: 30,
     });
-    expect(Number(res.body.caloriesBurned)).toBeGreaterThan(0);
+    expect(
+      Number((res.body as ExerciseLogBody).caloriesBurned),
+    ).toBeGreaterThan(0);
   });
 
   it('POST /exercise-logs with sportType OTHER requires and stores customSportName', async () => {
@@ -135,7 +147,7 @@ describe('Exercise logs (e2e)', () => {
       })
       .expect(201);
 
-    expect(res.body.customSportName).toBe('Rock Climbing');
+    expect((res.body as ExerciseLogBody).customSportName).toBe('Rock Climbing');
 
     await request(app.getHttpServer())
       .post('/exercise-logs')
@@ -180,8 +192,9 @@ describe('Exercise logs (e2e)', () => {
       .send({ sportType: 'RUNNING', durationMinutes: 30, date: '2026-01-15' })
       .expect(201);
 
-    const originalCalories = Number(created.body.caloriesBurned);
-    const id = created.body.id as string;
+    const createdBody = created.body as ExerciseLogBody;
+    const originalCalories = Number(createdBody.caloriesBurned);
+    const id = createdBody.id;
 
     const durationEdit = await request(app.getHttpServer())
       .patch(`/exercise-logs/${id}`)
@@ -189,9 +202,10 @@ describe('Exercise logs (e2e)', () => {
       .send({ durationMinutes: 20 })
       .expect(200);
 
-    expect(durationEdit.body.id).toBe(id);
-    expect(durationEdit.body.durationMinutes).toBe(20);
-    expect(Number(durationEdit.body.caloriesBurned)).not.toBe(originalCalories);
+    const durationEditBody = durationEdit.body as ExerciseLogBody;
+    expect(durationEditBody.id).toBe(id);
+    expect(durationEditBody.durationMinutes).toBe(20);
+    expect(Number(durationEditBody.caloriesBurned)).not.toBe(originalCalories);
 
     const sportEdit = await request(app.getHttpServer())
       .patch(`/exercise-logs/${id}`)
@@ -199,9 +213,10 @@ describe('Exercise logs (e2e)', () => {
       .send({ sportType: 'SWIMMING' })
       .expect(200);
 
-    expect(sportEdit.body.sportType).toBe('SWIMMING');
-    expect(Number(sportEdit.body.caloriesBurned)).not.toBe(
-      Number(durationEdit.body.caloriesBurned),
+    const sportEditBody = sportEdit.body as ExerciseLogBody;
+    expect(sportEditBody.sportType).toBe('SWIMMING');
+    expect(Number(sportEditBody.caloriesBurned)).not.toBe(
+      Number(durationEditBody.caloriesBurned),
     );
   });
 
@@ -214,9 +229,10 @@ describe('Exercise logs (e2e)', () => {
       .set('Authorization', `Bearer ${ownerToken}`)
       .send({ sportType: 'TENNIS', durationMinutes: 60, date: '2026-01-15' })
       .expect(201);
+    const { id } = created.body as ExerciseLogBody;
 
     await request(app.getHttpServer())
-      .patch(`/exercise-logs/${created.body.id}`)
+      .patch(`/exercise-logs/${id}`)
       .set('Authorization', `Bearer ${strangerToken}`)
       .send({ durationMinutes: 10 })
       .expect(404);
@@ -234,15 +250,16 @@ describe('Exercise logs (e2e)', () => {
         date: '2026-01-15',
       })
       .expect(201);
+    const { id } = created.body as ExerciseLogBody;
 
     const strangerToken = await newVerifiedOnboardedUser('delete-stranger');
     await request(app.getHttpServer())
-      .delete(`/exercise-logs/${created.body.id}`)
+      .delete(`/exercise-logs/${id}`)
       .set('Authorization', `Bearer ${strangerToken}`)
       .expect(404);
 
     await request(app.getHttpServer())
-      .delete(`/exercise-logs/${created.body.id}`)
+      .delete(`/exercise-logs/${id}`)
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(204);
 
@@ -275,9 +292,10 @@ describe('Exercise logs (e2e)', () => {
       .set('Authorization', `Bearer ${accessToken}`)
       .expect(200);
 
-    expect(res.body).toHaveLength(2);
-    expect(res.body[0].id).toBe(second.body.id);
-    expect(res.body[1].id).toBe(first.body.id);
+    const listed = res.body as ExerciseLogBody[];
+    expect(listed).toHaveLength(2);
+    expect(listed[0].id).toBe((second.body as ExerciseLogBody).id);
+    expect(listed[1].id).toBe((first.body as ExerciseLogBody).id);
   });
 
   it('GET /exercise-logs returns an empty array when nothing logged for the date', async () => {
