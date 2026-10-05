@@ -4,9 +4,11 @@ import { after, before, test } from 'node:test';
 import { createServer } from 'vite';
 
 // The real on-device engine module driven against a recording stand-in for
-// tesseract.js: every OCR asset it asks for is on this origin, the photo
-// goes only to the in-browser worker, and nothing it does makes a request
-// of its own — through a scan, its number re-reads and termination.
+// tesseract.js: it configures every OCR asset on this origin, hands the
+// photo only to the worker, and makes no request of its own — through a
+// scan, its number re-reads and termination. Requests made inside the real
+// Tesseract runtime are outside this test; the clean-profile network
+// inspection on real devices covers them.
 
 let vite;
 let engineModule;
@@ -38,7 +40,7 @@ after(async () => {
   await vite.close();
 });
 
-test('a scan asks only for same-origin OCR assets and sends nothing anywhere', async () => {
+test('the engine configures same-origin OCR assets and makes no request of its own', async () => {
   const requests = [];
   const saved = {
     fetch: globalThis.fetch,
