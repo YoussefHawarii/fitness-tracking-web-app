@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,11 +9,8 @@ import {
   Patch,
   Post,
   Query,
-  UploadedFile,
   UseGuards,
-  UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import {
   CurrentUser,
@@ -25,7 +21,6 @@ import { getDayBoundaryUtc } from '../calorie-balance/day-boundary.util';
 import { FoodService } from './food.service';
 import { FoodSearchService } from './food-search.service';
 import { PackagedProductService } from './packaged-product.service';
-import { NutritionLabelExtractionService } from './nutrition-label-extraction.service';
 import { serializePackagedProduct } from './product-mapper';
 import { CreateLocalFoodItemDto } from './dto/create-local-food-item.dto';
 import { CreateFoodLogDto } from './dto/create-food-log.dto';
@@ -36,9 +31,6 @@ import { SearchFoodTranscriptQueryDto } from './dto/search-food-transcript-query
 import { CreatePackagedProductDto } from './dto/create-packaged-product.dto';
 import { resolvePackagedProductPortion } from './portion-resolution';
 
-const NUTRITION_LABEL_MAX_BYTES = 5 * 1024 * 1024;
-const NUTRITION_LABEL_ALLOWED_MIME = /^image\/(jpeg|png|webp)$/;
-
 @UseGuards(JwtAuthGuard)
 @Controller('food')
 export class FoodController {
@@ -47,7 +39,6 @@ export class FoodController {
     private readonly foodSearchService: FoodSearchService,
     private readonly userModel: UserModel,
     private readonly packagedProductService: PackagedProductService,
-    private readonly nutritionLabelExtraction: NutritionLabelExtractionService,
   ) {}
 
   @Get('barcode/:code')
@@ -69,34 +60,6 @@ export class FoodController {
     const product = await this.packagedProductService.createUserSubmitted(dto);
     const { resolution } = resolvePackagedProductPortion(product);
     return serializePackagedProduct(product, resolution);
-  }
-
-  // Nutrition-label scanning foundation (prepared, not wired to a real OCR
-  // provider — see NutritionLabelExtractionService). Always resolves with
-  // `available: false` today; the frontend must fall back to manual entry.
-  @Post('nutrition-label/extract')
-  @UseInterceptors(
-    FileInterceptor('image', {
-      limits: { fileSize: NUTRITION_LABEL_MAX_BYTES },
-      fileFilter: (_req, file, callback) => {
-        if (!NUTRITION_LABEL_ALLOWED_MIME.test(file.mimetype)) {
-          callback(
-            new BadRequestException(
-              'Only JPEG, PNG, or WebP images are supported.',
-            ),
-            false,
-          );
-          return;
-        }
-        callback(null, true);
-      },
-    }),
-  )
-  extractNutritionLabel(@UploadedFile() file?: Express.Multer.File) {
-    if (!file) {
-      throw new BadRequestException('An image file is required.');
-    }
-    return this.nutritionLabelExtraction.extract(file.buffer, file.mimetype);
   }
 
   // Manual search uses the canonical bilingual catalog first, then the

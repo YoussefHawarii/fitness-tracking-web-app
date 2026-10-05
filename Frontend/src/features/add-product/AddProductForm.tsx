@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import {
   createPackagedProduct,
-  extractNutritionLabel,
   ProductConflictError,
   ProductSubmissionError,
   type NutritionBasis,
@@ -9,7 +8,9 @@ import {
 } from '../../services/foodService';
 import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
-import { completeNutritionLabelExtraction } from './extractionFormValues';
+import { labelScanToFormUpdate } from './extractionFormValues';
+import { LabelScanPanel } from '../label-scan/LabelScanPanel';
+import type { LabelScanResult } from '../label-scan/labelReader';
 import {
   buildPackagedProductInput,
   withDeclaredNutritionBasis,
@@ -58,12 +59,6 @@ export function AddProductForm({
   const basisSelectedByUser = useRef(false);
   const [country, setCountry] = useState('');
 
-  const [labelFile, setLabelFile] = useState<File | null>(null);
-  const [labelStatus, setLabelStatus] = useState<
-    'idle' | 'extracting' | 'done'
-  >('idle');
-  const [labelReason, setLabelReason] = useState<string | null>(null);
-
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const nutritionBasisLabel =
@@ -79,43 +74,21 @@ export function AddProductForm({
     return Number.isFinite(n) ? n : undefined;
   }
 
-  async function handleExtractLabel() {
-    if (!labelFile) return;
-    setLabelStatus('extracting');
-    setLabelReason(null);
-    try {
-      await completeNutritionLabelExtraction(extractNutritionLabel(labelFile), {
-        applyValues: (values) => {
-          if (values.caloriesPer100g !== undefined)
-            setCaloriesPer100g(values.caloriesPer100g);
-          if (values.proteinPer100g !== undefined)
-            setProteinPer100g(values.proteinPer100g);
-          if (values.carbsPer100g !== undefined)
-            setCarbsPer100g(values.carbsPer100g);
-          if (values.fatPer100g !== undefined) setFatPer100g(values.fatPer100g);
-          if (values.fiberPer100g !== undefined)
-            setFiberPer100g(values.fiberPer100g);
-          if (values.sugarPer100g !== undefined)
-            setSugarPer100g(values.sugarPer100g);
-          if (values.sodiumPer100g !== undefined)
-            setSodiumMgPer100(String(Number(values.sodiumPer100g) * 1000));
-          if (values.servingSize !== undefined)
-            setServingSize(values.servingSize);
-          if (values.servingUnit !== undefined)
-            setServingUnit(values.servingUnit);
-        },
-        updateBasis: (resolveBasis) => {
-          setDeclaredNutritionBasis((currentBasis) =>
-            resolveBasis(currentBasis, basisSelectedByUser.current),
-          );
-        },
-        setUnavailableReason: setLabelReason,
-      });
-      setLabelStatus('done');
-    } catch {
-      setLabelStatus('done');
-      setLabelReason('Could not process this image.');
-    }
+  function handleApplyLabelScan(result: LabelScanResult) {
+    const update = labelScanToFormUpdate(result, {
+      values: { caloriesPer100g, proteinPer100g, carbsPer100g, fatPer100g },
+      basis: declaredNutritionBasis,
+      basisSelectedByUser: basisSelectedByUser.current,
+    });
+    if (update.values.caloriesPer100g !== undefined)
+      setCaloriesPer100g(update.values.caloriesPer100g);
+    if (update.values.proteinPer100g !== undefined)
+      setProteinPer100g(update.values.proteinPer100g);
+    if (update.values.carbsPer100g !== undefined)
+      setCarbsPer100g(update.values.carbsPer100g);
+    if (update.values.fatPer100g !== undefined)
+      setFatPer100g(update.values.fatPer100g);
+    if (update.basis) setDeclaredNutritionBasis(update.basis);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -222,23 +195,7 @@ export function AddProductForm({
         <p className="text-label text-text-muted normal-case tracking-normal">
           Scan nutrition label (optional)
         </p>
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          onChange={(e) => setLabelFile(e.target.files?.[0] ?? null)}
-          className="text-body text-text"
-        />
-        <SecondaryButton
-          type="button"
-          disabled={!labelFile || labelStatus === 'extracting'}
-          onClick={handleExtractLabel}
-          className="self-start"
-        >
-          {labelStatus === 'extracting' ? 'Extracting…' : 'Extract from label'}
-        </SecondaryButton>
-        {labelReason && (
-          <p className="text-body text-text-muted">{labelReason}</p>
-        )}
+        <LabelScanPanel onApply={handleApplyLabelScan} />
       </div>
 
       <FieldLabel>

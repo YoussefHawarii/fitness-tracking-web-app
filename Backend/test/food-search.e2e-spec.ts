@@ -789,21 +789,22 @@ describe('Food search + barcode reuse (e2e)', () => {
     });
   });
 
-  it('allows manual submission after nutrition-label extraction reports unavailable', async () => {
+  // Nutrition-label OCR runs only in the browser (ADR 0008): no route may
+  // accept a label image, and manual submission works without one.
+  it('exposes no nutrition-label upload route and still accepts manual submission', async () => {
     const barcode = ean13WithValidCheckDigit(
       `500007${testSuffix}`.padEnd(12, '8').slice(0, 12),
     );
     const token = await newVerifiedUser('label-fallback');
 
-    const extraction = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/food/nutrition-label/extract')
       .set('Authorization', `Bearer ${token}`)
       .attach('image', Buffer.from('test-image'), {
         filename: 'nutrition-label.jpg',
         contentType: 'image/jpeg',
       })
-      .expect(201);
-    expect(extraction.body).toMatchObject({ available: false });
+      .expect(404);
 
     await request(app.getHttpServer())
       .post('/food/products')

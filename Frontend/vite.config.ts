@@ -2,6 +2,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
+import { ocrAssetsPlugin } from './ocrAssets.ts'
 
 const pkg = JSON.parse(
   readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf-8'),
@@ -9,7 +10,7 @@ const pkg = JSON.parse(
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), ocrAssetsPlugin()],
   // Settings > About shows this as the app's build-time version — no
   // backend call needed since it's a Frontend-only fact (research.md §8).
   define: {

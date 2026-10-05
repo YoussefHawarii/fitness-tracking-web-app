@@ -1,83 +1,45 @@
-import type {
-  ExtractedNutritionCandidate,
-  NutritionBasis,
-  NutritionLabelExtractionResult,
-} from '../../services/foodService';
+import type { NutritionBasis } from '../../services/foodService';
+import type { LabelField, LabelScanResult } from '../label-scan/labelReader';
 
-type NutritionExtractionFormValues = Partial<
-  Record<keyof ExtractedNutritionCandidate, string>
-> & {
-  declaredNutritionBasis?: NutritionBasis;
-};
+// Readings-to-form merge: turns a Label scan's result into Add Product
+// field updates. A Label reading is only ever a suggestion — it reaches the
+// form when the user presses Apply, and it never replaces a value already
+// in a field or a Nutrition basis the user picked.
 
-type NutritionBasisResolver = (
-  currentBasis: NutritionBasis | '',
-  basisSelectedByUser: boolean,
-) => NutritionBasis | '';
+export type LabelFormValues = Record<LabelField, string>;
 
-interface NutritionLabelExtractionHandlers {
-  applyValues: (values: NutritionExtractionFormValues) => void;
-  updateBasis: (resolveBasis: NutritionBasisResolver) => void;
-  setUnavailableReason: (reason: string) => void;
+export interface LabelFormState {
+  values: LabelFormValues;
+  basis: NutritionBasis | '';
+  basisSelectedByUser: boolean;
 }
 
-export function nutritionCandidateToFormValues(
-  candidate: ExtractedNutritionCandidate,
-): Partial<Record<keyof ExtractedNutritionCandidate, string>> {
-  return Object.fromEntries(
-    Object.entries(candidate)
-      .filter(([, value]) => value !== undefined)
-      .map(([field, value]) => [field, String(value)]),
-  );
+export interface LabelFormUpdate {
+  values: Partial<LabelFormValues>;
+  basis?: NutritionBasis;
 }
 
-export function nutritionExtractionToFormValues(
-  result: NutritionLabelExtractionResult,
-): NutritionExtractionFormValues {
-  const values =
-    result.available && result.candidate
-      ? nutritionCandidateToFormValues(result.candidate)
-      : {};
+export function labelScanToFormUpdate(
+  result: LabelScanResult,
+  state: LabelFormState,
+): LabelFormUpdate {
+  // Only readings from a column the label headed per 100 g / 100 ml may
+  // fill a per-100 field (ADR 0009); anything else is reference only.
+  if (result.outcome !== 'ok') return { values: {} };
 
-  const declaredNutritionBasis = nutritionBasisAfterExtraction(
-    result,
-    '',
-    false,
-  );
-  if (declaredNutritionBasis) {
-    return {
-      ...values,
-      declaredNutritionBasis,
-    };
+  const values: Partial<LabelFormValues> = {};
+  for (const reading of result.readings) {
+    if (reading.value === undefined || reading.status === 'not-found') continue;
+    if (state.values[reading.field].trim() !== '') continue;
+    values[reading.field] = String(reading.value);
   }
 
-  return values;
-}
+  const basis =
+    !state.basisSelectedByUser &&
+    state.basis === '' &&
+    result.basisSuggestion !== undefined
+      ? result.basisSuggestion
+      : undefined;
 
-export function nutritionBasisAfterExtraction(
-  result: NutritionLabelExtractionResult,
-  currentBasis: NutritionBasis | '',
-  basisSelectedByUser: boolean,
-): NutritionBasis | '' {
-  if (basisSelectedByUser) return currentBasis;
-  if (result.available && result.basisSuggestion?.confident) {
-    return result.basisSuggestion.basis;
-  }
-  return '';
-}
-
-export async function completeNutritionLabelExtraction(
-  extraction: Promise<NutritionLabelExtractionResult>,
-  handlers: NutritionLabelExtractionHandlers,
-): Promise<void> {
-  const result = await extraction;
-  if (!result.available) {
-    if (result.reason) handlers.setUnavailableReason(result.reason);
-    return;
-  }
-
-  handlers.applyValues(nutritionExtractionToFormValues(result));
-  handlers.updateBasis((currentBasis, basisSelectedByUser) =>
-    nutritionBasisAfterExtraction(result, currentBasis, basisSelectedByUser),
-  );
+  return { values, ...(basis && { basis }) };
 }

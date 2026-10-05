@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Self-hosted OCR runtime, copied from node_modules by ocrAssets.ts
+public/ocr
 *.local
 
 # Editor directories and files
