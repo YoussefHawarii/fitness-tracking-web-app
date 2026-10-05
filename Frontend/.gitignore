@@ -24,3 +24,6 @@ public/ocr
 *.njsproj
 *.sln
 *.sw?
+
+# Label-scan fixtures awaiting review (scripts/label-fixture.mjs)
+test/fixtures/labels/pending/
