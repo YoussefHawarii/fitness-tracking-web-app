@@ -151,16 +151,14 @@ interface Keyword {
   // recognised so they end the previous nutrient's segment and are never
   // mistaken for it — "Saturated fat" must never fill Fat.
   field?: LabelField;
-  // Whether a bare number (no unit) may be read as kcal for this keyword.
-  bareNumberIsKcal?: boolean;
 }
 
 const KEYWORDS: readonly Keyword[] = [
   { tokens: ['energy'], field: 'caloriesPer100g' },
   { tokens: ['energy', 'value'], field: 'caloriesPer100g' },
   { tokens: ['total', 'energy'], field: 'caloriesPer100g' },
-  { tokens: ['calories'], field: 'caloriesPer100g', bareNumberIsKcal: true },
-  { tokens: ['calorie'], field: 'caloriesPer100g', bareNumberIsKcal: true },
+  { tokens: ['calories'], field: 'caloriesPer100g' },
+  { tokens: ['calorie'], field: 'caloriesPer100g' },
   { tokens: ['protein'], field: 'proteinPer100g' },
   { tokens: ['proteins'], field: 'proteinPer100g' },
   { tokens: ['carbohydrate'], field: 'carbsPer100g' },
@@ -334,11 +332,10 @@ function readSegment(
   });
 
   const isEnergy = field === 'caloriesPer100g';
+  // A value counts only with its unit printed next to it (or once before
+  // the segment's numbers, "Energy (kcal) 250").
   const unitFits = (c: Candidate) =>
-    isEnergy
-      ? c.unit === 'kcal' ||
-        (c.unit === undefined && segment.keyword.bareNumberIsKcal === true)
-      : c.unit === 'g';
+    isEnergy ? c.unit === 'kcal' : c.unit === 'g';
 
   // In a multi-column table only numbers placed in the target column
   // count; a number that straddles two columns can't be placed at all.
@@ -375,7 +372,7 @@ function readSegment(
   return {
     field,
     value: candidate.value,
-    unit: candidate.unit ?? 'kcal',
+    unit: candidate.unit,
     status: 'read',
     warnings: [],
     evidence,
@@ -396,6 +393,8 @@ type ColumnKind = 'per100' | 'serving' | 'percent';
 interface Column {
   kind: ColumnKind;
   basis?: NutritionBasis;
+  x0: number;
+  x1: number;
   center: number;
 }
 
@@ -416,6 +415,18 @@ const BASIS_UNITS: Record<string, NutritionBasis> = {
 };
 
 const SERVING_WORDS = new Set(['serving', 'portion']);
+// Pack-size and serving-size wording describes a quantity, never a column:
+// "Net weight 100 g" is not a per-100 heading.
+const NOT_A_HEADING_WORDS = new Set([
+  'size',
+  'net',
+  'weight',
+  'wt',
+  'content',
+  'contents',
+  'pack',
+  'package',
+]);
 const PERCENT_WORDS = new Set(['ri', 'dv', 'nrv', 'gda']);
 
 function isWord(
@@ -440,25 +451,22 @@ function per100Basis(
 
 function classifyPhrase(tokens: readonly Token[]): Column | undefined {
   const words = tokens.map((t) => t.word);
-  const center =
-    (Math.min(...words.map((w) => w.bbox.x0)) +
-      Math.max(...words.map((w) => w.bbox.x1))) /
-    2;
+  const x0 = Math.min(...words.map((w) => w.bbox.x0));
+  const x1 = Math.max(...words.map((w) => w.bbox.x1));
+  const extent = { x0, x1, center: (x0 + x1) / 2 };
   if (tokens.some((t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS))) {
-    return { kind: 'percent', center };
+    return { kind: 'percent', ...extent };
   }
   if (tokens.some((t) => isWord(t, SERVING_WORDS))) {
-    // "Serving size 30 g" describes the serving; it heads no column.
-    if (tokens.some((t) => isWord(t, 'size'))) return undefined;
-    return { kind: 'serving', center };
+    return { kind: 'serving', ...extent };
   }
   for (let i = 0; i < tokens.length; i += 1) {
     const basis = per100Basis(tokens, i);
-    if (basis) return { kind: 'per100', basis, center };
+    if (basis) return { kind: 'per100', basis, ...extent };
   }
   // "per 30 g" heads a serving column.
   if (isWord(tokens[0], 'per') && tokens.some((t) => t.kind === 'number')) {
-    return { kind: 'serving', center };
+    return { kind: 'serving', ...extent };
   }
   return undefined;
 }
@@ -467,6 +475,9 @@ function classifyPhrase(tokens: readonly Token[]): Column | undefined {
 // at "serving"/"portion" (unless right after "per"), at a bare "100 g"
 // outside a serving phrase, and at "%" / "RI" / "DV".
 function headerPhrases(tokens: readonly Token[]): Column[] {
+  // A row stating a pack or serving size ("Net weight 100 g") is a
+  // quantity, not a row of headings.
+  if (tokens.some((t) => isWord(t, NOT_A_HEADING_WORDS))) return [];
   const phrases: Token[][] = [];
   tokens.forEach((token, i) => {
     const current = phrases.at(-1);
@@ -492,36 +503,65 @@ function headerPhrases(tokens: readonly Token[]): Column[] {
     .filter((c): c is Column => c !== undefined);
 }
 
+function sameColumnKind(a: Column, b: Column): boolean {
+  return a.kind === b.kind && a.basis === b.basis;
+}
+
+// Resolves the table's value columns, or nothing when the headings can't be
+// trusted. Headings count only above the first nutrient row: a heading-like
+// row inside or below the table (a second table, a footer) makes the layout
+// unresolved rather than letting it re-label values it doesn't head.
 function columnModel(rows: readonly Row[]): ColumnModel | undefined {
-  // Header rows carry no nutrient keyword. The one naming the most columns
-  // wins; on a tie, the lowest (nearest the values) does.
-  let header: Column[] = [];
-  for (const row of rows) {
-    if (segmentsOf(row).length > 0) continue;
-    const phrases = headerPhrases(tokenize(row));
-    if (phrases.length > 0 && phrases.length >= header.length) {
-      header = phrases;
-    }
+  const isNutrientRow = (row: Row) =>
+    segmentsOf(row).some((s) => s.keyword.field);
+  const firstNutrientRow = rows.find(isNutrientRow);
+  if (!firstNutrientRow) return undefined;
+
+  const headingRows = rows
+    .filter((row) => segmentsOf(row).length === 0)
+    .map((row) => ({ row, phrases: headerPhrases(tokenize(row)) }))
+    .filter((h) => h.phrases.length > 0);
+  if (headingRows.some((h) => h.row.y0 >= firstNutrientRow.y0)) {
+    return undefined;
   }
 
-  // Fallback: an explicit "per 100 g" inside a nutrient row ("Energy per
-  // 100 g") still declares a single per-100 column.
-  if (header.length === 0) {
+  // Headings stacked on several lines (or repeated in two languages) are
+  // combined by position.
+  let headings = headingRows.flatMap((h) => h.phrases);
+
+  // Fallback: one explicit "per 100 g" inside a nutrient row ("Energy per
+  // 100 g") declares a single per-100 column.
+  if (headings.length === 0) {
     const inline: Column[] = [];
     for (const row of rows) {
       const tokens = tokenize(row);
       tokens.forEach((_, i) => {
         const basis = per100Basis(tokens, i);
         if (basis && isWord(tokens[i - 1], 'per')) {
-          inline.push({ kind: 'per100', basis, center: 0 });
+          inline.push({ kind: 'per100', basis, x0: 0, x1: 0, center: 0 });
         }
       });
     }
     if (inline.length !== 1) return undefined;
-    header = inline;
+    headings = inline;
   }
 
-  const columns = [...header].sort((a, b) => a.center - b.center);
+  // Merge neighbouring headings of the same kind; headings of different
+  // kinds that overlap horizontally can't be told apart.
+  const columns: Column[] = [];
+  for (const heading of [...headings].sort((a, b) => a.center - b.center)) {
+    const previous = columns.at(-1);
+    if (previous && sameColumnKind(previous, heading)) {
+      previous.x0 = Math.min(previous.x0, heading.x0);
+      previous.x1 = Math.max(previous.x1, heading.x1);
+      previous.center = (previous.x0 + previous.x1) / 2;
+    } else if (previous && heading.x0 < previous.x1) {
+      return undefined;
+    } else {
+      columns.push({ ...heading });
+    }
+  }
+
   const per100 = columns.filter((c) => c.kind === 'per100');
   const serving = columns.filter((c) => c.kind === 'serving');
   if (per100.length === 1) return { columns, target: per100[0] };
@@ -557,7 +597,7 @@ function placeInColumn(box: BBox, model: ColumnModel): Column | 'ambiguous' {
 
 // ---------------------------------------------------------------------------
 
-const SINGLE_COLUMN: Column = { kind: 'per100', center: 0 };
+const SINGLE_COLUMN: Column = { kind: 'per100', x0: 0, x1: 0, center: 0 };
 
 export function readLabel(layout: OcrLayout): LabelScanResult {
   const rows = groupRows(layout.words);

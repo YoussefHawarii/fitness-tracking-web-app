@@ -512,3 +512,71 @@ test('per 100 g and per 100 ml headings together declare no basis', () => {
   assert.equal(result.outcome, 'no-per-100-column');
   assert.equal(result.basisSuggestion, undefined);
 });
+
+test('a pack-size footer never becomes a per-100 heading', () => {
+  const result = read(
+    row(40, ['Amount', 10], ['per', 160], ['serving', 195]),
+    row(120, ['Protein', 10], ['6.3', 200], ['g', 235]),
+    row(300, ['Net', 10], ['weight', 60], ['100', 160], ['g', 200]),
+  );
+  assert.equal(result.outcome, 'per-serving-only');
+  assert.equal(result.basisSuggestion, undefined);
+});
+
+test('a heading inside or below the table leaves the layout unresolved', () => {
+  // A second table with its own basis further down the label.
+  const twoTables = read(
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+    row(260, ['Drink', 10], ['per', 120], ['100', 160], ['ml', 200]),
+    row(300, ['Protein', 10], ['1.2', 160], ['g', 200]),
+  );
+  assert.equal(twoTables.outcome, 'no-per-100-column');
+  assert.equal(twoTables.basisSuggestion, undefined);
+
+  // A per-100 phrase that only appears below the values.
+  const footer = read(
+    row(40, ['Amount', 10], ['per', 160], ['serving', 195]),
+    row(120, ['Protein', 10], ['6.3', 200], ['g', 235]),
+    row(300, ['Values', 10], ['per', 120], ['100', 160], ['g', 200]),
+  );
+  assert.equal(footer.outcome, 'no-per-100-column');
+});
+
+test('headings stacked on two lines combine by position', () => {
+  const result = read(
+    row(30, ['Per', 180], ['serving', 215]),
+    row(55, ['Per', 400], ['100', 435], ['g', 470]),
+    row(
+      120,
+      ['Protein', 10],
+      ['6.3', 200],
+      ['g', 235],
+      ['21', 420],
+      ['g', 445],
+    ),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+
+  // Different headings stacked over the same column can't be told apart.
+  const overlapping = read(
+    row(30, ['Per', 400], ['serving', 435]),
+    row(55, ['Per', 400], ['100', 435], ['g', 470]),
+    row(120, ['Protein', 10], ['21', 420], ['g', 445]),
+  );
+  assert.equal(overlapping.outcome, 'no-per-100-column');
+});
+
+test('calories without a printed unit are not read', () => {
+  const bare = read(PER_100_G_HEADER, row(80, ['Calories', 10], ['250', 160]));
+  assert.equal(reading(bare, 'caloriesPer100g').status, 'not-found');
+  assert.equal(reading(bare, 'caloriesPer100g').value, undefined);
+
+  const withUnit = read(
+    PER_100_G_HEADER,
+    row(80, ['Calories', 10], ['250', 160], ['kcal', 200]),
+  );
+  assert.equal(reading(withUnit, 'caloriesPer100g').value, 250);
+});
