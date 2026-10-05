@@ -1070,3 +1070,69 @@ test('selection toggles and Apply is offered only with something selected', () =
   // The original selection is never mutated.
   assert.equal(one.size, 1);
 });
+
+test('Apply writes sizes under a basis conflict and says per-100 values were blocked', () => {
+  const update = extractionFormValuesModule.planLabelApply(
+    scanResult({
+      basisSuggestion: 'PER_100_G',
+      readings: [
+        {
+          field: 'proteinPer100g',
+          value: 21,
+          unit: 'g',
+          status: 'read',
+          warnings: [],
+        },
+        {
+          field: 'servingSize',
+          value: 30,
+          unit: 'g',
+          status: 'read',
+          warnings: [],
+        },
+      ],
+    }),
+    { ...FULL_EMPTY_FORM, basis: 'PER_100_ML', basisSelectedByUser: true },
+  );
+  const written = {};
+  const scanFilled = new Set();
+  let basis;
+  const note = extractionFormValuesModule.applyLabelUpdate(update, {
+    write: (field, value) => {
+      written[field] = value;
+    },
+    markScanFilled: (field, filled) => {
+      if (filled) scanFilled.add(field);
+      else scanFilled.delete(field);
+    },
+    setBasis: (b) => {
+      basis = b;
+    },
+  });
+  assert.deepEqual(written, { servingSize: '30', servingUnit: 'g' });
+  assert.deepEqual([...scanFilled].sort(), ['servingSize', 'servingUnit']);
+  assert.equal(basis, undefined);
+  assert.match(note, /per-100 values weren’t applied/);
+  assert.match(note, /serving or package size was applied/);
+});
+
+test('Apply marks cleared stale values as no longer scan-filled', () => {
+  const scanFilled = new Set(['fiberPer100g']);
+  extractionFormValuesModule.applyLabelUpdate(
+    {
+      values: { proteinPer100g: '21', fiberPer100g: '' },
+      basis: 'PER_100_ML',
+      conflicts: [],
+      missingRequired: [],
+    },
+    {
+      write: () => undefined,
+      markScanFilled: (field, filled) => {
+        if (filled) scanFilled.add(field);
+        else scanFilled.delete(field);
+      },
+      setBasis: () => undefined,
+    },
+  );
+  assert.deepEqual([...scanFilled], ['proteinPer100g']);
+});

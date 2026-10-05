@@ -9,6 +9,7 @@ import {
 import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import {
+  applyLabelUpdate,
   planLabelApply,
   type LabelFormField,
   type LabelFormState,
@@ -27,11 +28,6 @@ interface Props {
   onCreated: (product: PackagedProduct) => void;
   onCancel?: () => void;
 }
-
-const BASIS_NAMES: Record<NutritionBasis, string> = {
-  PER_100_G: '100 g',
-  PER_100_ML: '100 ml',
-};
 
 // Shown under a field whose value came from a Label scan, until the user
 // edits it.
@@ -156,9 +152,6 @@ export function AddProductForm({
     selected: ReadonlySet<LabelField>,
   ): string {
     const update = planLabelApply(result, labelFormState(), selected);
-    if (update.basisConflict) {
-      return `The label lists values per ${BASIS_NAMES[update.basisConflict.label]}, but the form is set to per ${BASIS_NAMES[update.basisConflict.form]} — nothing was applied. Change the basis or enter the values yourself.`;
-    }
     const setters: Record<LabelFormField, (value: string) => void> = {
       caloriesPer100g: setCaloriesPer100g,
       proteinPer100g: setProteinPer100g,
@@ -172,22 +165,17 @@ export function AddProductForm({
       packageSize: setPackageSize,
       packageUnit: setPackageUnit,
     };
-    const applied = Object.entries(update.values) as [LabelFormField, string][];
-    for (const [field, value] of applied) setters[field](value);
-    // A field cleared by the plan (a stale value after a basis change) is
-    // no longer scan-filled.
-    setScanFilled((previous) => {
-      const next = new Set(previous);
-      for (const [field, value] of applied) {
-        if (value === '') next.delete(field);
-        else next.add(field);
-      }
-      return next;
+    return applyLabelUpdate(update, {
+      write: (field, value) => setters[field](value),
+      markScanFilled: (field, filled) =>
+        setScanFilled((previous) => {
+          const next = new Set(previous);
+          if (filled) next.add(field);
+          else next.delete(field);
+          return next;
+        }),
+      setBasis: setDeclaredNutritionBasis,
     });
-    if (update.basis) setDeclaredNutritionBasis(update.basis);
-    return applied.length === 0
-      ? 'Nothing was applied — the form already has your values.'
-      : 'Applied to the form — check the values marked “from label” before creating the product.';
   }
 
   async function handleSubmit(e: React.FormEvent) {

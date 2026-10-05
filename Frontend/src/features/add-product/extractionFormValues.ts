@@ -255,6 +255,46 @@ export function planLabelApply(
   };
 }
 
+const BASIS_NAMES: Record<NutritionBasis, string> = {
+  PER_100_G: '100 g',
+  PER_100_ML: '100 ml',
+};
+
+export interface LabelFormWriter {
+  write: (field: LabelFormField, value: string) => void;
+  // Whether the field now holds a scanned value (false when the plan
+  // cleared a stale scanned value).
+  markScanFilled: (field: LabelFormField, filled: boolean) => void;
+  setBasis: (basis: NutritionBasis) => void;
+}
+
+// Carries out a planned Apply on the form and describes what happened.
+// Everything planned is written — under a basis conflict that is only the
+// serving and package sizes, which don't depend on the basis.
+export function applyLabelUpdate(
+  update: LabelFormUpdate,
+  form: LabelFormWriter,
+): string {
+  const applied = Object.entries(update.values) as [LabelFormField, string][];
+  for (const [field, value] of applied) {
+    form.write(field, value);
+    form.markScanFilled(field, value !== '');
+  }
+  if (update.basis) form.setBasis(update.basis);
+
+  if (update.basisConflict) {
+    const { label, form: formBasis } = update.basisConflict;
+    return `The label lists values per ${BASIS_NAMES[label]}, but the form is set to per ${BASIS_NAMES[formBasis]} — its per-100 values weren’t applied. ${
+      applied.length > 0
+        ? 'The serving or package size was applied — check it.'
+        : 'Change the basis or enter the values yourself.'
+    }`;
+  }
+  return applied.length === 0
+    ? 'Nothing was applied — the form already has your values.'
+    : 'Applied to the form — check the values marked “from label” before creating the product.';
+}
+
 // The default Apply: every applicable reading selected (none after a weak
 // scan).
 export function labelScanToFormUpdate(
