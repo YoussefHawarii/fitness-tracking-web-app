@@ -121,3 +121,25 @@ _Avoid_: Serving count (only one of the three forms)
 **Container shape**:
 A display noun for a package (can, bottle, jar), taken only from structured provider metadata such as Open Food Facts' `packagings[].shape` taxonomy — never inferred from the product's name. When absent, the generic noun "package" is used instead.
 _Avoid_: Container type, packaging
+
+**Sodium value**:
+A Packaged product's sodium per 100 Base units, stored in grams like every other nutrient amount but entered and shown in milligrams, because nutrition labels print sodium in milligrams. Never derived from a printed salt value — salt-to-sodium is an estimate, not a reading — so a label that lists only salt leaves the Sodium value absent.
+_Avoid_: Salt (a different printed quantity, not a synonym)
+
+### Nutrition-label scanning
+
+**Label scan**:
+One run of on-device text recognition over one photo of a nutrition label, started by the user from the Add Product form. Produces Label readings for review and nothing else: it never saves, submits, or changes a Packaged product on its own, and the photo and the text recognised from it never leave the user's device. Replacing the photo or cancelling ends the scan and discards everything it produced.
+_Avoid_: Label extraction, OCR (a technique, not the domain event), label upload (nothing is uploaded)
+
+**Label reading**:
+A value a Label scan proposes for one Add Product field, together with its status — read, needs check, or not found — its Label evidence, and any conversion applied to it (such as energy converted from kJ). Only ever a suggestion: it reaches the form solely when the user applies it, and only a reading taken from a column the label itself headed "per 100 g" or "per 100 ml" may fill a per-100 nutrient field or suggest a Declared nutrition basis. A per-serving value is shown as a reading for reference but is never converted into, or offered as, a per-100 value. An unreadable or "less than" value ("<0.5 g", "trace") is a reading with no value, never zero.
+_Avoid_: Extracted value, candidate, OCR result
+
+**Label evidence**:
+Where on the photo a Label reading came from — the row of label text as recognised and its position on the photo — shown so the user can check the reading against the label. Exists only for the duration of the review and is never stored, logged, or submitted with the product.
+_Avoid_: Raw text, OCR text (evidence is per reading, not the whole recognised text)
+
+**User-edited field**:
+An Add Product field the user has typed into or changed, at any time including while a Label scan is running. A Label reading never overwrites a User-edited field; a disagreement between the two is shown to the user rather than resolved automatically.
+_Avoid_: Dirty field, touched field
