@@ -9,14 +9,36 @@ import type { BBox, OcrLayout, OcrWord } from './ocrLayout';
 // rather than guessed; a missing value is never turned into zero.
 
 export type LabelField =
-  'caloriesPer100g' | 'proteinPer100g' | 'carbsPer100g' | 'fatPer100g';
+  | 'caloriesPer100g'
+  | 'proteinPer100g'
+  | 'carbsPer100g'
+  | 'sugarPer100g'
+  | 'fatPer100g'
+  | 'fiberPer100g'
+  // Sodium per 100, in milligrams as labels print it (stored as grams).
+  | 'sodiumMgPer100'
+  | 'servingSize'
+  | 'packageSize';
 
 export const LABEL_FIELDS: readonly LabelField[] = [
   'caloriesPer100g',
   'proteinPer100g',
   'carbsPer100g',
+  'sugarPer100g',
   'fatPer100g',
+  'fiberPer100g',
+  'sodiumMgPer100',
+  'servingSize',
+  'packageSize',
 ];
+
+// Quantities describe the serving and the package, not the per-100 table:
+// they are read from their own rows ("Serving size 30 g", "Net wt 40 g"),
+// whichever column they sit in.
+const QUANTITY_FIELDS: ReadonlySet<LabelField> = new Set([
+  'servingSize',
+  'packageSize',
+]);
 
 export type LabelReadingStatus = 'read' | 'needs-check' | 'not-found';
 
@@ -40,6 +62,9 @@ export interface LabelReading {
   // Different values read for this field (e.g. English 12 g, Arabic 1.2 g);
   // the field is left empty and the user decides.
   conflictingValues?: number[];
+  // How the value was converted from what the label printed: calories from
+  // kJ (÷ 4.184), or sodium from grams to milligrams.
+  conversion?: 'from-kj' | 'from-g';
 }
 
 // 'ok' — readings came from a column the label headed per 100 g / 100 ml.
@@ -274,17 +299,29 @@ const KEYWORDS: readonly Keyword[] = [
   { tokens: ['unsaturated'] },
   { tokens: ['unsaturated', 'fat'] },
   { tokens: ['unsaturated', 'fats'] },
-  { tokens: ['sugar'] },
-  { tokens: ['sugars'] },
-  { tokens: ['of', 'which', 'sugars'] },
-  { tokens: ['total', 'sugars'] },
+  { tokens: ['sugar'], field: 'sugarPer100g' },
+  { tokens: ['sugars'], field: 'sugarPer100g' },
+  { tokens: ['of', 'which', 'sugars'], field: 'sugarPer100g' },
+  { tokens: ['total', 'sugars'], field: 'sugarPer100g' },
+  // Added sugars are a part of sugars, never the sugars total.
   { tokens: ['added', 'sugars'] },
-  { tokens: ['fibre'] },
-  { tokens: ['fiber'] },
-  { tokens: ['dietary', 'fiber'] },
-  { tokens: ['dietary', 'fibre'] },
+  { tokens: ['fibre'], field: 'fiberPer100g' },
+  { tokens: ['fiber'], field: 'fiberPer100g' },
+  { tokens: ['dietary', 'fiber'], field: 'fiberPer100g' },
+  { tokens: ['dietary', 'fibre'], field: 'fiberPer100g' },
+  // Salt is recognised so it is never read as sodium; salt → sodium is an
+  // estimate, not a reading.
   { tokens: ['salt'] },
-  { tokens: ['sodium'] },
+  { tokens: ['sodium'], field: 'sodiumMgPer100' },
+  { tokens: ['serving', 'size'], field: 'servingSize' },
+  { tokens: ['portion', 'size'], field: 'servingSize' },
+  { tokens: ['net', 'wt'], field: 'packageSize' },
+  { tokens: ['net', 'weight'], field: 'packageSize' },
+  { tokens: ['net', 'content'], field: 'packageSize' },
+  { tokens: ['net', 'contents'], field: 'packageSize' },
+  { tokens: ['net', 'quantity'], field: 'packageSize' },
+  { tokens: ['net', 'volume'], field: 'packageSize' },
+  { tokens: ['net', 'vol'], field: 'packageSize' },
   { tokens: ['cholesterol'] },
   { tokens: ['calcium'] },
   { tokens: ['iron'] },
@@ -331,18 +368,24 @@ const KEYWORDS: readonly Keyword[] = [
   { tokens: ['غير', 'مشبعه'] },
   { tokens: ['احاديه'] },
   { tokens: ['متعدده'] },
-  { tokens: ['سكر'] },
-  { tokens: ['السكر'] },
-  { tokens: ['سكريات'] },
-  { tokens: ['السكريات'] },
-  { tokens: ['منها', 'سكريات'] },
+  { tokens: ['سكر'], field: 'sugarPer100g' },
+  { tokens: ['السكر'], field: 'sugarPer100g' },
+  { tokens: ['سكريات'], field: 'sugarPer100g' },
+  { tokens: ['السكريات'], field: 'sugarPer100g' },
+  { tokens: ['منها', 'سكريات'], field: 'sugarPer100g' },
   { tokens: ['سكريات', 'مضافه'] },
-  { tokens: ['الياف'] },
-  { tokens: ['الالياف'] },
-  { tokens: ['الياف', 'غذائيه'] },
-  { tokens: ['الالياف', 'الغذائيه'] },
-  { tokens: ['صوديوم'] },
-  { tokens: ['الصوديوم'] },
+  { tokens: ['الياف'], field: 'fiberPer100g' },
+  { tokens: ['الالياف'], field: 'fiberPer100g' },
+  { tokens: ['الياف', 'غذائيه'], field: 'fiberPer100g' },
+  { tokens: ['الالياف', 'الغذائيه'], field: 'fiberPer100g' },
+  { tokens: ['صوديوم'], field: 'sodiumMgPer100' },
+  { tokens: ['الصوديوم'], field: 'sodiumMgPer100' },
+  { tokens: ['حجم', 'الحصه'], field: 'servingSize' },
+  { tokens: ['الوزن', 'الصافي'], field: 'packageSize' },
+  { tokens: ['وزن', 'صافي'], field: 'packageSize' },
+  { tokens: ['صافي', 'الوزن'], field: 'packageSize' },
+  { tokens: ['المحتوي', 'الصافي'], field: 'packageSize' },
+  { tokens: ['الحجم', 'الصافي'], field: 'packageSize' },
   { tokens: ['ملح'] },
   { tokens: ['الملح'] },
   { tokens: ['كوليسترول'] },
@@ -413,8 +456,23 @@ const KCAL_UNITS = new Set([
   'كيلوكالوري',
 ]);
 const KJ_UNITS = new Set(['kj', 'كيلوجول', 'كجول']);
+// Units only a serving or package size is read in.
+const QUANTITY_UNITS: Record<string, Unit> = {
+  kg: 'kg',
+  كجم: 'kg',
+  كغ: 'kg',
+  ml: 'ml',
+  مل: 'ml',
+  ملل: 'ml',
+  مليلتر: 'ml',
+  ملليلتر: 'ml',
+  l: 'l',
+  ltr: 'l',
+  لتر: 'l',
+  cl: 'cl',
+};
 
-type Unit = 'g' | 'mg' | 'kcal' | 'kj';
+type Unit = 'g' | 'mg' | 'kcal' | 'kj' | 'kg' | 'ml' | 'l' | 'cl';
 
 // The unit starting at token i, and how many tokens it spans: Arabic
 // labels may print kcal and kJ as two words ("كيلو كالوري", "كيلو جول").
@@ -431,12 +489,15 @@ function unitAt(
       return { unit: 'kcal', length: 2 };
     }
     if (next.text === 'جول') return { unit: 'kj', length: 2 };
+    if (['جرام', 'غرام'].includes(next.text)) return { unit: 'kg', length: 2 };
     return undefined;
   }
   if (MASS_UNITS.has(token.text)) return { unit: 'g', length: 1 };
   if (MILLIGRAM_UNITS.has(token.text)) return { unit: 'mg', length: 1 };
   if (KCAL_UNITS.has(token.text)) return { unit: 'kcal', length: 1 };
   if (KJ_UNITS.has(token.text)) return { unit: 'kj', length: 1 };
+  const quantity = QUANTITY_UNITS[token.text];
+  if (quantity) return { unit: quantity, length: 1 };
   return undefined;
 }
 
@@ -512,6 +573,18 @@ function segmentsOf(row: Row): Segment[] {
     i += 1;
   }
 
+  // A size statement ends where a heading starts: in "Serving size 30 g
+  // Per 100 g" the size is 30 g.
+  for (const segment of segments) {
+    if (!segment.keyword.field || !QUANTITY_FIELDS.has(segment.keyword.field)) {
+      continue;
+    }
+    const end = segment.tokens.findIndex(
+      (t) => t.kind === 'word' && PER_WORDS.has(t.text),
+    );
+    if (end >= 0) segment.tokens.length = end;
+  }
+
   // Values printed before the first keyword belong to it only when it is
   // Arabic: read right to left, an Arabic nutrient's value sits to its
   // left ("21 g بروتين" with an English unit inside Arabic text).
@@ -569,16 +642,27 @@ function readSegment(
   });
 
   const isEnergy = field === 'caloriesPer100g';
+  const isSodium = field === 'sodiumMgPer100';
+  const isQuantity = QUANTITY_FIELDS.has(field);
   // A value counts only with its unit printed next to it (or once before
-  // the segment's numbers, "Energy (kcal) 250").
-  const unitFits = (c: Candidate) =>
-    isEnergy ? c.unit === 'kcal' : c.unit === 'g';
+  // the segment's numbers, "Energy (kcal) 250"), and only a unit that fits
+  // the field: kcal for energy, mg or g for sodium, g for the rest of the
+  // table; a size needs g, kg, ml, l or cl — never a bare "oz" or "piece".
+  const unitFits = (c: Candidate) => {
+    if (isEnergy) return c.unit === 'kcal';
+    if (isSodium) return c.unit === 'mg' || c.unit === 'g';
+    if (isQuantity) {
+      return ['g', 'kg', 'ml', 'l', 'cl'].includes(c.unit ?? '');
+    }
+    return c.unit === 'g';
+  };
 
   // In a multi-column table only numbers placed in the target column
   // count; a number that straddles two columns can't be placed at all.
+  // Sizes have their own rows and are not part of any column.
   const placed = candidatesIn(segment).map((c) => ({
     candidate: c,
-    column: placeInColumn(c.word.bbox, columns),
+    column: isQuantity ? columns.target : placeInColumn(c.word.bbox, columns),
   }));
   if (placed.some((p) => p.column === 'ambiguous' && unitFits(p.candidate))) {
     return notFound("Couldn't tell which column this value is in.");
@@ -592,8 +676,10 @@ function readSegment(
   }
 
   if (usable.length === 0) {
-    if (isEnergy && candidates.some((c) => c.unit === 'kj')) {
-      return notFound('Only kJ is printed — calories were not read.');
+    const kj = candidates.filter((c) => c.unit === 'kj');
+    if (isEnergy && kj.length === 1) return fromKilojoules(kj[0]);
+    if (isEnergy && kj.length > 1) {
+      return notFound('Several values on this row — check the label.');
     }
     return notFound();
   }
@@ -609,6 +695,17 @@ function readSegment(
   if (candidate.ambiguous || candidate.value === undefined) {
     return notFound("Couldn't read this number clearly.");
   }
+  if (isSodium && candidate.unit === 'g') {
+    return {
+      field,
+      value: Number((candidate.value * 1000).toPrecision(12)),
+      unit: 'mg',
+      status: 'read',
+      warnings: [],
+      evidence,
+      conversion: 'from-g',
+    };
+  }
   return {
     field,
     value: candidate.value,
@@ -617,6 +714,28 @@ function readSegment(
     warnings: [],
     evidence,
   };
+
+  // A label printing energy only in kJ: converted (÷ 4.184, to whole kcal)
+  // and marked as converted. A kJ number is never used as kcal.
+  function fromKilojoules(c: Candidate): LabelReading {
+    if (c.lessThan) {
+      return notFound(
+        'Printed as "less than" a value — enter it yourself if needed.',
+      );
+    }
+    if (c.ambiguous || c.value === undefined) {
+      return notFound("Couldn't read this number clearly.");
+    }
+    return {
+      field,
+      value: Math.round(c.value / 4.184),
+      unit: 'kcal',
+      status: 'read',
+      warnings: [],
+      evidence,
+      conversion: 'from-kj',
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -799,13 +918,22 @@ function sameColumnKind(a: Column, b: Column): boolean {
 function columnModel(rows: readonly Row[]): ColumnModel | undefined {
   const isValueRow = (row: Row) =>
     segmentsOf(row).some(
-      (s) => s.keyword.field && s.tokens.some((t) => t.kind === 'number'),
+      (s) =>
+        s.keyword.field &&
+        !QUANTITY_FIELDS.has(s.keyword.field) &&
+        s.tokens.some((t) => t.kind === 'number'),
     );
   const firstValueRow = rows.find(isValueRow);
   if (!firstValueRow) return undefined;
 
   const headingRows = rows
-    .filter((row) => segmentsOf(row).length === 0)
+    // A row naming a nutrient is a table row, not headings; a size statement
+    // may share a row with headings ("Serving size 30 g   Per 100 g").
+    .filter((row) =>
+      segmentsOf(row).every(
+        (s) => s.keyword.field && QUANTITY_FIELDS.has(s.keyword.field),
+      ),
+    )
     .map((row) => ({ row, phrases: headerPhrases(tokenize(row)) }))
     .filter((h) => h.phrases.length > 0);
   const inTable = headingRows.filter((h) => h.row.y0 >= firstValueRow.y0);
@@ -926,6 +1054,54 @@ function placeInColumn(box: BBox, model: ColumnModel): Column | 'ambiguous' {
 
 // ---------------------------------------------------------------------------
 
+const SALT_WORDS = new Set(['salt', 'ملح', 'الملح']);
+
+// Sodium is never worked out from salt: a label that prints only salt
+// leaves sodium empty, with a note saying why.
+function withSaltNote(reading: LabelReading, saltPrinted: boolean) {
+  if (
+    reading.field !== 'sodiumMgPer100' ||
+    reading.value !== undefined ||
+    !saltPrinted
+  ) {
+    return reading;
+  }
+  return {
+    ...reading,
+    warnings: [
+      ...reading.warnings,
+      'Only salt is printed — sodium isn’t calculated from salt.',
+    ],
+  };
+}
+
+const MASS_QUANTITY_UNITS = new Set(['g', 'kg']);
+const VOLUME_QUANTITY_UNITS = new Set(['ml', 'l', 'cl']);
+
+// A serving or package size in the other dimension than the label's basis
+// (a ml serving on a per 100 g label) is flagged for the user to check.
+function withQuantityChecks(
+  reading: LabelReading,
+  basis: NutritionBasis | undefined,
+): LabelReading {
+  if (!QUANTITY_FIELDS.has(reading.field) || reading.value === undefined) {
+    return reading;
+  }
+  const unit = reading.unit ?? '';
+  const conflict =
+    (basis === 'PER_100_G' && VOLUME_QUANTITY_UNITS.has(unit)) ||
+    (basis === 'PER_100_ML' && MASS_QUANTITY_UNITS.has(unit));
+  if (!conflict) return reading;
+  return {
+    ...reading,
+    status: 'needs-check',
+    warnings: [
+      ...reading.warnings,
+      `This is in ${unit}, but the label’s values are per 100 ${basis === 'PER_100_G' ? 'g' : 'ml'} — check it.`,
+    ],
+  };
+}
+
 const SINGLE_COLUMN: Column = { kind: 'per100', x0: 0, x1: 0, center: 0 };
 
 export function readLabel(layout: OcrLayout): LabelScanResult {
@@ -939,9 +1115,13 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
   };
 
   const segmentsByField = new Map<LabelField, Segment[]>();
+  let saltPrinted = false;
   for (const row of rows) {
     for (const segment of segmentsOf(row)) {
       const { field } = segment.keyword;
+      if (SALT_WORDS.has(segment.keyword.tokens.at(-1) ?? '')) {
+        saltPrinted ||= segment.tokens.some((t) => t.kind === 'number');
+      }
       if (!field) continue;
       segmentsByField.set(field, [
         ...(segmentsByField.get(field) ?? []),
@@ -982,7 +1162,12 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
     return languages.size > 1
       ? { ...read[0].reading, confirmedInBothLanguages: true }
       : read[0].reading;
-  });
+  }).map((reading) =>
+    withQuantityChecks(
+      withSaltNote(reading, saltPrinted),
+      model?.target.kind === 'per100' ? model.target.basis : undefined,
+    ),
+  );
 
   if (!model) {
     return {

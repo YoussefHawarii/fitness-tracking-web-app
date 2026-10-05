@@ -6,7 +6,15 @@ import type { LabelField, LabelScanResult } from '../label-scan/labelReader';
 // form when the user presses Apply, and it never replaces a value already
 // in a field or a Nutrition basis the user picked.
 
-export type LabelFormValues = Record<LabelField, string>;
+// The Add Product fields a scan can fill. Sizes fill a number and a unit.
+export type LabelFormField =
+  | Exclude<LabelField, 'servingSize' | 'packageSize'>
+  | 'servingSize'
+  | 'servingUnit'
+  | 'packageSize'
+  | 'packageUnit';
+
+export type LabelFormValues = Record<LabelFormField, string>;
 
 export interface LabelFormState {
   values: LabelFormValues;
@@ -22,6 +30,13 @@ export interface LabelFormUpdate {
   // so none are applied and the user decides.
   basisConflict?: { label: NutritionBasis; form: NutritionBasis };
 }
+
+const SIZE_UNIT_FIELDS: Partial<Record<LabelField, LabelFormField>> = {
+  servingSize: 'servingUnit',
+  packageSize: 'packageUnit',
+};
+
+const isEmpty = (value: string) => value.trim() === '';
 
 export function labelScanToFormUpdate(
   result: LabelScanResult,
@@ -44,8 +59,20 @@ export function labelScanToFormUpdate(
   const values: Partial<LabelFormValues> = {};
   for (const reading of result.readings) {
     if (reading.value === undefined || reading.status === 'not-found') continue;
-    if (state.values[reading.field].trim() !== '') continue;
-    values[reading.field] = String(reading.value);
+    const unitField = SIZE_UNIT_FIELDS[reading.field];
+    if (unitField) {
+      // A size and its unit are filled together, and only into an empty
+      // pair, so a scanned unit never lands beside a typed number.
+      const sizeField = reading.field as 'servingSize' | 'packageSize';
+      if (!isEmpty(state.values[sizeField])) continue;
+      if (!isEmpty(state.values[unitField])) continue;
+      values[sizeField] = String(reading.value);
+      values[unitField] = reading.unit ?? '';
+      continue;
+    }
+    const field = reading.field as LabelFormField;
+    if (!isEmpty(state.values[field])) continue;
+    values[field] = String(reading.value);
   }
 
   const basis =

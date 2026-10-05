@@ -48,9 +48,19 @@ function reading(result, field) {
   return result.readings.find((r) => r.field === field);
 }
 
+const MACROS = [
+  'caloriesPer100g',
+  'proteinPer100g',
+  'carbsPer100g',
+  'fatPer100g',
+];
+
+// The four required macros as read (null when not read).
 function values(result) {
   return Object.fromEntries(
-    result.readings.map((r) => [r.field, r.status === 'read' ? r.value : null]),
+    result.readings
+      .filter((r) => MACROS.includes(r.field))
+      .map((r) => [r.field, r.status === 'read' ? r.value : null]),
   );
 }
 
@@ -166,15 +176,16 @@ test('saturated fat never fills total fat', () => {
   assert.equal(reading(onlySaturated, 'fatPer100g').value, undefined);
 });
 
-test('a kJ-only energy row is never read as calories', () => {
+test('a kJ-only energy row is converted to kcal and marked converted', () => {
   const result = read(
     PER_100_G_HEADER,
     row(80, ['Energy', 10], ['1046', 160], ['kJ', 210]),
   );
   const calories = reading(result, 'caloriesPer100g');
-  assert.equal(calories.status, 'not-found');
-  assert.equal(calories.value, undefined);
-  assert.match(calories.warnings[0], /kJ/);
+  assert.equal(calories.status, 'read');
+  assert.equal(calories.value, 250);
+  assert.equal(calories.unit, 'kcal');
+  assert.equal(calories.conversion, 'from-kj');
 });
 
 test('"less than" values and unclear numbers stay empty, never 0', () => {
@@ -908,4 +919,182 @@ test('English and Arabic per-100 headings far apart on one row stay separate', (
   );
   assert.equal(result.outcome, 'no-per-100-column');
   assert.equal(result.basisSuggestion, undefined);
+});
+
+// --- More fields and units (#34) -----------------------------------------
+
+test('kcal is preferred over kJ and a kJ number is never used as kcal', () => {
+  const both = read(
+    PER_100_G_HEADER,
+    row(
+      80,
+      ['Energy', 10],
+      ['1046', 160],
+      ['kJ', 210],
+      ['/', 240],
+      ['250', 260],
+      ['kcal', 300],
+    ),
+  );
+  const calories = reading(both, 'caloriesPer100g');
+  assert.equal(calories.value, 250);
+  assert.equal(calories.conversion, undefined);
+});
+
+test('sodium reads in mg whether printed in mg or g', () => {
+  const mg = read(
+    PER_100_G_HEADER,
+    row(300, ['Sodium', 10], ['400', 160], ['mg', 210]),
+  );
+  assert.equal(reading(mg, 'sodiumMgPer100').value, 400);
+  assert.equal(reading(mg, 'sodiumMgPer100').unit, 'mg');
+  assert.equal(reading(mg, 'sodiumMgPer100').conversion, undefined);
+
+  const g = read(
+    PER_100_G_HEADER,
+    row(300, ['Sodium', 10], ['0.4', 160], ['g', 200]),
+  );
+  assert.equal(reading(g, 'sodiumMgPer100').value, 400);
+  assert.equal(reading(g, 'sodiumMgPer100').unit, 'mg');
+  assert.equal(reading(g, 'sodiumMgPer100').conversion, 'from-g');
+});
+
+test('salt is never turned into sodium', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(300, ['Salt', 10], ['1', 160], ['g', 190]),
+  );
+  const sodium = reading(result, 'sodiumMgPer100');
+  assert.equal(sodium.status, 'not-found');
+  assert.equal(sodium.value, undefined);
+  assert.match(sodium.warnings[0], /salt/i);
+
+  // With a sodium row as well, sodium comes from its own row only.
+  const both = read(
+    PER_100_G_HEADER,
+    row(300, ['Salt', 10], ['1', 160], ['g', 190]),
+    row(330, ['Sodium', 10], ['0.4', 160], ['g', 200]),
+  );
+  assert.equal(reading(both, 'sodiumMgPer100').value, 400);
+  assert.deepEqual(reading(both, 'sodiumMgPer100').warnings, []);
+});
+
+test('fiber and sugars fill from their own rows only', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(160, ['Carbohydrate', 10], ['40', 160], ['g', 190]),
+    row(
+      190,
+      ['of', 30],
+      ['which', 60],
+      ['sugars', 120],
+      ['8', 200],
+      ['g', 220],
+    ),
+    row(220, ['added', 30], ['sugars', 100], ['5', 200], ['g', 220]),
+    row(250, ['Fibre', 10], ['3.5', 160], ['g', 200]),
+  );
+  assert.equal(reading(result, 'carbsPer100g').value, 40);
+  assert.equal(reading(result, 'sugarPer100g').value, 8);
+  assert.equal(reading(result, 'fiberPer100g').value, 3.5);
+
+  const arabic = read(
+    row(40, ['لكل', 300], ['١٠٠', 240], ['جم', 200]),
+    row(190, ['منها', 330], ['سكريات', 270], ['٨', 200], ['جم', 160]),
+    row(250, ['ألياف', 300], ['٣', 200], ['جم', 160]),
+  );
+  assert.equal(reading(arabic, 'sugarPer100g').value, 8);
+  assert.equal(reading(arabic, 'fiberPer100g').value, 3);
+});
+
+test('serving size and net content fill sizes with their units', () => {
+  const result = read(
+    row(10, ['Serving', 10], ['size', 100], ['30', 160], ['g', 190]),
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+    row(300, ['Net', 10], ['wt', 60], ['40', 160], ['g', 190]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'servingSize').value, 30);
+  assert.equal(reading(result, 'servingSize').unit, 'g');
+  assert.equal(reading(result, 'packageSize').value, 40);
+  assert.equal(reading(result, 'packageSize').unit, 'g');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+
+  const arabic = read(
+    PER_100_G_HEADER,
+    row(300, ['الوزن', 330], ['الصافي', 260], ['٤٠', 200], ['جم', 160]),
+  );
+  assert.equal(reading(arabic, 'packageSize').value, 40);
+  assert.equal(reading(arabic, 'packageSize').unit, 'g');
+
+  const litres = read(
+    row(40, ['per', 160], ['100', 195], ['ml', 230]),
+    row(300, ['Net', 10], ['content', 60], ['1.5', 160], ['L', 200]),
+  );
+  assert.equal(reading(litres, 'packageSize').value, 1.5);
+  assert.equal(reading(litres, 'packageSize').unit, 'l');
+});
+
+test('a serving-size phrase sharing a row with a heading keeps both', () => {
+  const result = read(
+    row(
+      40,
+      ['Serving', 10],
+      ['size', 90],
+      ['30', 140],
+      ['g', 165],
+      ['Per', 380],
+      ['100', 415],
+      ['g', 450],
+    ),
+    row(120, ['Protein', 10], ['21', 410], ['g', 435]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'servingSize').value, 30);
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('an ambiguous size unit fills no size', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(10, ['Serving', 10], ['size', 100], ['1', 160], ['piece', 190]),
+    row(300, ['Net', 10], ['wt', 60], ['1.5', 160], ['oz', 200]),
+  );
+  assert.equal(reading(result, 'servingSize').value, undefined);
+  assert.equal(reading(result, 'packageSize').value, undefined);
+});
+
+test('a size in the other dimension than the basis needs a check', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(10, ['Serving', 10], ['size', 100], ['250', 160], ['ml', 200]),
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  const serving = reading(result, 'servingSize');
+  assert.equal(serving.value, 250);
+  assert.equal(serving.status, 'needs-check');
+  assert.match(serving.warnings[0], /per 100 g/);
+});
+
+test('a scan never reads the product name, brand, category or country', () => {
+  const result = read(
+    row(10, ['Chipsy', 10], ['Salt', 100], ['&', 160], ['Vinegar', 190]),
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  assert.deepEqual(
+    result.readings.map((r) => r.field),
+    [
+      'caloriesPer100g',
+      'proteinPer100g',
+      'carbsPer100g',
+      'sugarPer100g',
+      'fatPer100g',
+      'fiberPer100g',
+      'sodiumMgPer100',
+      'servingSize',
+      'packageSize',
+    ],
+  );
 });

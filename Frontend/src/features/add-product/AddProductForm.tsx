@@ -8,7 +8,10 @@ import {
 } from '../../services/foodService';
 import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
-import { labelScanToFormUpdate } from './extractionFormValues';
+import {
+  labelScanToFormUpdate,
+  type LabelFormField,
+} from './extractionFormValues';
 import { LabelScanPanel } from '../label-scan/LabelScanPanel';
 import type { LabelScanResult } from '../label-scan/labelReader';
 import {
@@ -81,21 +84,41 @@ export function AddProductForm({
 
   function handleApplyLabelScan(result: LabelScanResult): string {
     const update = labelScanToFormUpdate(result, {
-      values: { caloriesPer100g, proteinPer100g, carbsPer100g, fatPer100g },
+      values: {
+        caloriesPer100g,
+        proteinPer100g,
+        carbsPer100g,
+        sugarPer100g,
+        fatPer100g,
+        fiberPer100g,
+        sodiumMgPer100,
+        servingSize,
+        servingUnit,
+        packageSize,
+        packageUnit,
+      },
       basis: declaredNutritionBasis,
       basisSelectedByUser: basisSelectedByUser.current,
     });
     if (update.basisConflict) {
       return `The label lists values per ${BASIS_NAMES[update.basisConflict.label]}, but the form is set to per ${BASIS_NAMES[update.basisConflict.form]} — nothing was applied. Change the basis or enter the values yourself.`;
     }
-    if (update.values.caloriesPer100g !== undefined)
-      setCaloriesPer100g(update.values.caloriesPer100g);
-    if (update.values.proteinPer100g !== undefined)
-      setProteinPer100g(update.values.proteinPer100g);
-    if (update.values.carbsPer100g !== undefined)
-      setCarbsPer100g(update.values.carbsPer100g);
-    if (update.values.fatPer100g !== undefined)
-      setFatPer100g(update.values.fatPer100g);
+    const setters: Record<LabelFormField, (value: string) => void> = {
+      caloriesPer100g: setCaloriesPer100g,
+      proteinPer100g: setProteinPer100g,
+      carbsPer100g: setCarbsPer100g,
+      sugarPer100g: setSugarPer100g,
+      fatPer100g: setFatPer100g,
+      fiberPer100g: setFiberPer100g,
+      sodiumMgPer100: setSodiumMgPer100,
+      servingSize: setServingSize,
+      servingUnit: setServingUnit,
+      packageSize: setPackageSize,
+      packageUnit: setPackageUnit,
+    };
+    for (const [field, value] of Object.entries(update.values)) {
+      if (value !== undefined) setters[field as LabelFormField](value);
+    }
     if (update.basis) setDeclaredNutritionBasis(update.basis);
     return 'Applied to the form — check the values before creating the product.';
   }

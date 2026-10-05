@@ -699,3 +699,79 @@ test('a per-serving-only label scan never fills per-100 fields or the basis', ()
   );
   assert.deepEqual(update, { values: {} });
 });
+
+const FULL_EMPTY_FORM = {
+  ...EMPTY_LABEL_FORM,
+  values: {
+    ...EMPTY_LABEL_FORM.values,
+    sugarPer100g: '',
+    fiberPer100g: '',
+    sodiumMgPer100: '',
+    servingSize: '',
+    servingUnit: '',
+    packageSize: '',
+    packageUnit: '',
+  },
+};
+
+test('scanned sodium in mg flows through to grams at submission', () => {
+  const update = extractionFormValuesModule.labelScanToFormUpdate(
+    scanResult({
+      readings: [
+        {
+          field: 'sodiumMgPer100',
+          value: 400,
+          unit: 'mg',
+          status: 'read',
+          warnings: [],
+          conversion: 'from-g',
+        },
+      ],
+    }),
+    FULL_EMPTY_FORM,
+  );
+  assert.equal(update.values.sodiumMgPer100, '400');
+  const input = addProductGuardModule.buildPackagedProductInput(
+    '6221007012345',
+    { ...ADD_PRODUCT_FIELDS, sodiumMgPer100: update.values.sodiumMgPer100 },
+    'PER_100_G',
+  );
+  assert.equal(input.sodiumPer100g, 0.4);
+});
+
+test('a scanned size fills its number and unit together, only into an empty pair', () => {
+  const result = scanResult({
+    readings: [
+      {
+        field: 'servingSize',
+        value: 30,
+        unit: 'g',
+        status: 'read',
+        warnings: [],
+      },
+      {
+        field: 'packageSize',
+        value: 40,
+        unit: 'g',
+        status: 'read',
+        warnings: [],
+      },
+    ],
+  });
+  const fresh = extractionFormValuesModule.labelScanToFormUpdate(
+    result,
+    FULL_EMPTY_FORM,
+  );
+  assert.deepEqual(fresh.values, {
+    servingSize: '30',
+    servingUnit: 'g',
+    packageSize: '40',
+    packageUnit: 'g',
+  });
+
+  const typedUnit = extractionFormValuesModule.labelScanToFormUpdate(result, {
+    ...FULL_EMPTY_FORM,
+    values: { ...FULL_EMPTY_FORM.values, servingUnit: 'ml', packageSize: '45' },
+  });
+  assert.deepEqual(typedUnit.values, {});
+});
