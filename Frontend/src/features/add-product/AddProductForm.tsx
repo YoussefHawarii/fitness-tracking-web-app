@@ -10,7 +10,10 @@ import {
 import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import { completeNutritionLabelExtraction } from './extractionFormValues';
-import { withDeclaredNutritionBasis } from './submissionGuard';
+import {
+  buildPackagedProductInput,
+  withDeclaredNutritionBasis,
+} from './submissionGuard';
 
 interface Props {
   barcode: string;
@@ -44,7 +47,7 @@ export function AddProductForm({
   const [fatPer100g, setFatPer100g] = useState('');
   const [fiberPer100g, setFiberPer100g] = useState('');
   const [sugarPer100g, setSugarPer100g] = useState('');
-  const [sodiumPer100g, setSodiumPer100g] = useState('');
+  const [sodiumMgPer100, setSodiumMgPer100] = useState('');
   const [servingSize, setServingSize] = useState('');
   const [servingUnit, setServingUnit] = useState('');
   const [packageSize, setPackageSize] = useState('');
@@ -95,7 +98,7 @@ export function AddProductForm({
           if (values.sugarPer100g !== undefined)
             setSugarPer100g(values.sugarPer100g);
           if (values.sodiumPer100g !== undefined)
-            setSodiumPer100g(values.sodiumPer100g);
+            setSodiumMgPer100(String(Number(values.sodiumPer100g) * 1000));
           if (values.servingSize !== undefined)
             setServingSize(values.servingSize);
           if (values.servingUnit !== undefined)
@@ -148,7 +151,7 @@ export function AddProductForm({
       [fatPer100g, 'Fat'],
       [fiberPer100g, 'Fiber'],
       [sugarPer100g, 'Sugar'],
-      [sodiumPer100g, 'Sodium'],
+      [sodiumMgPer100, 'Sodium'],
     ] as const) {
       const msg = validateNonNegative(val, label);
       if (msg) {
@@ -157,35 +160,33 @@ export function AddProductForm({
       }
     }
 
-    const fiber = toNumber(fiberPer100g);
-    const sugar = toNumber(sugarPer100g);
-    const sodium = toNumber(sodiumPer100g);
-    const serving = toNumber(servingSize);
-    const pkgSize = toNumber(packageSize);
-
     const submission = withDeclaredNutritionBasis(
       declaredNutritionBasis,
       (selectedNutritionBasis) =>
-        createPackagedProduct({
-          barcode,
-          name: name.trim(),
-          ...(nameAr.trim() && { nameAr: nameAr.trim() }),
-          ...(brand.trim() && { brand: brand.trim() }),
-          ...(category.trim() && { category: category.trim() }),
-          caloriesPer100g: cal,
-          proteinPer100g: prot,
-          carbsPer100g: carb,
-          fatPer100g: fat,
-          ...(fiber !== undefined && { fiberPer100g: fiber }),
-          ...(sugar !== undefined && { sugarPer100g: sugar }),
-          ...(sodium !== undefined && { sodiumPer100g: sodium }),
-          ...(serving !== undefined && { servingSize: serving }),
-          ...(servingUnit.trim() && { servingUnit: servingUnit.trim() }),
-          ...(pkgSize !== undefined && { packageSize: pkgSize }),
-          ...(packageUnit.trim() && { packageUnit: packageUnit.trim() }),
-          declaredNutritionBasis: selectedNutritionBasis,
-          ...(country.trim() && { country: country.trim() }),
-        }),
+        createPackagedProduct(
+          buildPackagedProductInput(
+            barcode,
+            {
+              name,
+              nameAr,
+              brand,
+              category,
+              caloriesPer100g,
+              proteinPer100g,
+              carbsPer100g,
+              fatPer100g,
+              fiberPer100g,
+              sugarPer100g,
+              sodiumMgPer100,
+              servingSize,
+              servingUnit,
+              packageSize,
+              packageUnit,
+              country,
+            },
+            selectedNutritionBasis,
+          ),
+        ),
     );
     if (!submission.allowed) {
       setError(submission.error);
@@ -358,13 +359,13 @@ export function AddProductForm({
           />
         </FieldLabel>
         <FieldLabel>
-          Sodium / {nutritionBasisLabel}
+          Sodium (mg) / {nutritionBasisLabel}
           <Input
             type="number"
             min={0}
             step="any"
-            value={sodiumPer100g}
-            onChange={(e) => setSodiumPer100g(e.target.value)}
+            value={sodiumMgPer100}
+            onChange={(e) => setSodiumMgPer100(e.target.value)}
           />
         </FieldLabel>
       </div>

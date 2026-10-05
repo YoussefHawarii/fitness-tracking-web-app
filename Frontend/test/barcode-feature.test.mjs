@@ -664,3 +664,91 @@ test('barcode scanning is paused for identified results and while Add Product is
     true,
   );
 });
+
+const ADD_PRODUCT_FIELDS = {
+  name: '  Lentil Soup  ',
+  nameAr: '',
+  brand: 'Regional Foods',
+  category: '',
+  caloriesPer100g: '60',
+  proteinPer100g: '3.5',
+  carbsPer100g: '9',
+  fatPer100g: '1.2',
+  fiberPer100g: '',
+  sugarPer100g: '0.8',
+  sodiumMgPer100: '',
+  servingSize: '250',
+  servingUnit: 'ml',
+  packageSize: '',
+  packageUnit: '',
+  country: '',
+};
+
+test('Add Product submits sodium typed in mg as grams per 100', () => {
+  const input = addProductGuardModule.buildPackagedProductInput(
+    '6221007012345',
+    { ...ADD_PRODUCT_FIELDS, sodiumMgPer100: '400' },
+    'PER_100_ML',
+  );
+  assert.equal(input.sodiumPer100g, 0.4);
+  assert.equal(
+    addProductGuardModule.buildPackagedProductInput(
+      '6221007012345',
+      { ...ADD_PRODUCT_FIELDS, sodiumMgPer100: '123.4' },
+      'PER_100_ML',
+    ).sodiumPer100g,
+    0.1234,
+  );
+});
+
+test('Add Product submits a typed 0 mg sodium as 0 and omits a blank one', () => {
+  const zero = addProductGuardModule.buildPackagedProductInput(
+    '6221007012345',
+    { ...ADD_PRODUCT_FIELDS, sodiumMgPer100: '0' },
+    'PER_100_ML',
+  );
+  assert.equal(zero.sodiumPer100g, 0);
+
+  const blank = addProductGuardModule.buildPackagedProductInput(
+    '6221007012345',
+    ADD_PRODUCT_FIELDS,
+    'PER_100_ML',
+  );
+  assert.equal('sodiumPer100g' in blank, false);
+});
+
+test('Add Product payload keeps every other field as typed and omits blanks', () => {
+  const input = addProductGuardModule.buildPackagedProductInput(
+    '6221007012345',
+    { ...ADD_PRODUCT_FIELDS, sodiumMgPer100: '400' },
+    'PER_100_ML',
+  );
+  assert.deepEqual(input, {
+    barcode: '6221007012345',
+    name: 'Lentil Soup',
+    brand: 'Regional Foods',
+    caloriesPer100g: 60,
+    proteinPer100g: 3.5,
+    carbsPer100g: 9,
+    fatPer100g: 1.2,
+    sugarPer100g: 0.8,
+    sodiumPer100g: 0.4,
+    servingSize: 250,
+    servingUnit: 'ml',
+    declaredNutritionBasis: 'PER_100_ML',
+  });
+});
+
+test('Add Product labels sodium in mg for the selected basis', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(addProductModule.AddProductForm, {
+      barcode: '6221007012345',
+      onCreated: () => undefined,
+    }),
+  );
+  assert.match(html, /Sodium \(mg\) \/ selected basis/);
+  assert.equal(
+    addProductModule.validateNonNegative('-5', 'Sodium'),
+    'Sodium must be 0 or more.',
+  );
+});
