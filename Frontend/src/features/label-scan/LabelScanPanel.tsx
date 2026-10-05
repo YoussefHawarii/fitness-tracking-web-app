@@ -11,6 +11,7 @@ import type { LabelField, LabelScanResult } from './labelReader';
 import {
   createLabelScanSession,
   ENGINE_LOAD_FAILED_MESSAGE,
+  LABEL_SCAN_PRIVACY_NOTE,
   type LabelScanSession,
 } from './labelScanSession';
 import { LabelReview } from './LabelReview';
@@ -127,6 +128,9 @@ export function LabelScanPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      <p className="text-label normal-case tracking-normal text-text-muted">
+        {LABEL_SCAN_PRIVACY_NOTE}
+      </p>
       <div className="flex flex-wrap gap-2">
         <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
           {scan.kind === 'review' ? 'Retake photo' : 'Take photo'}

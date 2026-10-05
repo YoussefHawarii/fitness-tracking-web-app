@@ -45,6 +45,12 @@ export interface LabelScanView {
   scan: ScanStatus;
 }
 
+// The privacy promise shown while label scanning is open (ADR 0008). It
+// claims only what is true: the browser may keep the engine cached, the
+// app doesn't work offline, and readings are checked, not guaranteed.
+export const LABEL_SCAN_PRIVACY_NOTE =
+  'Your label photo and the text read from it are processed on this device and are never uploaded or saved. Only the values you review and submit are sent to your account. The first scan downloads the text-recognition engine from this site; your browser may keep that engine cached.';
+
 export const ENGINE_LOAD_FAILED_MESSAGE =
   'The label scanner couldn’t be loaded — check your connection and try again.';
 export const IMAGE_FORMAT_MESSAGE =

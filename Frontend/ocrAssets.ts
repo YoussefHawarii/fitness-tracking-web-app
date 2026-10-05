@@ -51,7 +51,7 @@ interface CopyPlan {
   dirs: Map<string, Array<{ from: string; name: string }>>
 }
 
-function planOcrAssets(root: string): CopyPlan {
+export function planOcrAssets(root: string): CopyPlan {
   const modules = join(root, 'node_modules')
   const tesseractVersion = packageVersion(root, 'tesseract.js')
   const coreVersion = packageVersion(root, 'tesseract.js-core')
