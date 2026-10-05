@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
+import type { LabelFormUpdate } from '../add-product/extractionFormValues';
+import {
+  applicableReadings,
+  defaultLabelSelection,
+} from '../add-product/extractionFormValues';
 import {
   readLabel,
   type LabelField,
-  type LabelReading,
   type LabelScanResult,
 } from './labelReader';
+import { LabelReview, type ReviewImage } from './LabelReview';
 import {
   createTesseractEngine,
   type OcrEngine,
@@ -14,90 +19,58 @@ import {
 import { LabelImageDecodeError, prepareLabelImage } from './prepareImage';
 
 // Optional label scanning inside the Add Product form. Recognition runs on
-// this device only; the panel hands the form a structured result when the
-// user presses Apply, and never submits anything itself.
-
-const LABEL_FIELD_NAMES: Record<LabelField, string> = {
-  caloriesPer100g: 'Calories',
-  proteinPer100g: 'Protein',
-  carbsPer100g: 'Carbs',
-  sugarPer100g: 'Sugars',
-  fatPer100g: 'Fat',
-  fiberPer100g: 'Fiber',
-  sodiumMgPer100: 'Sodium',
-  servingSize: 'Serving size',
-  packageSize: 'Package size',
-};
-
-const CONVERSION_TEXT = {
-  'from-kj': 'converted from kJ',
-  'from-g': 'printed in g',
-} as const;
-
-const STATUS_TEXT: Record<LabelReading['status'], string> = {
-  read: '✓ read',
-  'needs-check': '⚠ needs check',
-  'not-found': '— not found',
-};
+// this device only; the panel hands the form the readings the user selected
+// when they press Apply, and never submits anything itself.
 
 type PanelState =
   | { kind: 'closed' }
   | { kind: 'choosing' }
   | { kind: 'recognizing' }
-  // `appliedNote` is set once Apply was pressed: what the form did with it.
-  | { kind: 'review'; result: LabelScanResult; appliedNote?: string }
+  | {
+      kind: 'review';
+      result: LabelScanResult;
+      selected: ReadonlySet<LabelField>;
+      // Set once Apply was pressed: what the form did with it.
+      appliedNote?: string;
+    }
   | { kind: 'error'; message: string };
 
 interface Props {
-  // Applies the result to the form and returns a note describing what
-  // happened, shown in place of the Apply button.
-  onApply: (result: LabelScanResult) => string;
+  // What applying the selected readings would do to the form right now —
+  // conflicts and still-missing fields — without changing it.
+  preview: (
+    result: LabelScanResult,
+    selected: ReadonlySet<LabelField>,
+  ) => LabelFormUpdate;
+  // Applies the selected readings and returns a note describing the result.
+  onApply: (
+    result: LabelScanResult,
+    selected: ReadonlySet<LabelField>,
+  ) => string;
 }
 
-export function LabelReviewList({ result }: { result: LabelScanResult }) {
-  return (
-    <div className="flex flex-col gap-2">
-      {result.warnings.map((warning) => (
-        <p key={warning} className="text-body text-warn">
-          {warning}
-        </p>
-      ))}
-      {result.outcome !== 'ok' && (
-        <p className="text-body text-text-muted">
-          For reference only — these values can’t be applied as per-100 values.
-        </p>
-      )}
-      <ul className="flex flex-col gap-1">
-        {result.readings.map((reading) => (
-          <li
-            key={reading.field}
-            className="flex justify-between gap-3 text-body text-text"
-          >
-            <span>{LABEL_FIELD_NAMES[reading.field]}</span>
-            <span>
-              {reading.value !== undefined
-                ? `${reading.value} ${reading.unit ?? ''}`.trim()
-                : reading.conflictingValues
-                  ? `${reading.conflictingValues.join(' or ')}?`
-                  : '—'}
-              {reading.conversion &&
-                ` (${CONVERSION_TEXT[reading.conversion]})`}
-            </span>
-            <span className="text-text-muted">
-              {STATUS_TEXT[reading.status]}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+async function reviewImageOf(image: Blob): Promise<ReviewImage> {
+  const bitmap = await createImageBitmap(image);
+  const { width, height } = bitmap;
+  bitmap.close();
+  return { url: URL.createObjectURL(image), width, height };
 }
 
-export function LabelScanPanel({ onApply }: Props) {
+export function LabelScanPanel({ preview, onApply }: Props) {
   const [state, setState] = useState<PanelState>({ kind: 'closed' });
   const [progress, setProgress] = useState<OcrProgress | null>(null);
+  const [image, setImage] = useState<ReviewImage | undefined>();
   const engine = useRef<Promise<OcrEngine> | null>(null);
+  const imageUrl = useRef<string | null>(null);
   const run = useRef(0);
+
+  // The photo shown in the review lives only in memory; its object URL is
+  // released whenever it is replaced, the scanner closes, or the form goes.
+  function showImage(next: ReviewImage | undefined) {
+    if (imageUrl.current) URL.revokeObjectURL(imageUrl.current);
+    imageUrl.current = next?.url ?? null;
+    setImage(next);
+  }
 
   function stopEngine() {
     run.current += 1;
@@ -106,7 +79,13 @@ export function LabelScanPanel({ onApply }: Props) {
     void current?.then((e) => e.terminate()).catch(() => undefined);
   }
 
-  useEffect(() => stopEngine, []);
+  useEffect(
+    () => () => {
+      stopEngine();
+      if (imageUrl.current) URL.revokeObjectURL(imageUrl.current);
+    },
+    [],
+  );
 
   // One engine per scanning session. A load that fails is forgotten so the
   // next scan can retry — but only if it is still the current engine, so a
@@ -130,21 +109,33 @@ export function LabelScanPanel({ onApply }: Props) {
 
   function close() {
     stopEngine();
+    showImage(undefined);
     setProgress(null);
     setState({ kind: 'closed' });
   }
 
   async function scan(file: File) {
     const thisRun = ++run.current;
+    showImage(undefined);
     setState({ kind: 'recognizing' });
     try {
-      const [image, ocr] = await Promise.all([
+      const [prepared, ocr] = await Promise.all([
         prepareLabelImage(file),
         ensureEngine(),
       ]);
-      const layout = await ocr.recognize(image);
-      if (thisRun !== run.current) return;
-      setState({ kind: 'review', result: readLabel(layout) });
+      const layout = await ocr.recognize(prepared);
+      const reviewImage = await reviewImageOf(prepared);
+      if (thisRun !== run.current) {
+        URL.revokeObjectURL(reviewImage.url);
+        return;
+      }
+      const result = readLabel(layout);
+      showImage(reviewImage);
+      setState({
+        kind: 'review',
+        result,
+        selected: defaultLabelSelection(result),
+      });
     } catch (err) {
       if (thisRun !== run.current) return;
       setState({
@@ -182,6 +173,16 @@ export function LabelScanPanel({ onApply }: Props) {
         ? 'Reading label…'
         : null;
 
+  const review =
+    state.kind === 'review'
+      ? {
+          plan: preview(state.result, state.selected),
+          applicable: new Set(
+            applicableReadings(state.result).map((r) => r.field),
+          ),
+        }
+      : undefined;
+
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap gap-2">
@@ -218,21 +219,37 @@ export function LabelScanPanel({ onApply }: Props) {
         <p className="text-body text-warn">{state.message}</p>
       )}
 
-      {state.kind === 'review' && (
+      {state.kind === 'review' && review && (
         <>
-          <LabelReviewList result={state.result} />
+          <LabelReview
+            result={state.result}
+            image={image}
+            applicable={review.applicable}
+            selected={state.selected}
+            onToggle={(field) => {
+              const selected = new Set(state.selected);
+              if (selected.has(field)) selected.delete(field);
+              else selected.add(field);
+              setState({ ...state, selected, appliedNote: undefined });
+            }}
+            conflicts={review.plan.conflicts}
+            missingRequired={review.plan.missingRequired}
+          />
           {state.appliedNote ? (
             <p className="text-body text-text-muted">{state.appliedNote}</p>
           ) : (
             <PrimaryButton
               type="button"
               className="self-start"
-              disabled={state.result.outcome !== 'ok' || state.result.weakScan}
+              disabled={state.selected.size === 0}
               onClick={() => {
-                setState({ ...state, appliedNote: onApply(state.result) });
+                setState({
+                  ...state,
+                  appliedNote: onApply(state.result, state.selected),
+                });
               }}
             >
-              Apply
+              Apply selected
             </PrimaryButton>
           )}
         </>

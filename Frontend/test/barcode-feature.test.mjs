@@ -462,10 +462,12 @@ test('applying a per-100 label scan fills empty fields and suggests the basis wi
     EMPTY_LABEL_FORM,
   );
 
-  assert.deepEqual(update, {
-    values: { caloriesPer100g: '0', proteinPer100g: '21', carbsPer100g: '40' },
-    basis: 'PER_100_G',
+  assert.deepEqual(update.values, {
+    caloriesPer100g: '0',
+    proteinPer100g: '21',
+    carbsPer100g: '40',
   });
+  assert.equal(update.basis, 'PER_100_G');
   assert.equal(requests, 0);
 });
 
@@ -512,7 +514,8 @@ test('a label scan with no per-100 column fills nothing and leaves submission bl
     scanResult({ outcome: 'no-per-100-column', basisSuggestion: undefined }),
     EMPTY_LABEL_FORM,
   );
-  assert.deepEqual(update, { values: {} });
+  assert.deepEqual(update.values, {});
+  assert.equal(update.basis, undefined);
 
   let requests = 0;
   const submission = addProductGuardModule.withDeclaredNutritionBasis(
@@ -678,9 +681,10 @@ test('a label scan whose basis differs from the form basis applies nothing', () 
       scanResult({ basisSuggestion: 'PER_100_G' }),
       { ...EMPTY_LABEL_FORM, basis: 'PER_100_ML', basisSelectedByUser },
     );
-    assert.deepEqual(update, {
-      values: {},
-      basisConflict: { label: 'PER_100_G', form: 'PER_100_ML' },
+    assert.deepEqual(update.values, {});
+    assert.deepEqual(update.basisConflict, {
+      label: 'PER_100_G',
+      form: 'PER_100_ML',
     });
   }
 
@@ -697,7 +701,8 @@ test('a per-serving-only label scan never fills per-100 fields or the basis', ()
     scanResult({ outcome: 'per-serving-only', basisSuggestion: undefined }),
     EMPTY_LABEL_FORM,
   );
-  assert.deepEqual(update, { values: {} });
+  assert.deepEqual(update.values, {});
+  assert.equal(update.basis, undefined);
 });
 
 const FULL_EMPTY_FORM = {
@@ -781,5 +786,180 @@ test('a weak scan pre-fills nothing into the form', () => {
     scanResult({ weakScan: true }),
     EMPTY_LABEL_FORM,
   );
-  assert.deepEqual(update, { values: {} });
+  assert.deepEqual(update.values, {});
+  assert.equal(update.basis, undefined);
+});
+
+// --- Review and precedence (#36) -----------------------------------------
+
+const PROTEIN_21 = scanResult({
+  readings: [
+    {
+      field: 'proteinPer100g',
+      value: 21,
+      unit: 'g',
+      status: 'read',
+      warnings: [],
+    },
+    {
+      field: 'carbsPer100g',
+      value: 40,
+      unit: 'g',
+      status: 'needs-check',
+      warnings: ['x'],
+    },
+  ],
+});
+
+test('a value typed before or during a scan is never overwritten and its conflict is listed', () => {
+  // Typed before the scan, or while recognition was running — either way
+  // the form holds it, not from a scan, when Apply runs.
+  const update = extractionFormValuesModule.planLabelApply(PROTEIN_21, {
+    ...FULL_EMPTY_FORM,
+    values: { ...FULL_EMPTY_FORM.values, proteinPer100g: '20' },
+  });
+  assert.equal(update.values.proteinPer100g, undefined);
+  assert.equal(update.values.carbsPer100g, '40');
+  assert.deepEqual(update.conflicts, [
+    { field: 'proteinPer100g', label: '21', form: '20' },
+  ]);
+
+  const same = extractionFormValuesModule.planLabelApply(PROTEIN_21, {
+    ...FULL_EMPTY_FORM,
+    values: { ...FULL_EMPTY_FORM.values, proteinPer100g: '21' },
+  });
+  assert.deepEqual(same.conflicts, []);
+});
+
+test('a field filled by an earlier scan is updated by a re-scan', () => {
+  const update = extractionFormValuesModule.planLabelApply(PROTEIN_21, {
+    ...FULL_EMPTY_FORM,
+    values: { ...FULL_EMPTY_FORM.values, proteinPer100g: '18' },
+    scanFilled: new Set(['proteinPer100g']),
+  });
+  assert.equal(update.values.proteinPer100g, '21');
+  assert.deepEqual(update.conflicts, []);
+});
+
+test('deselected readings are not applied', () => {
+  const update = extractionFormValuesModule.planLabelApply(
+    PROTEIN_21,
+    FULL_EMPTY_FORM,
+    new Set(['carbsPer100g']),
+  );
+  assert.deepEqual(update.values, { carbsPer100g: '40' });
+});
+
+test('missing required fields are listed, and nothing is invented to fill them', () => {
+  const update = extractionFormValuesModule.planLabelApply(PROTEIN_21, {
+    ...FULL_EMPTY_FORM,
+    name: '',
+  });
+  assert.deepEqual(update.missingRequired, [
+    'name',
+    'caloriesPer100g',
+    'fatPer100g',
+  ]);
+  assert.equal(update.values.caloriesPer100g, undefined);
+  assert.equal(update.values.fatPer100g, undefined);
+
+  const noBasis = extractionFormValuesModule.planLabelApply(
+    scanResult({ outcome: 'per-serving-only', basisSuggestion: undefined }),
+    { ...FULL_EMPTY_FORM, name: 'Lentil Soup' },
+  );
+  assert.deepEqual(noBasis.values, {});
+  assert.deepEqual(noBasis.missingRequired, [
+    'basis',
+    'caloriesPer100g',
+    'proteinPer100g',
+    'carbsPer100g',
+    'fatPer100g',
+  ]);
+});
+
+test('a weak scan pre-selects nothing, but the user may still choose readings', () => {
+  const weak = scanResult({ weakScan: true });
+  assert.equal(extractionFormValuesModule.defaultLabelSelection(weak).size, 0);
+  const chosen = extractionFormValuesModule.planLabelApply(
+    weak,
+    FULL_EMPTY_FORM,
+    new Set(['proteinPer100g']),
+  );
+  assert.deepEqual(chosen.values, { proteinPer100g: '21' });
+  assert.equal(chosen.basis, 'PER_100_G');
+});
+
+test('the review shows each reading with its evidence, conflicts and missing fields', async () => {
+  const reviewModule = await vite.ssrLoadModule(
+    '/src/features/label-scan/LabelReview.tsx',
+  );
+  const result = scanResult({
+    readings: [
+      {
+        field: 'proteinPer100g',
+        value: 21,
+        unit: 'g',
+        status: 'read',
+        warnings: [],
+        confirmedInBothLanguages: true,
+        evidence: {
+          rowText: 'Protein 21 g',
+          bbox: { x0: 10, y0: 100, x1: 200, y1: 120 },
+        },
+      },
+      {
+        field: 'caloriesPer100g',
+        value: 250,
+        unit: 'kcal',
+        status: 'needs-check',
+        warnings: [
+          'Calories don’t match protein, carbs and fat — check these values.',
+        ],
+        conversion: 'from-kj',
+      },
+      {
+        field: 'fatPer100g',
+        status: 'not-found',
+        warnings: [
+          'The English and Arabic text disagree (12 / 1.2) — check the label.',
+        ],
+        conflictingValues: [12, 1.2],
+      },
+    ],
+  });
+  const html = renderToStaticMarkup(
+    React.createElement(reviewModule.LabelReview, {
+      result,
+      image: { url: 'blob:test', width: 1000, height: 600 },
+      applicable: new Set(['proteinPer100g', 'caloriesPer100g']),
+      selected: new Set(['proteinPer100g']),
+      onToggle: () => undefined,
+      conflicts: [{ field: 'carbsPer100g', label: '40', form: '38' }],
+      missingRequired: ['name', 'fatPer100g'],
+    }),
+  );
+  assert.match(html, /Read from: “Protein 21 g”/);
+  assert.match(html, /English &amp; Arabic/);
+  assert.match(html, /converted from kJ/);
+  assert.match(html, /12 or 1.2\?/);
+  assert.match(html, /⚠ needs check/);
+  assert.match(html, /Carbs: label says 40, you entered 38/);
+  assert.match(
+    html,
+    /Still needed before you can create the product: Product name, Fat\./,
+  );
+  assert.match(html, /background-image:url\(blob:test\)/);
+  // One checkbox per applicable reading; the protein one is selected.
+  assert.equal((html.match(/type="checkbox"/g) ?? []).length, 2);
+  assert.match(html, /aria-label="Apply Protein" checked=""/);
+});
+
+test('Add Product shows no "from label" hint before anything is applied', () => {
+  const html = renderToStaticMarkup(
+    React.createElement(addProductModule.AddProductForm, {
+      barcode: '6221007012345',
+      onCreated: () => undefined,
+    }),
+  );
+  assert.doesNotMatch(html, /from label — check/);
 });
