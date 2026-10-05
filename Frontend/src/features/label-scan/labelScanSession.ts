@@ -1,5 +1,6 @@
 import { readLabel, type LabelScanResult } from './labelReader';
 import type { OcrEngine, OcrProgress } from './ocrEngine';
+import type { OcrLayout } from './ocrLayout';
 import { LabelImageDecodeError } from './prepareImage';
 
 // The Label-scan session: everything between opening label scanning and
@@ -50,6 +51,8 @@ export const IMAGE_FORMAT_MESSAGE =
   'This photo format can’t be read here — try “Take photo” or a JPEG/PNG.';
 export const IMAGE_FAILED_MESSAGE = 'Could not read this image.';
 
+const STALE = Symbol('stale run');
+
 const CLOSED: LabelScanView = {
   open: false,
   engine: 'idle',
@@ -83,6 +86,11 @@ export function createLabelScanSession(
   let engine: Promise<OcrEngine> | null = null;
   let run = 0;
   let disposed = false;
+  // Termination of the previous worker, which a new one waits for.
+  let stopping: Promise<void> = Promise.resolve();
+  // Recognitions on the shared worker run one at a time: the engine
+  // switches languages and parameters across several steps per photo.
+  let recognitions: Promise<unknown> = Promise.resolve();
 
   function set(next: Partial<LabelScanView>) {
     view = { ...view, ...next };
@@ -98,9 +106,13 @@ export function createLabelScanSession(
   // late failure never orphans a newer worker.
   function ensureEngine(): Promise<OcrEngine> {
     if (engine) return engine;
-    const created = deps.createEngine((progress) => {
-      if (engine === created) set({ progress });
-    });
+    // A new worker is only created once the previous one has terminated,
+    // so cancelling during a load and reopening never runs two at once.
+    const created: Promise<OcrEngine> = stopping.then(() =>
+      deps.createEngine((progress) => {
+        if (engine === created) set({ progress });
+      }),
+    );
     engine = created;
     set({ engine: 'loading', progress: null });
     created.then(
@@ -120,7 +132,11 @@ export function createLabelScanSession(
   function stopEngine() {
     const current = engine;
     engine = null;
-    void current?.then((e) => e.terminate()).catch(() => undefined);
+    if (!current) return;
+    const terminated = current
+      .then((e) => e.terminate())
+      .catch(() => undefined);
+    stopping = Promise.all([stopping, terminated]).then(() => undefined);
   }
 
   return {
@@ -149,8 +165,15 @@ export function createLabelScanSession(
           deps.prepareImage(photo),
           ensureEngine(),
         ]);
-        const layout = await ocr.recognize(prepared);
         if (thisRun !== run) return;
+        // Queued behind any recognition still running; a run replaced or
+        // cancelled while it waited never starts.
+        const job = recognitions.then<OcrLayout | typeof STALE>(() =>
+          thisRun === run ? ocr.recognize(prepared) : STALE,
+        );
+        recognitions = job.catch(() => undefined);
+        const layout = await job;
+        if (layout === STALE || thisRun !== run) return;
         // Parsed before the review photo exists, so a failure can't leave
         // its object URL allocated.
         const result = readLabel(layout);

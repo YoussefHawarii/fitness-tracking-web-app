@@ -49,6 +49,8 @@ interface Props {
     result: LabelScanResult,
     selected: ReadonlySet<LabelField>,
   ) => string;
+  // The scanning session; the browser's Tesseract session by default.
+  createSession?: () => LabelScanSession;
 }
 
 // The user's choices for one review: which readings are selected, and the
@@ -60,8 +62,12 @@ interface ReviewChoice {
   appliedNote?: string;
 }
 
-export function LabelScanPanel({ preview, onApply }: Props) {
-  const [session] = useState(createBrowserSession);
+export function LabelScanPanel({
+  preview,
+  onApply,
+  createSession = createBrowserSession,
+}: Props) {
+  const [session] = useState(createSession);
   const view = useSyncExternalStore(
     session.subscribe,
     session.view,

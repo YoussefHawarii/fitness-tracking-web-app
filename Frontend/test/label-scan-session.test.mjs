@@ -106,9 +106,13 @@ test('opening starts loading the engine, with progress, and reuses it', async ()
   session.open();
   assert.equal(session.view().open, true);
   assert.equal(session.view().engine, 'loading');
+  await flush();
 
   fake.engines[0].onProgress({ stage: 'loading', progress: 0.4 });
-  assert.deepEqual(session.view().progress, { stage: 'loading', progress: 0.4 });
+  assert.deepEqual(session.view().progress, {
+    stage: 'loading',
+    progress: 0.4,
+  });
 
   fake.engines[0].load.resolve();
   await flush();
@@ -124,11 +128,13 @@ test('a failed engine load can be retried', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
+  await flush();
   fake.engines[0].load.reject(new Error('offline'));
   await flush();
   assert.equal(session.view().engine, 'failed');
 
   session.retry();
+  await flush();
   assert.equal(fake.engines.length, 2);
   assert.equal(session.view().engine, 'loading');
   fake.engines[1].load.resolve();
@@ -140,6 +146,7 @@ test('a scan during a failed load reports the load failure', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   const scanning = session.scan('a');
+  await flush();
   fake.engines[0].load.reject(new Error('offline'));
   await scanning;
   assert.deepEqual(session.view().scan, {
@@ -152,6 +159,7 @@ test('a scan goes recognizing → review with readings and the photo', async () 
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
+  await flush();
   fake.engines[0].load.resolve();
   const scanning = session.scan('a');
   await flush();
@@ -166,13 +174,18 @@ test('a scan goes recognizing → review with readings and the photo', async () 
     scan.result.readings.find((r) => r.field === 'proteinPer100g').value,
     21,
   );
-  assert.deepEqual(scan.image, { url: 'blob:prepared:a:0', width: 1000, height: 600 });
+  assert.deepEqual(scan.image, {
+    url: 'blob:prepared:a:0',
+    width: 1000,
+    height: 600,
+  });
 });
 
 test('cancel mid-recognition terminates the worker and discards the late result', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
+  await flush();
   fake.engines[0].load.resolve();
   const scanning = session.scan('a');
   await flush();
@@ -189,22 +202,27 @@ test('cancel mid-recognition terminates the worker and discards the late result'
   assert.deepEqual(fake.shown, []);
 });
 
-test('a retake mid-run reuses the worker and ignores the replaced run', async () => {
+test('a retake mid-run reuses the worker, waits its turn and ignores the replaced run', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
+  await flush();
   fake.engines[0].load.resolve();
   const first = session.scan('a');
   await flush();
   const second = session.scan('b');
   await flush();
   assert.equal(fake.engines.length, 1);
-  assert.equal(fake.recognitions.length, 2);
+  // Never two recognitions at once on the shared worker.
+  assert.equal(fake.recognitions.length, 1);
 
-  // The replaced run finishes last-but-one: never shown.
+  // The replaced run finishes: never shown, and only then does the
+  // retake start.
   fake.recognitions[0].resolve(LAYOUT);
   await first;
+  await flush();
   assert.equal(session.view().scan.kind, 'recognizing');
+  assert.equal(fake.recognitions.length, 2);
   fake.recognitions[1].resolve(LAYOUT);
   await second;
   assert.equal(session.view().scan.kind, 'review');
@@ -212,10 +230,49 @@ test('a retake mid-run reuses the worker and ignores the replaced run', async ()
   assert.deepEqual(fake.shown, ['blob:prepared:b:0']);
 });
 
+test('a queued run cancelled while it waits never starts', async () => {
+  const fake = fakeDependencies();
+  const session = sessionModule.createLabelScanSession(fake.deps);
+  session.open();
+  await flush();
+  fake.engines[0].load.resolve();
+  const first = session.scan('a');
+  await flush();
+  const second = session.scan('b');
+  await flush();
+  session.cancel();
+  fake.recognitions[0].resolve(LAYOUT);
+  await Promise.all([first, second]);
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(session.view().open, false);
+});
+
+test('cancelling during the engine load and reopening never runs two workers', async () => {
+  const fake = fakeDependencies();
+  const session = sessionModule.createLabelScanSession(fake.deps);
+  session.open();
+  await flush();
+  session.cancel();
+  session.open();
+  await flush();
+  // The replacement waits for the first worker to load and terminate.
+  assert.equal(fake.engines.length, 1);
+  fake.engines[0].load.resolve();
+  await flush();
+  await flush();
+  assert.equal(fake.engines[0].engine.terminated, 1);
+  assert.equal(fake.engines.length, 2);
+  fake.engines[1].load.resolve();
+  await flush();
+  assert.equal(session.view().engine, 'ready');
+});
+
 test('the review photo is released on retake, cancel and dispose', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
+  await flush();
   fake.engines[0].load.resolve();
   const first = session.scan('a');
   await flush();
@@ -232,6 +289,7 @@ test('the review photo is released on retake, cancel and dispose', async () => {
   assert.deepEqual(fake.released, ['blob:prepared:a:0', 'blob:prepared:b:1']);
 
   session.open();
+  await flush();
   fake.engines[1].load.resolve();
   const third = session.scan('c');
   await flush();
@@ -247,6 +305,7 @@ test('an undecodable photo shows the format error and keeps scanning open', asyn
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
+  await flush();
   fake.engines[0].load.resolve();
   await session.scan('heic');
   assert.deepEqual(session.view().scan, {
@@ -283,6 +342,7 @@ test('a session never touches browser storage or the network', async () => {
     const fake = fakeDependencies();
     const session = sessionModule.createLabelScanSession(fake.deps);
     session.open();
+    await flush();
     fake.engines[0].load.resolve();
     const scanning = session.scan('a');
     await flush();
