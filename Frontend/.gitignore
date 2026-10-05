@@ -25,5 +25,5 @@ public/ocr
 *.sln
 *.sw?
 
-# Label-scan fixtures awaiting review (scripts/label-fixture.mjs)
+# Label-scan fixtures awaiting review (scripts/label-fixture/)
 test/fixtures/labels/pending/

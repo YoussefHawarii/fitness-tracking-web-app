@@ -10,22 +10,27 @@ memory, cellular download time, or the CSP with real third-party sign-in.
 1. Photograph about 15 real retail labels, at least 5 of them Arabic or
    bilingual, with clear, glossy, curved, low-light and per-serving-only
    examples.
-2. Export upright copies at most 2000 px on the longest side, the size the
-   app prepares photos to.
-3. From `Frontend/`, run `node scripts/label-fixture.mjs <photos…>`. It runs
-   the app's own OCR engine in Node with the shipped language data, entirely
-   on this machine, and writes `test/fixtures/labels/pending/<name>.json`
-   (gitignored).
-4. Fill in every `TODO` from the printed label, never from the OCR output,
-   and review the whole file. Then move it into `test/fixtures/labels/`.
-   Photos are not committed unless the owner chooses to commit them.
+2. From `Frontend/`, start the dev server with `npm run dev`. Then open
+   `/scripts/label-fixture/` on it and pick the photos. The page runs the
+   app's own pipeline in the browser, the same way the app does: it
+   prepares each photo (orientation, resize, grayscale) and reads it with
+   the on-device engine and the self-hosted language data. Nothing is
+   uploaded. Each photo downloads as a `<name>.json` fixture.
+3. Put the downloads in `test/fixtures/labels/pending/` (gitignored). Fill
+   in every `TODO` from the printed label, never from the OCR output. That
+   means every per-100 value, the serving size and the package size, with
+   `null` for anything not printed. Review the whole file, then move it
+   into `test/fixtures/labels/`.
+4. Photos are not committed unless the owner chooses to commit them.
 5. Run `npm test`. `test/label-fixtures.test.mjs` checks every committed
-   fixture against the release targets: no wrong value marked "read",
-   per-serving-only labels never fill per-100 fields, and at least 80% of
-   calories, protein, carbs and fat read on clear labels.
+   fixture against the release targets:
+   - No wrong value is marked "read" in any field.
+   - Per-serving-only labels never fill per-100 fields.
+   - On clear labels, at least 80% of calories, protein, carbs and fat are
+     read from a per-100 column on the label's own basis.
 
-The shipped app has no OCR export or debug path. The script lives outside
-`src/` and is never bundled.
+The shipped app has no OCR export or debug path. The page lives outside
+`src/`, and the production build only bundles the app's own `index.html`.
 
 ## Tuning record
 

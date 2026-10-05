@@ -5,7 +5,8 @@ import { after, before, test } from 'node:test';
 import { createServer } from 'vite';
 
 // Real-label regression fixtures (ticket #39): layouts recognised from the
-// owner's own retail-label photos by scripts/label-fixture.mjs, each with
+// owner's own retail-label photos by the dev-only page at
+// scripts/label-fixture/ (the app's own pipeline), each with
 // the values printed on the label filled in by hand. They sit alongside
 // the hand-authored synthetic cases in label-reader.test.mjs and hold the
 // Label reader to its release targets:
@@ -59,7 +60,7 @@ function sameValue(reading, printed) {
 
 if (fixtures.length === 0) {
   test('real-label fixtures', {
-    skip: 'none committed yet — generate them with scripts/label-fixture.mjs',
+    skip: 'none committed yet — generate them at /scripts/label-fixture/ on the dev server',
   });
 }
 
@@ -77,8 +78,13 @@ for (const fixture of fixtures) {
       ['per-100g', 'per-100ml', 'per-serving-only'].includes(truth.basis),
     );
     assert.equal(typeof truth.clear, 'boolean');
+    // Complete ground truth: every field the reader can fill, so no
+    // reading can escape the zero-wrong-read check.
+    assert.deepEqual(
+      Object.keys(truth.values).sort(),
+      [...reader.LABEL_FIELDS].sort(),
+    );
     for (const [field, value] of Object.entries(truth.values)) {
-      assert.ok(reader.LABEL_FIELDS.includes(field), field);
       assert.ok(value === null || typeof value === 'number', field);
     }
     assert.ok(Array.isArray(layout.words) && layout.words.length > 0);
@@ -89,7 +95,6 @@ for (const fixture of fixtures) {
     for (const reading of result.readings) {
       if (reading.status !== 'read') continue;
       const printed = truth.values[reading.field];
-      if (printed === undefined) continue; // serving and package sizes
       assert.ok(
         printed !== null && sameValue(reading, printed),
         `${reading.field} read as ${reading.value}, label prints ${printed}`,
@@ -108,6 +113,8 @@ for (const fixture of fixtures) {
   }
 }
 
+const BASIS = { 'per-100g': 'PER_100_G', 'per-100ml': 'PER_100_ML' };
+
 const clear = fixtures.filter(
   (f) => f.truth.clear === true && f.truth.basis !== 'per-serving-only',
 );
@@ -117,11 +124,17 @@ if (clear.length > 0) {
     let read = 0;
     for (const { truth, layout } of clear) {
       const result = reader.readLabel(layout);
+      // Only readings the form can apply count: from a per-100 column on
+      // the label's own basis. Anything else is reference-only.
+      const applicable =
+        result.outcome === 'ok' &&
+        result.basisSuggestion === BASIS[truth.basis];
       for (const field of MACROS) {
         if (typeof truth.values[field] !== 'number') continue;
         printed += 1;
         const reading = result.readings.find((r) => r.field === field);
         if (
+          applicable &&
           reading?.status === 'read' &&
           sameValue(reading, truth.values[field])
         ) {
