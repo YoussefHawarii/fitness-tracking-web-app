@@ -139,16 +139,7 @@ export function verifyNumberWord(
   const numbers = overlapping.filter((w) => hasDigit(w.text));
   if (numbers.length !== 1) return unverified;
   if (digitsOf(numbers[0].text) !== digitsOf(word.text)) return unverified;
-  // Keep the number and any Latin unit or symbols printed with it; an
-  // Arabic unit fused to the number ("21جم") keeps its Arabic letters.
-  const reread = overlapping
-    .filter((w) => !ARABIC_LETTER.test(w.text))
-    .map((w) => w.text)
-    .join(' ');
-  const arabicPart = word.text.replace(/[^ء-ي]+/g, ' ').trim();
-  return {
-    ...word,
-    text: [reread, arabicPart].filter(Boolean).join(' '),
-    numberCheck: 'verified',
-  };
+  // The re-read only confirms the digits: the page text is kept as read,
+  // so the re-read can never add a unit the page pass didn't see.
+  return { ...word, numberCheck: 'verified' };
 }

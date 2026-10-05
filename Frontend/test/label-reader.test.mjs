@@ -4,7 +4,10 @@ import { createServer } from 'vite';
 
 // Label reader seam: word layout (text + position + confidence) in, Label
 // readings out. Tesseract never runs here; fixtures place words where they
-// would sit on a photographed label.
+// would sit on a photographed label. Fixture words carry no numberCheck, so
+// they stand for numbers the engine has already verified — these tests
+// prove the reader's logic. What a live scan can verify (Arabic-Indic
+// digits never are, ADR 0010) is covered in recognition-passes.test.mjs.
 
 let vite;
 let reader;
@@ -887,4 +890,22 @@ test('an English and an Arabic per-100 heading side by side are one column', () 
   assert.equal(result.outcome, 'ok');
   assert.equal(result.basisSuggestion, 'PER_100_G');
   assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('English and Arabic per-100 headings far apart on one row stay separate', () => {
+  // They may head an "as sold" and a "prepared" column.
+  const result = read(
+    row(
+      40,
+      ['Per', 160],
+      ['100', 195],
+      ['g', 230],
+      ['١٠٠', 640],
+      ['جم', 600],
+      ['لكل', 690],
+    ),
+    row(120, ['Protein', 10], ['21', 200], ['g', 225]),
+  );
+  assert.equal(result.outcome, 'no-per-100-column');
+  assert.equal(result.basisSuggestion, undefined);
 });

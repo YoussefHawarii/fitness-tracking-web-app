@@ -859,15 +859,21 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
     const stacked =
       previous !== undefined &&
       [...heading.rows].every((row) => !previous.rows.has(row));
-    // On one row, an English and an Arabic heading of the same kind next
-    // to each other are translations of one heading, however far apart
-    // the label prints them.
+    // On one row, an English and an Arabic heading of the same kind printed
+    // right next to each other ("Per 100 g لكل 100 جم") are one heading in
+    // two languages. Far apart, they may head separate columns (as sold /
+    // prepared), so they stay separate and the layout is unresolved.
+    const gap = previous ? heading.x0 - previous.x1 : 0;
+    const narrower = previous
+      ? Math.min(previous.x1 - previous.x0, heading.x1 - heading.x0)
+      : 0;
     const translation =
       previous !== undefined &&
       !stacked &&
       previous.script !== undefined &&
       heading.script !== undefined &&
-      previous.script !== heading.script;
+      previous.script !== heading.script &&
+      gap < narrower / 2;
     if (
       previous &&
       sameColumnKind(previous, heading) &&

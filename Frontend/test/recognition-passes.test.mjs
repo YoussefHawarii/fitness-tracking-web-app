@@ -118,12 +118,44 @@ test('Arabic-Indic digits are never verified', () => {
   assert.equal(result.numberCheck, 'unverified');
 });
 
-test('a verified number keeps an Arabic unit fused to it', () => {
-  const result = passes.verifyNumberWord(word('21جم', 500, 186, 60), [
+test('verification confirms digits but never changes the page text', () => {
+  const fused = passes.verifyNumberWord(word('21جم', 500, 186, 60), [
     word('21', 500, 186, 30),
   ]);
-  assert.equal(result.numberCheck, 'verified');
-  assert.equal(result.text, '21 جم');
+  assert.equal(fused.numberCheck, 'verified');
+  assert.equal(fused.text, '21جم');
+
+  // The re-read sees a unit the page pass didn't: it must not be added.
+  const unitless = passes.verifyNumberWord(word('250', 480, 116, 50), [
+    word('250', 480, 116, 50),
+    word('kcal', 520, 116, 60),
+  ]);
+  assert.equal(unitless.numberCheck, 'verified');
+  assert.equal(unitless.text, '250');
+});
+
+test('end to end: an Arabic-Indic value is never read from a live scan', async () => {
+  const reader = await vite.ssrLoadModule(
+    '/src/features/label-scan/labelReader.ts',
+  );
+  const page = [
+    word('لكل', 300, 40, 40),
+    word('100', 240, 40, 40),
+    word('جم', 200, 40, 30),
+    word('دهون', 300, 120, 50),
+    word('١٢٫٥', 200, 120, 50),
+    word('جم', 150, 120, 30),
+  ];
+  // What the engine does to every digit-bearing word; the English re-read
+  // of Arabic-Indic digits is irrelevant — they are never verified.
+  const verified = page.map((w) =>
+    /\d|[٠-٩]/.test(w.text) ? passes.verifyNumberWord(w, [{ ...w }]) : w,
+  );
+  const result = reader.readLabel({ words: verified });
+  const fat = result.readings.find((r) => r.field === 'fatPer100g');
+  assert.equal(result.outcome, 'ok');
+  assert.equal(fat.status, 'not-found');
+  assert.equal(fat.value, undefined);
 });
 
 test('the re-read region widens around a possibly truncated number', () => {

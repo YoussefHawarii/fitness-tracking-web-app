@@ -67,7 +67,9 @@ export function LabelReviewList({ result }: { result: LabelScanResult }) {
             <span>
               {reading.value !== undefined
                 ? `${reading.value} ${reading.unit ?? ''}`.trim()
-                : '—'}
+                : reading.conflictingValues
+                  ? `${reading.conflictingValues.join(' or ')}?`
+                  : '—'}
             </span>
             <span className="text-text-muted">
               {STATUS_TEXT[reading.status]}
