@@ -580,3 +580,85 @@ test('calories without a printed unit are not read', () => {
   );
   assert.equal(reading(withUnit, 'caloriesPer100g').value, 250);
 });
+
+test('two separate per 100 g columns ("as sold" and "prepared") stay unresolved', () => {
+  const result = read(
+    row(30, ['As', 170], ['sold', 200], ['Prepared', 390]),
+    row(
+      55,
+      ['Per', 160],
+      ['100', 195],
+      ['g', 230],
+      ['Per', 380],
+      ['100', 415],
+      ['g', 450],
+    ),
+    row(120, ['Protein', 10], ['21', 180], ['g', 205]),
+  );
+  assert.equal(result.outcome, 'no-per-100-column');
+  assert.equal(result.basisSuggestion, undefined);
+});
+
+test('a product name above the title does not hide the per-100 title', () => {
+  const result = read(
+    row(10, ['PROTEIN', 10], ['BAR', 100]),
+    row(
+      40,
+      ['Nutrition', 10],
+      ['information', 110],
+      ['per', 230],
+      ['100', 270],
+      ['g', 310],
+    ),
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('a serving-size phrase beside a per-100 heading keeps the heading', () => {
+  const result = read(
+    row(
+      40,
+      ['Serving', 10],
+      ['size', 90],
+      ['30', 140],
+      ['g', 165],
+      ['Per', 380],
+      ['100', 415],
+      ['g', 450],
+    ),
+    row(120, ['Protein', 10], ['21', 410], ['g', 435]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('a %RI footnote below the table does not unresolve it', () => {
+  const result = read(
+    THREE_COLUMN_HEADER,
+    row(
+      120,
+      ['Protein', 10],
+      ['6.3', 200],
+      ['g', 235],
+      ['21', 420],
+      ['g', 445],
+      ['42%', 570],
+    ),
+    row(
+      300,
+      ['*%RI:', 10],
+      ['Reference', 70],
+      ['intake', 170],
+      ['of', 240],
+      ['an', 270],
+      ['average', 300],
+      ['adult', 380],
+    ),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});

@@ -450,6 +450,9 @@ function per100Basis(
 }
 
 function classifyPhrase(tokens: readonly Token[]): Column | undefined {
+  // "Serving size 30 g" / "Net weight 100 g" state a quantity; they head
+  // no column.
+  if (tokens.some((t) => isWord(t, NOT_A_HEADING_WORDS))) return undefined;
   const words = tokens.map((t) => t.word);
   const x0 = Math.min(...words.map((w) => w.bbox.x0));
   const x1 = Math.max(...words.map((w) => w.bbox.x1));
@@ -473,17 +476,16 @@ function classifyPhrase(tokens: readonly Token[]): Column | undefined {
 
 // Splits a header row into column phrases: a new phrase starts at "per",
 // at "serving"/"portion" (unless right after "per"), at a bare "100 g"
-// outside a serving phrase, and at "%" / "RI" / "DV".
+// outside a serving or quantity phrase, and at "%" / "RI" / "DV".
 function headerPhrases(tokens: readonly Token[]): Column[] {
-  // A row stating a pack or serving size ("Net weight 100 g") is a
-  // quantity, not a row of headings.
-  if (tokens.some((t) => isWord(t, NOT_A_HEADING_WORDS))) return [];
   const phrases: Token[][] = [];
   tokens.forEach((token, i) => {
     const current = phrases.at(-1);
-    // "Serving size 100 g" and "per serving (100 g)" stay one phrase: a
-    // "100 g" inside a serving phrase never starts a per-100 column.
-    const inServing = current?.some((t) => isWord(t, SERVING_WORDS));
+    // "Serving size 100 g", "Net weight 100 g" and "per serving (100 g)"
+    // stay one phrase: their "100 g" never starts a per-100 column.
+    const inServing = current?.some(
+      (t) => isWord(t, SERVING_WORDS) || isWord(t, NOT_A_HEADING_WORDS),
+    );
     const inPercent = current?.some(
       (t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS),
     );
@@ -508,26 +510,33 @@ function sameColumnKind(a: Column, b: Column): boolean {
 }
 
 // Resolves the table's value columns, or nothing when the headings can't be
-// trusted. Headings count only above the first nutrient row: a heading-like
-// row inside or below the table (a second table, a footer) makes the layout
-// unresolved rather than letting it re-label values it doesn't head.
+// trusted. Headings count only above the table — the first row where a
+// nutrient has a number (a product name like "PROTEIN BAR" above the
+// title is not the table). A new value heading inside or below the table
+// (a second table, a per-100 footer) makes the layout unresolved rather
+// than letting it re-label values it doesn't head; a "%RI ..." footnote
+// is not a value heading.
 function columnModel(rows: readonly Row[]): ColumnModel | undefined {
-  const isNutrientRow = (row: Row) =>
-    segmentsOf(row).some((s) => s.keyword.field);
-  const firstNutrientRow = rows.find(isNutrientRow);
-  if (!firstNutrientRow) return undefined;
+  const isValueRow = (row: Row) =>
+    segmentsOf(row).some(
+      (s) => s.keyword.field && s.tokens.some((t) => t.kind === 'number'),
+    );
+  const firstValueRow = rows.find(isValueRow);
+  if (!firstValueRow) return undefined;
 
   const headingRows = rows
     .filter((row) => segmentsOf(row).length === 0)
     .map((row) => ({ row, phrases: headerPhrases(tokenize(row)) }))
     .filter((h) => h.phrases.length > 0);
-  if (headingRows.some((h) => h.row.y0 >= firstNutrientRow.y0)) {
+  const inTable = headingRows.filter((h) => h.row.y0 >= firstValueRow.y0);
+  if (inTable.some((h) => h.phrases.some((c) => c.kind !== 'percent'))) {
     return undefined;
   }
+  const aboveTable = headingRows.filter((h) => h.row.y0 < firstValueRow.y0);
 
   // Headings stacked on several lines (or repeated in two languages) are
   // combined by position.
-  let headings = headingRows.flatMap((h) => h.phrases);
+  let headings = aboveTable.flatMap((h) => h.phrases);
 
   // Fallback: one explicit "per 100 g" inside a nutrient row ("Energy per
   // 100 g") declares a single per-100 column.
@@ -546,12 +555,18 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
     headings = inline;
   }
 
-  // Merge neighbouring headings of the same kind; headings of different
-  // kinds that overlap horizontally can't be told apart.
+  // Same-kind headings that overlap or almost touch are one column written
+  // twice (stacked, or in two languages); apart, they are two columns —
+  // "Per 100 g as sold | Per 100 g prepared" — and stay separate. Headings
+  // of different kinds that overlap can't be told apart.
   const columns: Column[] = [];
   for (const heading of [...headings].sort((a, b) => a.center - b.center)) {
     const previous = columns.at(-1);
-    if (previous && sameColumnKind(previous, heading)) {
+    const gap = previous ? heading.x0 - previous.x1 : 0;
+    const narrower = previous
+      ? Math.min(previous.x1 - previous.x0, heading.x1 - heading.x0)
+      : 0;
+    if (previous && sameColumnKind(previous, heading) && gap < narrower / 4) {
       previous.x0 = Math.min(previous.x0, heading.x0);
       previous.x1 = Math.max(previous.x1, heading.x1);
       previous.center = (previous.x0 + previous.x1) / 2;
