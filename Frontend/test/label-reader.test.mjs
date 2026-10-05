@@ -1309,16 +1309,71 @@ test('energy that doesn’t match the macros marks all four but keeps them', () 
   assert.equal(consistent.weakScan, undefined);
 });
 
-test('fibre counted in energy (2 kcal/g) still matches', () => {
-  const result = read(
+test('fibre counted in energy (up to 2 kcal/g) still matches', () => {
+  // 4·10 + 4·50 + 9·10 = 330 kcal; 400 is outside 330 ± 15% but inside
+  // the range with 20 g fibre beside carbs at 2 kcal/g (370 ± 15%).
+  const rows = (kcal, fibre) => [
     PER_100_G_HEADER,
-    row(80, ['Energy', 10], ['412', 160], ['kcal', 200]),
-    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
-    row(160, ['Carbohydrate', 10], ['40', 160], ['g', 190]),
-    row(200, ['Fat', 10], ['12', 160], ['g', 190]),
-    row(240, ['Fibre', 10], ['30', 160], ['g', 190]),
+    row(80, ['Energy', 10], [kcal, 160], ['kcal', 200]),
+    row(120, ['Protein', 10], ['10', 160], ['g', 190]),
+    row(160, ['Carbohydrate', 10], ['50', 160], ['g', 190]),
+    row(200, ['Fat', 10], ['10', 160], ['g', 190]),
+    ...(fibre ? [row(240, ['Fibre', 10], [fibre, 160], ['g', 190])] : []),
+  ];
+  assert.equal(
+    reading(read(...rows('400', '20')), 'caloriesPer100g').status,
+    'read',
   );
-  assert.equal(reading(result, 'caloriesPer100g').status, 'read');
+  assert.equal(
+    reading(read(...rows('400')), 'caloriesPer100g').status,
+    'needs-check',
+  );
+
+  // Fibre printed inside carbs and counted at 0: 4·10 + 4·(50 − 20) + 9·10
+  // = 250 kcal is also coherent, below the basic 330 estimate.
+  assert.equal(
+    reading(read(...rows('250', '20')), 'caloriesPer100g').status,
+    'read',
+  );
+});
+
+test('the energy tolerance is 15% of the estimate, at least 10 kcal', () => {
+  assert.equal(reader.energyTolerance(100), 15);
+  assert.equal(reader.energyTolerance(40), 10);
+  // 4·25 + 4·0 + 9·0 = 100 kcal exactly: 115 passes, 116 doesn't.
+  const label = (kcal) =>
+    read(
+      PER_100_G_HEADER,
+      row(80, ['Energy', 10], [kcal, 160], ['kcal', 200]),
+      row(120, ['Protein', 10], ['25', 160], ['g', 190]),
+      row(160, ['Carbohydrate', 10], ['0', 160], ['g', 180]),
+      row(200, ['Fat', 10], ['0', 160], ['g', 180]),
+    );
+  assert.equal(reading(label('115'), 'caloriesPer100g').status, 'read');
+  assert.equal(reading(label('116'), 'caloriesPer100g').status, 'needs-check');
+});
+
+test('macros above 100 g per 100 g, beyond rounding, need a check', () => {
+  assert.equal(reader.MACRO_SUM_ROUNDING_ALLOWANCE, 1);
+  const label = (fat) =>
+    read(
+      PER_100_G_HEADER,
+      row(120, ['Protein', 10], ['30', 160], ['g', 190]),
+      row(160, ['Carbohydrate', 10], ['40', 160], ['g', 190]),
+      row(200, ['Fat', 10], [fat, 160], ['g', 200]),
+    );
+  assert.equal(reading(label('30.9'), 'proteinPer100g').status, 'read');
+  assert.equal(reading(label('31.2'), 'proteinPer100g').status, 'needs-check');
+});
+
+test('clear size rows never lift a poorly read table out of a weak scan', () => {
+  const words = [
+    ...PER_100_G_HEADER,
+    ...row(10, ['Serving', 10], ['size', 100], ['30', 160], ['g', 190]),
+    ...row(300, ['Net', 10], ['wt', 60], ['40', 160], ['g', 190]),
+    ...CONSISTENT_ROWS.flat().map((w) => ({ ...w, confidence: 40 })),
+  ];
+  assert.equal(reader.readLabel({ words }).weakScan, true);
 });
 
 test('fewer than two required macros passing makes a weak scan', () => {

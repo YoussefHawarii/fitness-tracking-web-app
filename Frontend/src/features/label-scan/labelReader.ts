@@ -1280,8 +1280,14 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
     readings,
     model.target.basis ?? 'PER_100_G',
   );
+  // Only the nutrient rows count: clear size statements must not lift a
+  // poorly recognised table above the threshold.
   const tableWords = rows
-    .filter((row) => segmentsOf(row).some((s) => s.keyword.field))
+    .filter((row) =>
+      segmentsOf(row).some(
+        (s) => s.keyword.field && !QUANTITY_FIELDS.has(s.keyword.field),
+      ),
+    )
     .flatMap((row) => row.words);
   const averageConfidence =
     tableWords.reduce((sum, w) => sum + w.confidence, 0) /
@@ -1308,6 +1314,17 @@ const REQUIRED_MACROS: ReadonlySet<LabelField> = new Set([
   'carbsPer100g',
   'fatPer100g',
 ]);
+// Each macro may be rounded on the label (to 0.1 g or a whole gram), so
+// three rounded values can sum slightly above 100 g per 100 g; above this
+// allowance the total is not possible.
+export const MACRO_SUM_ROUNDING_ALLOWANCE = 1;
+
+// How far printed energy may be from an estimate: 15% of the estimate,
+// but never less than 10 kcal (small values round coarsely).
+export function energyTolerance(estimate: number): number {
+  return Math.max(10, 0.15 * estimate);
+}
+
 const GRAM_NUTRIENTS: ReadonlySet<LabelField> = new Set([
   'proteinPer100g',
   'carbsPer100g',
@@ -1394,7 +1411,7 @@ function withPlausibilityChecks(
     protein !== undefined &&
     carbs !== undefined &&
     fat !== undefined &&
-    protein + carbs + fat > 101
+    protein + carbs + fat > 100 + MACRO_SUM_ROUNDING_ALLOWANCE
   ) {
     mark(
       ['proteinPer100g', 'carbsPer100g', 'fatPer100g'],
@@ -1402,8 +1419,13 @@ function withPlausibilityChecks(
     );
   }
 
-  // Energy should match 4 kcal/g protein and carbs and 9 kcal/g fat (plus
-  // up to 2 kcal/g fibre). A mismatch keeps every value but marks all four.
+  // Energy should match 4 kcal/g protein and carbs and 9 kcal/g fat.
+  // Fibre may count anywhere from 0 to 2 kcal/g, and may be printed inside
+  // carbs (US convention) or beside them (EU convention), so the expected
+  // energy is a range: from all-of-fibre-inside-carbs-at-0 up to
+  // fibre-beside-carbs-at-2. Printed energy must fall within that range
+  // widened by the tolerance of its ends. A mismatch keeps every value but
+  // marks all four.
   const calories = value('caloriesPer100g');
   if (
     calories !== undefined &&
@@ -1411,12 +1433,13 @@ function withPlausibilityChecks(
     carbs !== undefined &&
     fat !== undefined
   ) {
-    const expected = 4 * protein + 4 * carbs + 9 * fat;
-    const withFiber = expected + 2 * (value('fiberPer100g') ?? 0);
-    const close = (estimate: number) =>
-      Math.abs(calories - estimate) <=
-      Math.max(10, 0.15 * Math.max(calories, estimate));
-    if (!close(expected) && !close(withFiber)) {
+    const fiber = value('fiberPer100g') ?? 0;
+    const lowest = 4 * protein + 4 * Math.max(0, carbs - fiber) + 9 * fat;
+    const highest = 4 * protein + 4 * carbs + 9 * fat + 2 * fiber;
+    const inRange =
+      calories >= lowest - energyTolerance(lowest) &&
+      calories <= highest + energyTolerance(highest);
+    if (!inRange) {
       mark(
         ['caloriesPer100g', 'proteinPer100g', 'carbsPer100g', 'fatPer100g'],
         'Calories don’t match protein, carbs and fat — check these values.',
