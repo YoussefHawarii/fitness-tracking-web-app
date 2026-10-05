@@ -505,6 +505,10 @@ function headerPhrases(tokens: readonly Token[]): Column[] {
     .filter((c): c is Column => c !== undefined);
 }
 
+interface HeadingColumn extends Column {
+  rows: Set<number>;
+}
+
 function sameColumnKind(a: Column, b: Column): boolean {
   return a.kind === b.kind && a.basis === b.basis;
 }
@@ -536,18 +540,28 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
 
   // Headings stacked on several lines (or repeated in two languages) are
   // combined by position.
-  let headings = aboveTable.flatMap((h) => h.phrases);
+  // Each heading remembers which row it was printed on.
+  let headings: HeadingColumn[] = aboveTable.flatMap((h, row) =>
+    h.phrases.map((c) => ({ ...c, rows: new Set([row]) })),
+  );
 
   // Fallback: one explicit "per 100 g" inside a nutrient row ("Energy per
   // 100 g") declares a single per-100 column.
   if (headings.length === 0) {
-    const inline: Column[] = [];
+    const inline: HeadingColumn[] = [];
     for (const row of rows) {
       const tokens = tokenize(row);
       tokens.forEach((_, i) => {
         const basis = per100Basis(tokens, i);
         if (basis && isWord(tokens[i - 1], 'per')) {
-          inline.push({ kind: 'per100', basis, x0: 0, x1: 0, center: 0 });
+          inline.push({
+            kind: 'per100',
+            basis,
+            x0: 0,
+            x1: 0,
+            center: 0,
+            rows: new Set(),
+          });
         }
       });
     }
@@ -555,22 +569,24 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
     headings = inline;
   }
 
-  // Same-kind headings that overlap or almost touch are one column written
-  // twice (stacked, or in two languages); apart, they are two columns —
-  // "Per 100 g as sold | Per 100 g prepared" — and stay separate. Headings
-  // of different kinds that overlap can't be told apart.
-  const columns: Column[] = [];
+  // A same-kind heading on another row that overlaps a column is that
+  // column written twice (stacked, or repeated in a second language).
+  // Same-kind headings side by side on one row are two columns — "Per
+  // 100 g as sold | Per 100 g prepared" — however close, and stay
+  // separate. Headings of different kinds that overlap can't be told apart.
+  const columns: HeadingColumn[] = [];
   for (const heading of [...headings].sort((a, b) => a.center - b.center)) {
     const previous = columns.at(-1);
-    const gap = previous ? heading.x0 - previous.x1 : 0;
-    const narrower = previous
-      ? Math.min(previous.x1 - previous.x0, heading.x1 - heading.x0)
-      : 0;
-    if (previous && sameColumnKind(previous, heading) && gap < narrower / 4) {
+    const overlaps = previous !== undefined && heading.x0 < previous.x1;
+    const stacked =
+      previous !== undefined &&
+      [...heading.rows].every((row) => !previous.rows.has(row));
+    if (previous && overlaps && stacked && sameColumnKind(previous, heading)) {
       previous.x0 = Math.min(previous.x0, heading.x0);
       previous.x1 = Math.max(previous.x1, heading.x1);
       previous.center = (previous.x0 + previous.x1) / 2;
-    } else if (previous && heading.x0 < previous.x1) {
+      for (const row of heading.rows) previous.rows.add(row);
+    } else if (overlaps) {
       return undefined;
     } else {
       columns.push({ ...heading });

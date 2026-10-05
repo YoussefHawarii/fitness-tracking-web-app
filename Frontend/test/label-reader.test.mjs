@@ -662,3 +662,31 @@ test('a %RI footnote below the table does not unresolve it', () => {
   assert.equal(result.outcome, 'ok');
   assert.equal(reading(result, 'proteinPer100g').value, 21);
 });
+
+test('close side-by-side per 100 g headings never merge, even with a value missing', () => {
+  const result = read(
+    row(
+      55,
+      ['Per', 160],
+      ['100', 195],
+      ['g', 230],
+      ['Per', 250],
+      ['100', 285],
+      ['g', 320],
+    ),
+    // Only the second column's value was read.
+    row(120, ['Protein', 10], ['18', 280], ['g', 305]),
+  );
+  assert.equal(result.outcome, 'no-per-100-column');
+  assert.equal(result.basisSuggestion, undefined);
+});
+
+test('the same heading stacked in two lines over one column is one column', () => {
+  const result = read(
+    row(30, ['Per', 400], ['100', 435], ['g', 470]),
+    row(55, ['per', 405], ['100', 440], ['grams', 475]),
+    row(120, ['Protein', 10], ['21', 420], ['g', 445]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
