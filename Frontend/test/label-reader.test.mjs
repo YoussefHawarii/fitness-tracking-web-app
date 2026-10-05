@@ -1098,3 +1098,98 @@ test('a scan never reads the product name, brand, category or country', () => {
     ],
   );
 });
+
+test('a unit in a neighbouring column never attaches to a number', () => {
+  // "per 100 g | per serving": the per-100 sodium cell prints a bare
+  // "0.4" and the serving cell's "g" sits across the column gap.
+  const result = read(
+    row(
+      40,
+      ['Per', 160],
+      ['100', 195],
+      ['g', 230],
+      ['Per', 380],
+      ['serving', 415],
+    ),
+    row(300, ['Sodium', 10], ['0.4', 200], ['g', 380]),
+  );
+  const sodium = reading(result, 'sodiumMgPer100');
+  assert.equal(sodium.value, undefined);
+  assert.equal(sodium.status, 'not-found');
+});
+
+test('a unit far from its number on the same line is not attached', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(10, ['Serving', 10], ['size', 100], ['30', 160], ['g', 400]),
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  assert.equal(reading(result, 'servingSize').value, undefined);
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('kJ in the per-100 column converts even when kcal is printed only for a serving', () => {
+  const result = read(
+    row(
+      40,
+      ['Per', 160],
+      ['100', 195],
+      ['g', 230],
+      ['Per', 380],
+      ['serving', 415],
+    ),
+    row(
+      80,
+      ['Energy', 10],
+      ['1046', 180],
+      ['kJ', 225],
+      ['75', 400],
+      ['kcal', 425],
+    ),
+  );
+  const calories = reading(result, 'caloriesPer100g');
+  assert.equal(calories.value, 250);
+  assert.equal(calories.conversion, 'from-kj');
+});
+
+test('an unreadable kcal never falls back to the kJ number beside it', () => {
+  const result = reader.readLabel({
+    words: [
+      ...PER_100_G_HEADER,
+      ...row(80, ['Energy', 10], ['1046', 160], ['kJ', 210]),
+      {
+        text: '250',
+        bbox: { x0: 250, y0: 80, x1: 280, y1: 100 },
+        confidence: 95,
+        numberCheck: 'unverified',
+      },
+      ...row(80, ['kcal', 290]),
+    ],
+  });
+  const calories = reading(result, 'caloriesPer100g');
+  assert.equal(calories.value, undefined);
+  assert.equal(calories.status, 'not-found');
+});
+
+test('the salt note appears only when no sodium row is printed', () => {
+  const unreadSodium = reader.readLabel({
+    words: [
+      ...PER_100_G_HEADER,
+      ...row(300, ['Salt', 10], ['1', 160], ['g', 190]),
+      ...row(330, ['Sodium', 10]),
+      {
+        text: '0.4',
+        bbox: { x0: 160, y0: 330, x1: 190, y1: 350 },
+        confidence: 95,
+        numberCheck: 'unverified',
+      },
+      ...row(330, ['g', 200]),
+    ],
+  });
+  const sodium = reading(unreadSodium, 'sodiumMgPer100');
+  assert.equal(sodium.value, undefined);
+  assert.equal(
+    sodium.warnings.some((w) => /salt/i.test(w)),
+    false,
+  );
+});

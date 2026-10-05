@@ -508,6 +508,29 @@ interface Candidate {
   lessThan: boolean;
   // The word the number was printed in, for column placement.
   word: OcrWord;
+  // The word its unit was printed in, when it is a separate word.
+  unitWord?: OcrWord;
+}
+
+// Whether a unit word was printed right beside a number: the same word
+// ("21g"), or a neighbour on the same line no further than one and a half
+// character heights away (a space is well under one). A unit across a column gap belongs to another
+// cell and never attaches to this number.
+function besideNumber(number: OcrWord, unit: OcrWord): boolean {
+  if (number === unit) return true;
+  const height = Math.max(
+    number.bbox.y1 - number.bbox.y0,
+    unit.bbox.y1 - unit.bbox.y0,
+  );
+  const gap = Math.max(
+    unit.bbox.x0 - number.bbox.x1,
+    number.bbox.x0 - unit.bbox.x1,
+  );
+  const sameLine =
+    Math.min(number.bbox.y1, unit.bbox.y1) -
+      Math.max(number.bbox.y0, unit.bbox.y0) >
+    0;
+  return sameLine && gap <= 1.5 * height;
 }
 
 interface Segment {
@@ -535,12 +558,19 @@ function candidatesIn(segment: Segment): Candidate[] {
     if (token.kind !== 'number') return;
     const next = tokens[i + 1];
     if (next?.kind === 'percent') return;
+    const unit = unitAt(tokens, i + 1);
+    const unitWord = tokens[i + 1]?.word;
+    const attached =
+      unit !== undefined &&
+      unitWord !== undefined &&
+      besideNumber(token.word, unitWord);
     candidates.push({
       value: token.value,
-      unit: unitAt(tokens, i + 1)?.unit ?? defaultUnit,
+      unit: attached ? unit.unit : defaultUnit,
       ambiguous: token.ambiguous,
       lessThan: tokens[i - 1]?.kind === 'less-than',
       word: token.word,
+      ...(attached && unitWord !== token.word && { unitWord }),
     });
   });
   return candidates;
@@ -660,10 +690,19 @@ function readSegment(
   // In a multi-column table only numbers placed in the target column
   // count; a number that straddles two columns can't be placed at all.
   // Sizes have their own rows and are not part of any column.
-  const placed = candidatesIn(segment).map((c) => ({
-    candidate: c,
-    column: isQuantity ? columns.target : placeInColumn(c.word.bbox, columns),
-  }));
+  const placed = candidatesIn(segment).map((c) => {
+    if (isQuantity) return { candidate: c, column: columns.target };
+    const column = placeInColumn(c.word.bbox, columns);
+    // A unit must sit in the same column as its number.
+    const unitColumn = c.unitWord && placeInColumn(c.unitWord.bbox, columns);
+    return {
+      candidate:
+        unitColumn && column !== 'ambiguous' && unitColumn !== column
+          ? { ...c, unit: undefined }
+          : c,
+      column,
+    };
+  });
   if (placed.some((p) => p.column === 'ambiguous' && unitFits(p.candidate))) {
     return notFound("Couldn't tell which column this value is in.");
   }
@@ -1056,13 +1095,13 @@ function placeInColumn(box: BBox, model: ColumnModel): Column | 'ambiguous' {
 
 const SALT_WORDS = new Set(['salt', 'ملح', 'الملح']);
 
-// Sodium is never worked out from salt: a label that prints only salt
-// leaves sodium empty, with a note saying why.
-function withSaltNote(reading: LabelReading, saltPrinted: boolean) {
+// Sodium is never worked out from salt: a label that prints salt and no
+// sodium row leaves sodium empty, with a note saying why.
+function withSaltNote(reading: LabelReading, onlySaltPrinted: boolean) {
   if (
     reading.field !== 'sodiumMgPer100' ||
     reading.value !== undefined ||
-    !saltPrinted
+    !onlySaltPrinted
   ) {
     return reading;
   }
@@ -1164,7 +1203,10 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
       : read[0].reading;
   }).map((reading) =>
     withQuantityChecks(
-      withSaltNote(reading, saltPrinted),
+      withSaltNote(
+        reading,
+        saltPrinted && !segmentsByField.has('sodiumMgPer100'),
+      ),
       model?.target.kind === 'per100' ? model.target.basis : undefined,
     ),
   );
