@@ -22,7 +22,7 @@ import type { Plugin } from 'vite'
 
 // Recognition languages shipped to the browser. Tesseract.js's default
 // LSTM-only data is the quality-oriented "4.0.0_best_int" set.
-export const OCR_LANGUAGES = ['eng'] as const
+export const OCR_LANGUAGES = ['eng', 'ara'] as const
 const LANGUAGE_DATA_SET = '4.0.0_best_int'
 
 export interface OcrAssetPaths {

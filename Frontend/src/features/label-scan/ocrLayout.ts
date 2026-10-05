@@ -15,6 +15,11 @@ export interface OcrWord {
   bbox: BBox;
   // 0-100, as reported by Tesseract.
   confidence: number;
+  // For words containing digits: whether an independent re-read of the
+  // number confirmed it. An 'unverified' number is never read.
+  numberCheck?: 'verified' | 'unverified';
+  // Which recognition pass produced the word (see recognitionPasses.ts).
+  recognizedBy?: 'english' | 'arabic';
 }
 
 export interface OcrLayout {

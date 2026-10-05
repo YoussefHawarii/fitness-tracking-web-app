@@ -178,7 +178,7 @@ test('"less than" values and unclear numbers stay empty, never 0', () => {
   const result = read(
     PER_100_G_HEADER,
     row(120, ['Protein', 10], ['<0.5', 160], ['g', 210]),
-    row(160, ['Fat', 10], ['1,5', 160], ['g', 200]),
+    row(160, ['Fat', 10], ['1,046', 160], ['g', 200]),
   );
   for (const field of ['proteinPer100g', 'fatPer100g']) {
     const r = reading(result, field);
@@ -688,5 +688,203 @@ test('the same heading stacked in two lines over one column is one column', () =
     row(120, ['Protein', 10], ['21', 420], ['g', 445]),
   );
   assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+// --- Arabic and bilingual (#33) -------------------------------------------
+// Arabic is laid out right to left, so in these fixtures an Arabic row's
+// first word (in reading order) has the largest x.
+
+test('Arabic digits, the Arabic decimal separator and decimal commas parse', () => {
+  assert.equal(reader.normalizeLabelText('١٢٫٥'), '12.5');
+  assert.equal(reader.normalizeLabelText('۲۱'), '21');
+  assert.equal(reader.normalizeLabelText('٤٢٪'), '42%');
+  assert.equal(reader.normalizeLabelText('الدهون المشبعة'), 'الدهون المشبعه');
+  assert.deepEqual(reader.parseLabelNumber('2,5'), {
+    value: 2.5,
+    ambiguous: false,
+  });
+  assert.deepEqual(reader.parseLabelNumber('12.5'), {
+    value: 12.5,
+    ambiguous: false,
+  });
+  assert.deepEqual(reader.parseLabelNumber('0,125'), {
+    value: 0.125,
+    ambiguous: false,
+  });
+  assert.deepEqual(reader.parseLabelNumber('1,046'), { ambiguous: true });
+  assert.deepEqual(reader.parseLabelNumber('1.046'), { ambiguous: true });
+  assert.deepEqual(reader.parseLabelNumber('1,046.5'), { ambiguous: true });
+});
+
+test('an Arabic-only per 100 g label reads every macro', () => {
+  const result = read(
+    row(40, ['لكل', 300], ['١٠٠', 240], ['جم', 200]),
+    row(80, ['طاقة', 300], ['٢٥٠', 220], ['سعر', 170], ['حراري', 110]),
+    row(120, ['بروتين', 300], ['٢١', 200], ['جم', 160]),
+    row(160, ['كربوهيدرات', 300], ['٤٠', 200], ['جم', 160]),
+    row(200, ['دهون', 300], ['١٢٫٥', 190], ['جم', 140]),
+    row(240, ['دهون', 330], ['مشبعة', 270], ['٣', 200], ['جم', 160]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.deepEqual(values(result), {
+    caloriesPer100g: 250,
+    proteinPer100g: 21,
+    carbsPer100g: 40,
+    fatPer100g: 12.5,
+  });
+  assert.equal(
+    reading(result, 'proteinPer100g').evidence.rowText,
+    'بروتين ٢١ جم',
+  );
+});
+
+test('a decimal comma reads as a decimal, never as thousands', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(160, ['Fat', 10], ['2,5', 160], ['g', 200]),
+  );
+  assert.equal(reading(result, 'fatPer100g').value, 2.5);
+});
+
+test('Arabic per-100 headings choose the column like English ones', () => {
+  // Right to left: name | لكل ١٠٠ جم | لكل حصة (٣٠ جم) | ٪
+  const result = read(
+    row(
+      40,
+      ['لكل', 440],
+      ['١٠٠', 400],
+      ['جم', 370],
+      ['لكل', 250],
+      ['حصة', 210],
+      ['(٣٠', 170],
+      ['جم)', 140],
+      ['٪', 50],
+    ),
+    row(
+      120,
+      ['بروتين', 540],
+      ['٢١', 400],
+      ['جم', 370],
+      ['٦٫٣', 200],
+      ['جم', 160],
+      ['٤٢٪', 40],
+    ),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+
+  const perMl = read(
+    row(40, ['لكل', 300], ['١٠٠', 240], ['مل', 200]),
+    row(120, ['كربوهيدرات', 330], ['١٠٫٦', 200], ['جم', 150]),
+  );
+  assert.equal(perMl.basisSuggestion, 'PER_100_ML');
+  assert.equal(reading(perMl, 'carbsPer100g').value, 10.6);
+});
+
+test('two nutrients on one Arabic line keep their own values', () => {
+  // Reads: دهون ١٢ جم   بروتين ٢١ جم
+  const result = read(
+    row(40, ['لكل', 600], ['١٠٠', 540], ['جم', 500]),
+    row(
+      120,
+      ['دهون', 500],
+      ['١٢', 440],
+      ['جم', 400],
+      ['بروتين', 300],
+      ['٢١', 240],
+      ['جم', 200],
+    ),
+  );
+  assert.equal(reading(result, 'fatPer100g').value, 12);
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('values read the same in English and Arabic are confirmed by both', () => {
+  const stacked = read(
+    PER_100_G_HEADER,
+    row(200, ['Fat', 10], ['12', 160], ['g', 190]),
+    row(230, ['دهون', 300], ['١٢', 200], ['جم', 160]),
+  );
+  const fat = reading(stacked, 'fatPer100g');
+  assert.equal(fat.value, 12);
+  assert.equal(fat.status, 'read');
+  assert.equal(fat.confirmedInBothLanguages, true);
+
+  // Same row: English name, value, Arabic name.
+  const sameRow = read(
+    PER_100_G_HEADER,
+    row(200, ['Fat', 10], ['12', 160], ['g', 190], ['دهون', 300]),
+  );
+  assert.equal(reading(sameRow, 'fatPer100g').value, 12);
+});
+
+test('English and Arabic readings that disagree leave the field empty with both shown', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(200, ['Fat', 10], ['12', 160], ['g', 190]),
+    row(230, ['دهون', 300], ['١٫٢', 200], ['جم', 160]),
+  );
+  const fat = reading(result, 'fatPer100g');
+  assert.equal(fat.status, 'not-found');
+  assert.equal(fat.value, undefined);
+  assert.deepEqual(fat.conflictingValues, [12, 1.2]);
+  assert.match(fat.warnings[0], /English and Arabic/);
+});
+
+test('mixed-direction rows (Arabic name, Western digits) read correctly', () => {
+  const latinUnit = read(
+    PER_100_G_HEADER,
+    row(120, ['21', 200], ['g', 225], ['بروتين', 300]),
+  );
+  assert.equal(reading(latinUnit, 'proteinPer100g').value, 21);
+
+  const arabicUnit = read(
+    PER_100_G_HEADER,
+    row(120, ['بروتين', 300], ['21', 220], ['جم', 180]),
+  );
+  assert.equal(reading(arabicUnit, 'proteinPer100g').value, 21);
+});
+
+test('an English value followed by a different Arabic nutrient is never guessed', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(120, ['Fat', 10], ['12', 160], ['g', 190], ['بروتين', 300]),
+  );
+  assert.equal(reading(result, 'fatPer100g').status, 'not-found');
+  assert.equal(reading(result, 'fatPer100g').value, undefined);
+  assert.equal(reading(result, 'proteinPer100g').value, undefined);
+});
+
+test('Arabic calorie units, including two-word kcal, read as kcal', () => {
+  const twoWord = read(
+    PER_100_G_HEADER,
+    row(
+      80,
+      ['السعرات', 500],
+      ['الحرارية', 400],
+      ['٢٥٠', 320],
+      ['كيلو', 260],
+      ['كالوري', 180],
+    ),
+  );
+  assert.equal(reading(twoWord, 'caloriesPer100g').value, 250);
+
+  const sueraat = read(
+    PER_100_G_HEADER,
+    row(80, ['الطاقة', 400], ['٢٥٠', 320], ['سعرات', 250], ['حرارية', 180]),
+  );
+  assert.equal(reading(sueraat, 'caloriesPer100g').value, 250);
+});
+
+test('an English and an Arabic per-100 heading side by side are one column', () => {
+  const result = read(
+    row(40, ['Per', 160], ['100g', 195], ['١٠٠جم', 270], ['لكل', 330]),
+    row(120, ['Protein', 10], ['21', 240], ['g', 265]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
   assert.equal(reading(result, 'proteinPer100g').value, 21);
 });

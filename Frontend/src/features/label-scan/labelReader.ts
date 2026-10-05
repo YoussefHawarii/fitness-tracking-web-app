@@ -34,6 +34,12 @@ export interface LabelReading {
   status: LabelReadingStatus;
   warnings: string[];
   evidence?: LabelEvidence;
+  // A bilingual label printed this value in both English and Arabic, and
+  // both read the same.
+  confirmedInBothLanguages?: boolean;
+  // Different values read for this field (e.g. English 12 g, Arabic 1.2 g);
+  // the field is left empty and the user decides.
+  conflictingValues?: number[];
 }
 
 // 'ok' — readings came from a column the label headed per 100 g / 100 ml.
@@ -101,45 +107,126 @@ function groupRows(words: readonly OcrWord[]): Row[] {
 // Tokens
 
 type Token =
-  | { kind: 'word'; text: string; word: OcrWord }
+  | { kind: 'word'; text: string; arabic: boolean; word: OcrWord }
   | {
       kind: 'number';
       text: string;
       value?: number;
-      // A comma inside a number ("1,046" or "2,5") is ambiguous between a
-      // thousands separator and a decimal comma, so it is never read.
       ambiguous: boolean;
       word: OcrWord;
     }
   | { kind: 'less-than'; text: string; word: OcrWord }
   | { kind: 'percent'; text: string; word: OcrWord };
 
-const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|[a-z]+|<|%/g;
+const ARABIC_LETTER = /[\u0621-\u064A]/;
 
-function tokenize(row: Row): Token[] {
+// Brings Arabic and English label text to one comparable form: Arabic-Indic
+// and Persian digits become 0-9, the Arabic decimal separator becomes ".",
+// the Arabic thousands separator and comma become ",", the Arabic percent
+// sign becomes "%", diacritics and tatweel are dropped, and letter variants
+// that labels mix freely (أ/إ/آ, ى/ي, ة/ه) are unified.
+export function normalizeLabelText(text: string): string {
+  return text
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\u066b/g, '.')
+    .replace(/[\u066c\u060c]/g, ',')
+    .replace(/\u066a/g, '%')
+    .replace(/[\u064b-\u065f\u0670\u0640]/g, '')
+    .replace(/[\u0622\u0623\u0625\u0671]/g, '\u0627')
+    .replace(/\u0649/g, '\u064a')
+    .replace(/\u0629/g, '\u0647')
+    .toLowerCase();
+}
+
+const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|[a-z]+|[\u0621-\u064a]+|<|%/g;
+
+// One separator: "." or "," as a decimal point ("2.5", "2,5"), except
+// that a separator followed by exactly three digits ("1,046", "1.046") may
+// be a thousands separator and is never read. Two or more separators are
+// never read either.
+export function parseLabelNumber(text: string): {
+  value?: number;
+  ambiguous: boolean;
+} {
+  const separators = text.match(/[.,]/g) ?? [];
+  if (separators.length === 0) return { value: Number(text), ambiguous: false };
+  if (separators.length > 1) return { ambiguous: true };
+  const [whole, fraction] = text.split(/[.,]/);
+  if (fraction.length === 3 && whole !== '0') return { ambiguous: true };
+  return { value: Number(`${whole}.${fraction}`), ambiguous: false };
+}
+
+function tokensOfWord(word: OcrWord): Token[] {
   const tokens: Token[] = [];
-  for (const word of row.words) {
-    for (const match of word.text.toLowerCase().matchAll(TOKEN_PATTERN)) {
-      const text = match[0];
-      if (/^\d/.test(text)) {
-        const ambiguous = text.includes(',');
-        tokens.push({
-          kind: 'number',
-          text,
-          ambiguous,
-          ...(!ambiguous && { value: Number(text) }),
-          word,
-        });
-      } else if (text === '<') {
-        tokens.push({ kind: 'less-than', text, word });
-      } else if (text === '%') {
-        tokens.push({ kind: 'percent', text, word });
-      } else {
-        tokens.push({ kind: 'word', text, word });
-      }
+  for (const match of normalizeLabelText(word.text).matchAll(TOKEN_PATTERN)) {
+    const text = match[0];
+    if (/^\d/.test(text)) {
+      const parsed = parseLabelNumber(text);
+      tokens.push({
+        kind: 'number',
+        text,
+        ...parsed,
+        ambiguous: parsed.ambiguous || word.numberCheck === 'unverified',
+        word,
+      });
+    } else if (text === '<') {
+      tokens.push({ kind: 'less-than', text, word });
+    } else if (text === '%') {
+      tokens.push({ kind: 'percent', text, word });
+    } else {
+      tokens.push({
+        kind: 'word',
+        text,
+        arabic: ARABIC_LETTER.test(text),
+        word,
+      });
     }
   }
   return tokens;
+}
+
+type Script = 'arabic' | 'latin';
+
+function scriptOf(tokens: readonly Token[]): Script | undefined {
+  if (tokens.some((t) => t.kind === 'word' && t.arabic)) return 'arabic';
+  if (tokens.some((t) => t.kind === 'word')) return 'latin';
+  return undefined;
+}
+
+// Tokens of a row in reading order. Words are positioned left to right, but
+// Arabic is read right to left, so each run of Arabic words — with the
+// numbers printed between them — is reversed back into reading order.
+// "بروتين ٢١ جم" sits on the photo as [جم][21][بروتين] and is read
+// [بروتين][21][جم]. A number between an English and an Arabic word belongs
+// to neither run and keeps its place. Tokens inside one word keep their
+// order ("٢١جم" stays [21][جم]).
+function tokenize(row: Row): Token[] {
+  const words = row.words.map(tokensOfWord).filter((t) => t.length > 0);
+  const own = words.map(scriptOf);
+  const resolved = own.map((script, i) => {
+    if (script) return script;
+    let left: Script | undefined;
+    let right: Script | undefined;
+    for (let j = i - 1; j >= 0 && !left; j -= 1) left = own[j];
+    for (let j = i + 1; j < own.length && !right; j += 1) right = own[j];
+    if (left && right) return left === right ? left : undefined;
+    return left ?? right;
+  });
+
+  const ordered: Token[][] = [];
+  for (let i = 0; i < words.length;) {
+    if (resolved[i] !== 'arabic') {
+      ordered.push(words[i]);
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < words.length && resolved[j] === 'arabic') j += 1;
+    ordered.push(...words.slice(i, j).reverse());
+    i = j;
+  }
+  return ordered.flat();
 }
 
 // ---------------------------------------------------------------------------
@@ -203,7 +290,72 @@ const KEYWORDS: readonly Keyword[] = [
   { tokens: ['iron'] },
   { tokens: ['potassium'] },
   { tokens: ['vitamin'] },
+
+  // Arabic, in reading order and normalised (ة→ه, أ/إ/آ→ا, ى→ي).
+  { tokens: ['طاقه'], field: 'caloriesPer100g' },
+  { tokens: ['الطاقه'], field: 'caloriesPer100g' },
+  { tokens: ['سعرات'], field: 'caloriesPer100g' },
+  { tokens: ['السعرات'], field: 'caloriesPer100g' },
+  { tokens: ['سعرات', 'حراريه'], field: 'caloriesPer100g' },
+  { tokens: ['السعرات', 'الحراريه'], field: 'caloriesPer100g' },
+  { tokens: ['الطاقه', 'الحراريه'], field: 'caloriesPer100g' },
+  { tokens: ['القيمه', 'الحراريه'], field: 'caloriesPer100g' },
+  { tokens: ['بروتين'], field: 'proteinPer100g' },
+  { tokens: ['البروتين'], field: 'proteinPer100g' },
+  { tokens: ['بروتينات'], field: 'proteinPer100g' },
+  { tokens: ['البروتينات'], field: 'proteinPer100g' },
+  { tokens: ['كربوهيدرات'], field: 'carbsPer100g' },
+  { tokens: ['الكربوهيدرات'], field: 'carbsPer100g' },
+  { tokens: ['كاربوهيدرات'], field: 'carbsPer100g' },
+  { tokens: ['الكاربوهيدرات'], field: 'carbsPer100g' },
+  { tokens: ['الكربوهيدرات', 'الكليه'], field: 'carbsPer100g' },
+  { tokens: ['مجموع', 'الكربوهيدرات'], field: 'carbsPer100g' },
+  { tokens: ['اجمالي', 'الكربوهيدرات'], field: 'carbsPer100g' },
+  { tokens: ['نشويات'], field: 'carbsPer100g' },
+  { tokens: ['النشويات'], field: 'carbsPer100g' },
+  { tokens: ['دهون'], field: 'fatPer100g' },
+  { tokens: ['الدهون'], field: 'fatPer100g' },
+  { tokens: ['دهون', 'كليه'], field: 'fatPer100g' },
+  { tokens: ['الدهون', 'الكليه'], field: 'fatPer100g' },
+  { tokens: ['مجموع', 'الدهون'], field: 'fatPer100g' },
+  { tokens: ['اجمالي', 'الدهون'], field: 'fatPer100g' },
+  { tokens: ['دهون', 'مشبعه'] },
+  { tokens: ['الدهون', 'المشبعه'] },
+  { tokens: ['منها', 'دهون', 'مشبعه'] },
+  { tokens: ['مشبعه'] },
+  { tokens: ['دهون', 'متحوله'] },
+  { tokens: ['الدهون', 'المتحوله'] },
+  { tokens: ['متحوله'] },
+  { tokens: ['دهون', 'غير', 'مشبعه'] },
+  { tokens: ['الدهون', 'غير', 'المشبعه'] },
+  { tokens: ['غير', 'مشبعه'] },
+  { tokens: ['احاديه'] },
+  { tokens: ['متعدده'] },
+  { tokens: ['سكر'] },
+  { tokens: ['السكر'] },
+  { tokens: ['سكريات'] },
+  { tokens: ['السكريات'] },
+  { tokens: ['منها', 'سكريات'] },
+  { tokens: ['سكريات', 'مضافه'] },
+  { tokens: ['الياف'] },
+  { tokens: ['الالياف'] },
+  { tokens: ['الياف', 'غذائيه'] },
+  { tokens: ['الالياف', 'الغذائيه'] },
+  { tokens: ['صوديوم'] },
+  { tokens: ['الصوديوم'] },
+  { tokens: ['ملح'] },
+  { tokens: ['الملح'] },
+  { tokens: ['كوليسترول'] },
+  { tokens: ['الكوليسترول'] },
+  { tokens: ['كالسيوم'] },
+  { tokens: ['حديد'] },
+  { tokens: ['بوتاسيوم'] },
+  { tokens: ['فيتامين'] },
 ];
+
+function isArabicKeyword(keyword: Keyword): boolean {
+  return ARABIC_LETTER.test(keyword.tokens[0]);
+}
 
 // Longest keyword starting at token index i, so "saturated fat" wins over
 // "fat" and "total carbohydrate" over "carbohydrate".
@@ -227,19 +379,64 @@ function keywordAt(
 // ---------------------------------------------------------------------------
 // Values
 
-const MASS_UNITS = new Set(['g', 'gm', 'gr', 'grams', 'gram']);
-const MILLIGRAM_UNITS = new Set(['mg']);
-const KCAL_UNITS = new Set(['kcal']);
-const KJ_UNITS = new Set(['kj']);
+const MASS_UNITS = new Set([
+  'g',
+  'gm',
+  'gr',
+  'grams',
+  'gram',
+  'جم',
+  'جرام',
+  'جرامات',
+  'غ',
+  'غم',
+  'غرام',
+  'غرامات',
+]);
+const MILLIGRAM_UNITS = new Set([
+  'mg',
+  'مجم',
+  'ملجم',
+  'ملغ',
+  'مغ',
+  'ملغم',
+  'مليجرام',
+  'ملليجرام',
+]);
+const KCAL_UNITS = new Set([
+  'kcal',
+  'سعر',
+  'سعره',
+  'سعرات',
+  'كالوري',
+  'كالوريز',
+  'كيلوكالوري',
+]);
+const KJ_UNITS = new Set(['kj', 'كيلوجول', 'كجول']);
 
 type Unit = 'g' | 'mg' | 'kcal' | 'kj';
 
-function unitOf(token: Token | undefined): Unit | undefined {
+// The unit starting at token i, and how many tokens it spans: Arabic
+// labels may print kcal and kJ as two words ("كيلو كالوري", "كيلو جول").
+function unitAt(
+  tokens: readonly Token[],
+  i: number,
+): { unit: Unit; length: number } | undefined {
+  const token = tokens[i];
   if (token?.kind !== 'word') return undefined;
-  if (MASS_UNITS.has(token.text)) return 'g';
-  if (MILLIGRAM_UNITS.has(token.text)) return 'mg';
-  if (KCAL_UNITS.has(token.text)) return 'kcal';
-  if (KJ_UNITS.has(token.text)) return 'kj';
+  if (token.text === 'كيلو') {
+    const next = tokens[i + 1];
+    if (next?.kind !== 'word') return undefined;
+    if (['كالوري', 'سعر', 'سعره'].includes(next.text)) {
+      return { unit: 'kcal', length: 2 };
+    }
+    if (next.text === 'جول') return { unit: 'kj', length: 2 };
+    return undefined;
+  }
+  if (MASS_UNITS.has(token.text)) return { unit: 'g', length: 1 };
+  if (MILLIGRAM_UNITS.has(token.text)) return { unit: 'mg', length: 1 };
+  if (KCAL_UNITS.has(token.text)) return { unit: 'kcal', length: 1 };
+  if (KJ_UNITS.has(token.text)) return { unit: 'kj', length: 1 };
   return undefined;
 }
 
@@ -256,6 +453,10 @@ interface Segment {
   keyword: Keyword;
   tokens: Token[];
   row: Row;
+  arabic: boolean;
+  // Its value could equally belong to a different nutrient named right
+  // after it in Arabic (whose value, read right to left, sits to its left).
+  contested?: boolean;
 }
 
 function candidatesIn(segment: Segment): Candidate[] {
@@ -263,9 +464,9 @@ function candidatesIn(segment: Segment): Candidate[] {
   // A unit printed before any number ("Energy (kcal) 250") applies to the
   // segment's bare numbers.
   let defaultUnit: Unit | undefined;
-  for (const token of tokens) {
-    if (token.kind === 'number') break;
-    defaultUnit ??= unitOf(token);
+  for (let i = 0; i < tokens.length; i += 1) {
+    if (tokens[i].kind === 'number') break;
+    defaultUnit ??= unitAt(tokens, i)?.unit;
   }
 
   const candidates: Candidate[] = [];
@@ -275,7 +476,7 @@ function candidatesIn(segment: Segment): Candidate[] {
     if (next?.kind === 'percent') return;
     candidates.push({
       value: token.value,
-      unit: unitOf(next) ?? defaultUnit,
+      unit: unitAt(tokens, i + 1)?.unit ?? defaultUnit,
       ambiguous: token.ambiguous,
       lessThan: tokens[i - 1]?.kind === 'less-than',
       word: token.word,
@@ -287,16 +488,50 @@ function candidatesIn(segment: Segment): Candidate[] {
 function segmentsOf(row: Row): Segment[] {
   const tokens = tokenize(row);
   const segments: Segment[] = [];
+  const leading: Token[] = [];
   let i = 0;
   while (i < tokens.length) {
-    const match = keywordAt(tokens, i);
+    // A unit word right after a number ("250 سعرات") is that number's
+    // unit, not a new "calories" keyword.
+    const isUnit =
+      tokens[i - 1]?.kind === 'number' && unitAt(tokens, i) !== undefined;
+    const match = isUnit ? undefined : keywordAt(tokens, i);
     if (match) {
-      segments.push({ keyword: match.keyword, tokens: [], row });
+      segments.push({
+        keyword: match.keyword,
+        tokens: [],
+        row,
+        arabic: isArabicKeyword(match.keyword),
+      });
       i += match.length;
       continue;
     }
-    segments.at(-1)?.tokens.push(tokens[i]);
+    const current = segments.at(-1);
+    if (current) current.tokens.push(tokens[i]);
+    else leading.push(tokens[i]);
     i += 1;
+  }
+
+  // Values printed before the first keyword belong to it only when it is
+  // Arabic: read right to left, an Arabic nutrient's value sits to its
+  // left ("21 g بروتين" with an English unit inside Arabic text).
+  if (leading.length > 0 && segments[0]?.arabic) {
+    segments[0].tokens.unshift(...leading);
+  }
+
+  // An English nutrient's values directly followed by a different Arabic
+  // nutrient that has no value of its own could belong to either.
+  for (let k = 0; k + 1 < segments.length; k += 1) {
+    const [english, arabic] = [segments[k], segments[k + 1]];
+    if (
+      !english.arabic &&
+      arabic.arabic &&
+      english.keyword.field !== arabic.keyword.field &&
+      english.tokens.some((t) => t.kind === 'number') &&
+      !arabic.tokens.some((t) => t.kind === 'number')
+    ) {
+      english.contested = true;
+    }
   }
   return segments;
 }
@@ -312,8 +547,10 @@ function unionBox(words: readonly OcrWord[]): BBox {
 
 function evidenceOf(segment: Segment): LabelEvidence {
   const words = [...new Set(segment.tokens.map((t) => t.word))];
+  const rowWords = [...new Set(tokenize(segment.row).map((t) => t.word))];
   return {
-    rowText: segment.row.words.map((w) => w.text).join(' '),
+    // In reading order, so Arabic text reads naturally.
+    rowText: rowWords.map((w) => w.text).join(' '),
     bbox: unionBox(words.length ? words : segment.row.words),
   };
 }
@@ -350,6 +587,9 @@ function readSegment(
     .filter((p) => p.column === columns.target)
     .map((p) => p.candidate);
   const usable = candidates.filter(unitFits);
+  if (segment.contested && usable.length > 0) {
+    return notFound("Couldn't tell which nutrient this value belongs to.");
+  }
 
   if (usable.length === 0) {
     if (isEnergy && candidates.some((c) => c.unit === 'kj')) {
@@ -396,6 +636,8 @@ interface Column {
   x0: number;
   x1: number;
   center: number;
+  // The language the heading is written in.
+  script?: Script;
 }
 
 interface ColumnModel {
@@ -412,9 +654,27 @@ const BASIS_UNITS: Record<string, NutritionBasis> = {
   gr: 'PER_100_G',
   grams: 'PER_100_G',
   ml: 'PER_100_ML',
+  جم: 'PER_100_G',
+  جرام: 'PER_100_G',
+  غ: 'PER_100_G',
+  غم: 'PER_100_G',
+  غرام: 'PER_100_G',
+  مل: 'PER_100_ML',
+  ملل: 'PER_100_ML',
+  مليلتر: 'PER_100_ML',
+  ملليلتر: 'PER_100_ML',
 };
 
-const SERVING_WORDS = new Set(['serving', 'portion']);
+const PER_WORDS = new Set(['per', 'لكل']);
+
+const SERVING_WORDS = new Set([
+  'serving',
+  'portion',
+  'حصه',
+  'الحصه',
+  'للحصه',
+  'وجبه',
+]);
 // Pack-size and serving-size wording describes a quantity, never a column:
 // "Net weight 100 g" is not a per-100 heading.
 const NOT_A_HEADING_WORDS = new Set([
@@ -426,8 +686,24 @@ const NOT_A_HEADING_WORDS = new Set([
   'contents',
   'pack',
   'package',
+  'حجم',
+  'وزن',
+  'الوزن',
+  'صافي',
+  'الصافي',
+  'عبوه',
+  'العبوه',
+  'محتوي',
+  'المحتوي',
 ]);
-const PERCENT_WORDS = new Set(['ri', 'dv', 'nrv', 'gda']);
+const PERCENT_WORDS = new Set([
+  'ri',
+  'dv',
+  'nrv',
+  'gda',
+  'اليوميه',
+  'المرجعيه',
+]);
 
 function isWord(
   token: Token | undefined,
@@ -456,7 +732,7 @@ function classifyPhrase(tokens: readonly Token[]): Column | undefined {
   const words = tokens.map((t) => t.word);
   const x0 = Math.min(...words.map((w) => w.bbox.x0));
   const x1 = Math.max(...words.map((w) => w.bbox.x1));
-  const extent = { x0, x1, center: (x0 + x1) / 2 };
+  const extent = { x0, x1, center: (x0 + x1) / 2, script: scriptOf(tokens) };
   if (tokens.some((t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS))) {
     return { kind: 'percent', ...extent };
   }
@@ -468,7 +744,7 @@ function classifyPhrase(tokens: readonly Token[]): Column | undefined {
     if (basis) return { kind: 'per100', basis, ...extent };
   }
   // "per 30 g" heads a serving column.
-  if (isWord(tokens[0], 'per') && tokens.some((t) => t.kind === 'number')) {
+  if (isWord(tokens[0], PER_WORDS) && tokens.some((t) => t.kind === 'number')) {
     return { kind: 'serving', ...extent };
   }
   return undefined;
@@ -489,10 +765,10 @@ function headerPhrases(tokens: readonly Token[]): Column[] {
     const inPercent = current?.some(
       (t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS),
     );
-    const justPer = current?.length === 1 && isWord(current[0], 'per');
+    const justPer = current?.length === 1 && isWord(current[0], PER_WORDS);
     const starts =
       !current ||
-      isWord(token, 'per') ||
+      isWord(token, PER_WORDS) ||
       (isWord(token, SERVING_WORDS) && !justPer) ||
       (per100Basis(tokens, i) !== undefined && !justPer && !inServing) ||
       ((token.kind === 'percent' || isWord(token, PERCENT_WORDS)) &&
@@ -553,7 +829,7 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
       const tokens = tokenize(row);
       tokens.forEach((_, i) => {
         const basis = per100Basis(tokens, i);
-        if (basis && isWord(tokens[i - 1], 'per')) {
+        if (basis && isWord(tokens[i - 1], PER_WORDS)) {
           inline.push({
             kind: 'per100',
             basis,
@@ -570,10 +846,12 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
   }
 
   // A same-kind heading on another row that overlaps a column is that
-  // column written twice (stacked, or repeated in a second language).
-  // Same-kind headings side by side on one row are two columns — "Per
-  // 100 g as sold | Per 100 g prepared" — however close, and stay
-  // separate. Headings of different kinds that overlap can't be told apart.
+  // column written twice (stacked, or repeated in a second language), and
+  // so is an English and an Arabic heading side by side on one row
+  // ("Per 100 g لكل 100 جم"). Same-language headings side by side on one
+  // row are two columns — "Per 100 g as sold | Per 100 g prepared" —
+  // however close, and stay separate. Headings of different kinds that
+  // overlap can't be told apart.
   const columns: HeadingColumn[] = [];
   for (const heading of [...headings].sort((a, b) => a.center - b.center)) {
     const previous = columns.at(-1);
@@ -581,11 +859,25 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
     const stacked =
       previous !== undefined &&
       [...heading.rows].every((row) => !previous.rows.has(row));
-    if (previous && overlaps && stacked && sameColumnKind(previous, heading)) {
+    // On one row, an English and an Arabic heading of the same kind next
+    // to each other are translations of one heading, however far apart
+    // the label prints them.
+    const translation =
+      previous !== undefined &&
+      !stacked &&
+      previous.script !== undefined &&
+      heading.script !== undefined &&
+      previous.script !== heading.script;
+    if (
+      previous &&
+      sameColumnKind(previous, heading) &&
+      ((overlaps && stacked) || translation)
+    ) {
       previous.x0 = Math.min(previous.x0, heading.x0);
       previous.x1 = Math.max(previous.x1, heading.x1);
       previous.center = (previous.x0 + previous.x1) / 2;
       for (const row of heading.rows) previous.rows.add(row);
+      if (previous.script !== heading.script) previous.script = undefined;
     } else if (overlaps) {
       return undefined;
     } else {
@@ -657,19 +949,33 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
     if (segments.length === 0) {
       return { field, status: 'not-found', warnings: [] };
     }
-    const found = segments.map((s) => readSegment(field, s, columns));
-    const read = found.filter((r) => r.status === 'read');
-    if (read.length === 0) return found[0];
-    const values = new Set(read.map((r) => r.value));
-    if (values.size > 1) {
+    const found = segments.map((segment) => ({
+      segment,
+      reading: readSegment(field, segment, columns),
+    }));
+    const read = found.filter((f) => f.reading.status === 'read');
+    if (read.length === 0) {
+      return (found.find((f) => f.reading.warnings.length > 0) ?? found[0])
+        .reading;
+    }
+    const values = [...new Set(read.map((f) => f.reading.value as number))];
+    const languages = new Set(read.map((f) => f.segment.arabic));
+    if (values.length > 1) {
       return {
         field,
         status: 'not-found',
-        warnings: ['The label shows different values for this — check it.'],
-        evidence: read[0].evidence,
+        warnings: [
+          languages.size > 1
+            ? `The English and Arabic text disagree (${values.join(' / ')}) — check the label.`
+            : 'The label shows different values for this — check it.',
+        ],
+        evidence: read[0].reading.evidence,
+        conflictingValues: values,
       };
     }
-    return read[0];
+    return languages.size > 1
+      ? { ...read[0].reading, confirmedInBothLanguages: true }
+      : read[0].reading;
   });
 
   if (!model) {
