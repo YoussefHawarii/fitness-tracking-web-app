@@ -4,6 +4,7 @@ import type {
 } from '../add-product/extractionFormValues';
 import type { LabelField, LabelReading, LabelScanResult } from './labelReader';
 import type { BBox } from './ocrLayout';
+import type { ReviewImage } from './labelScanSession';
 import { LABEL_FIELD_NAMES } from './labelFieldNames';
 
 // The review step of a Label scan: every Label reading with its status,
@@ -31,12 +32,6 @@ const STATUS_TEXT: Record<LabelReading['status'], string> = {
   'needs-check': '⚠ needs check',
   'not-found': '— not found',
 };
-
-export interface ReviewImage {
-  url: string;
-  width: number;
-  height: number;
-}
 
 const THUMBNAIL_WIDTH = 240;
 
