@@ -52,6 +52,11 @@ export function LabelReviewList({ result }: { result: LabelScanResult }) {
           {warning}
         </p>
       ))}
+      {result.outcome !== 'ok' && (
+        <p className="text-body text-text-muted">
+          For reference only — these values can’t be applied as per-100 values.
+        </p>
+      )}
       <ul className="flex flex-col gap-1">
         {result.readings.map((reading) => (
           <li

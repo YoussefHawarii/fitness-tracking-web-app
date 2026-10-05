@@ -37,9 +37,11 @@ export interface LabelReading {
 }
 
 // 'ok' — readings came from a column the label headed per 100 g / 100 ml.
-// 'no-per-100-column' — no such header was read, so no reading may fill a
-// per-100 field (ADR 0009); readings are reference only.
-export type LabelScanOutcome = 'ok' | 'no-per-100-column';
+// 'per-serving-only' — the label lists only per-serving values; readings
+// are shown for reference and never fill a per-100 field (ADR 0009).
+// 'no-per-100-column' — no single per-100 header was read, so no reading
+// may fill a per-100 field either.
+export type LabelScanOutcome = 'ok' | 'per-serving-only' | 'no-per-100-column';
 
 export interface LabelScanResult {
   outcome: LabelScanOutcome;
@@ -248,6 +250,8 @@ interface Candidate {
   unit?: Unit;
   ambiguous: boolean;
   lessThan: boolean;
+  // The word the number was printed in, for column placement.
+  word: OcrWord;
 }
 
 interface Segment {
@@ -276,6 +280,7 @@ function candidatesIn(segment: Segment): Candidate[] {
       unit: unitOf(next) ?? defaultUnit,
       ambiguous: token.ambiguous,
       lessThan: tokens[i - 1]?.kind === 'less-than',
+      word: token.word,
     });
   });
   return candidates;
@@ -315,8 +320,11 @@ function evidenceOf(segment: Segment): LabelEvidence {
   };
 }
 
-function readSegment(field: LabelField, segment: Segment): LabelReading {
-  const candidates = candidatesIn(segment);
+function readSegment(
+  field: LabelField,
+  segment: Segment,
+  columns: ColumnModel,
+): LabelReading {
   const evidence = evidenceOf(segment);
   const notFound = (warning?: string): LabelReading => ({
     field,
@@ -326,12 +334,25 @@ function readSegment(field: LabelField, segment: Segment): LabelReading {
   });
 
   const isEnergy = field === 'caloriesPer100g';
-  const usable = candidates.filter((c) =>
+  const unitFits = (c: Candidate) =>
     isEnergy
       ? c.unit === 'kcal' ||
-        (c.unit === undefined && segment.keyword.bareNumberIsKcal)
-      : c.unit === 'g',
-  );
+        (c.unit === undefined && segment.keyword.bareNumberIsKcal === true)
+      : c.unit === 'g';
+
+  // In a multi-column table only numbers placed in the target column
+  // count; a number that straddles two columns can't be placed at all.
+  const placed = candidatesIn(segment).map((c) => ({
+    candidate: c,
+    column: placeInColumn(c.word.bbox, columns),
+  }));
+  if (placed.some((p) => p.column === 'ambiguous' && unitFits(p.candidate))) {
+    return notFound("Couldn't tell which column this value is in.");
+  }
+  const candidates = placed
+    .filter((p) => p.column === columns.target)
+    .map((p) => p.candidate);
+  const usable = candidates.filter(unitFits);
 
   if (usable.length === 0) {
     if (isEnergy && candidates.some((c) => c.unit === 'kj')) {
@@ -362,7 +383,29 @@ function readSegment(field: LabelField, segment: Segment): LabelReading {
 }
 
 // ---------------------------------------------------------------------------
-// Basis header
+// Columns
+//
+// A nutrition table can carry several value columns — "per 100 g",
+// "per serving (30 g)", "%RI". Only a column the label itself heads per
+// 100 g / per 100 ml may fill per-100 fields, so the reader finds the
+// header phrases, gives each a horizontal position, and places every
+// number in the column it sits under.
+
+type ColumnKind = 'per100' | 'serving' | 'percent';
+
+interface Column {
+  kind: ColumnKind;
+  basis?: NutritionBasis;
+  center: number;
+}
+
+interface ColumnModel {
+  // Every value column, ordered left to right.
+  columns: Column[];
+  // The column readings are taken from: the per-100 column, or — on a
+  // per-serving-only label — the serving column (reference only).
+  target: Column;
+}
 
 const BASIS_UNITS: Record<string, NutritionBasis> = {
   g: 'PER_100_G',
@@ -372,32 +415,160 @@ const BASIS_UNITS: Record<string, NutritionBasis> = {
   ml: 'PER_100_ML',
 };
 
-// A basis is declared only by an explicit "per 100 g" / "/100 ml" phrase.
-// A bare "100 g" elsewhere ("Serving size 100 g") states nothing about the
-// denominator, so it never counts.
-function headerBases(rows: readonly Row[]): Set<NutritionBasis> {
-  const bases = new Set<NutritionBasis>();
-  for (const row of rows) {
-    const tokens = tokenize(row);
-    const rowText = row.words.map((w) => w.text).join(' ');
-    tokens.forEach((token, i) => {
-      const previous = tokens[i - 1];
-      const perPrefix =
-        (previous?.kind === 'word' && previous.text === 'per') ||
-        new RegExp(`/\\s*${token.text}(?!\\d)`).test(rowText);
-      if (token.kind !== 'number' || token.value !== 100 || !perPrefix) return;
-      const next = tokens[i + 1];
-      const basis = next?.kind === 'word' ? BASIS_UNITS[next.text] : undefined;
-      if (basis) bases.add(basis);
-    });
+const SERVING_WORDS = new Set(['serving', 'portion']);
+const PERCENT_WORDS = new Set(['ri', 'dv', 'nrv', 'gda']);
+
+function isWord(
+  token: Token | undefined,
+  words: ReadonlySet<string> | string,
+): boolean {
+  if (token?.kind !== 'word') return false;
+  return typeof words === 'string'
+    ? token.text === words
+    : words.has(token.text);
+}
+
+function per100Basis(
+  tokens: readonly Token[],
+  i: number,
+): NutritionBasis | undefined {
+  const token = tokens[i];
+  if (token?.kind !== 'number' || token.value !== 100) return undefined;
+  const next = tokens[i + 1];
+  return next?.kind === 'word' ? BASIS_UNITS[next.text] : undefined;
+}
+
+function classifyPhrase(tokens: readonly Token[]): Column | undefined {
+  const words = tokens.map((t) => t.word);
+  const center =
+    (Math.min(...words.map((w) => w.bbox.x0)) +
+      Math.max(...words.map((w) => w.bbox.x1))) /
+    2;
+  if (tokens.some((t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS))) {
+    return { kind: 'percent', center };
   }
-  return bases;
+  if (tokens.some((t) => isWord(t, SERVING_WORDS))) {
+    // "Serving size 30 g" describes the serving; it heads no column.
+    if (tokens.some((t) => isWord(t, 'size'))) return undefined;
+    return { kind: 'serving', center };
+  }
+  for (let i = 0; i < tokens.length; i += 1) {
+    const basis = per100Basis(tokens, i);
+    if (basis) return { kind: 'per100', basis, center };
+  }
+  // "per 30 g" heads a serving column.
+  if (isWord(tokens[0], 'per') && tokens.some((t) => t.kind === 'number')) {
+    return { kind: 'serving', center };
+  }
+  return undefined;
+}
+
+// Splits a header row into column phrases: a new phrase starts at "per",
+// at "serving"/"portion" (unless right after "per"), at a bare "100 g"
+// outside a serving phrase, and at "%" / "RI" / "DV".
+function headerPhrases(tokens: readonly Token[]): Column[] {
+  const phrases: Token[][] = [];
+  tokens.forEach((token, i) => {
+    const current = phrases.at(-1);
+    // "Serving size 100 g" and "per serving (100 g)" stay one phrase: a
+    // "100 g" inside a serving phrase never starts a per-100 column.
+    const inServing = current?.some((t) => isWord(t, SERVING_WORDS));
+    const inPercent = current?.some(
+      (t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS),
+    );
+    const justPer = current?.length === 1 && isWord(current[0], 'per');
+    const starts =
+      !current ||
+      isWord(token, 'per') ||
+      (isWord(token, SERVING_WORDS) && !justPer) ||
+      (per100Basis(tokens, i) !== undefined && !justPer && !inServing) ||
+      ((token.kind === 'percent' || isWord(token, PERCENT_WORDS)) &&
+        !inPercent);
+    if (starts || !current) phrases.push([token]);
+    else current.push(token);
+  });
+  return phrases
+    .map(classifyPhrase)
+    .filter((c): c is Column => c !== undefined);
+}
+
+function columnModel(rows: readonly Row[]): ColumnModel | undefined {
+  // Header rows carry no nutrient keyword. The one naming the most columns
+  // wins; on a tie, the lowest (nearest the values) does.
+  let header: Column[] = [];
+  for (const row of rows) {
+    if (segmentsOf(row).length > 0) continue;
+    const phrases = headerPhrases(tokenize(row));
+    if (phrases.length > 0 && phrases.length >= header.length) {
+      header = phrases;
+    }
+  }
+
+  // Fallback: an explicit "per 100 g" inside a nutrient row ("Energy per
+  // 100 g") still declares a single per-100 column.
+  if (header.length === 0) {
+    const inline: Column[] = [];
+    for (const row of rows) {
+      const tokens = tokenize(row);
+      tokens.forEach((_, i) => {
+        const basis = per100Basis(tokens, i);
+        if (basis && isWord(tokens[i - 1], 'per')) {
+          inline.push({ kind: 'per100', basis, center: 0 });
+        }
+      });
+    }
+    if (inline.length !== 1) return undefined;
+    header = inline;
+  }
+
+  const columns = [...header].sort((a, b) => a.center - b.center);
+  const per100 = columns.filter((c) => c.kind === 'per100');
+  const serving = columns.filter((c) => c.kind === 'serving');
+  if (per100.length === 1) return { columns, target: per100[0] };
+  if (per100.length === 0 && serving.length === 1) {
+    return { columns, target: serving[0] };
+  }
+  return undefined;
+}
+
+// The column a number sits under: boundaries lie halfway between adjacent
+// column centres. A number whose word straddles a boundary by more than a
+// quarter of its width on each side can't be placed.
+function placeInColumn(box: BBox, model: ColumnModel): Column | 'ambiguous' {
+  const { columns } = model;
+  if (columns.length === 1) return columns[0];
+  const width = Math.max(1, box.x1 - box.x0);
+  for (let i = 0; i < columns.length - 1; i += 1) {
+    const boundary = (columns[i].center + columns[i + 1].center) / 2;
+    if (boundary - box.x0 > width / 4 && box.x1 - boundary > width / 4) {
+      return 'ambiguous';
+    }
+  }
+  const center = (box.x0 + box.x1) / 2;
+  let index = 0;
+  while (
+    index < columns.length - 1 &&
+    center > (columns[index].center + columns[index + 1].center) / 2
+  ) {
+    index += 1;
+  }
+  return columns[index];
 }
 
 // ---------------------------------------------------------------------------
 
+const SINGLE_COLUMN: Column = { kind: 'per100', center: 0 };
+
 export function readLabel(layout: OcrLayout): LabelScanResult {
   const rows = groupRows(layout.words);
+  const model = columnModel(rows);
+  // Without a usable header the values are still read as one column so
+  // they can be shown for reference; the outcome keeps them out of the form.
+  const columns: ColumnModel = model ?? {
+    columns: [SINGLE_COLUMN],
+    target: SINGLE_COLUMN,
+  };
+
   const segmentsByField = new Map<LabelField, Segment[]>();
   for (const row of rows) {
     for (const segment of segmentsOf(row)) {
@@ -415,7 +586,7 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
     if (segments.length === 0) {
       return { field, status: 'not-found', warnings: [] };
     }
-    const found = segments.map((s) => readSegment(field, s));
+    const found = segments.map((s) => readSegment(field, s, columns));
     const read = found.filter((r) => r.status === 'read');
     if (read.length === 0) return found[0];
     const values = new Set(read.map((r) => r.value));
@@ -430,18 +601,28 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
     return read[0];
   });
 
-  const bases = headerBases(rows);
-  if (bases.size !== 1) {
+  if (!model) {
     return {
       outcome: 'no-per-100-column',
       readings,
       warnings: [
-        bases.size === 0
-          ? "Couldn't find a per 100 g or per 100 ml column — enter per-100 values manually."
-          : 'The label mentions both per 100 g and per 100 ml — enter per-100 values manually.',
+        "Couldn't find a single per 100 g or per 100 ml column — enter per-100 values manually.",
       ],
     };
   }
-  const [basisSuggestion] = bases;
-  return { outcome: 'ok', basisSuggestion, readings, warnings: [] };
+  if (model.target.kind === 'serving') {
+    return {
+      outcome: 'per-serving-only',
+      readings,
+      warnings: [
+        'This label lists per-serving values only — enter per-100 values manually.',
+      ],
+    };
+  }
+  return {
+    outcome: 'ok',
+    basisSuggestion: model.target.basis,
+    readings,
+    warnings: [],
+  };
 }

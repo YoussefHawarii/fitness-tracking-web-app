@@ -691,3 +691,11 @@ test('a label scan whose basis differs from the form basis applies nothing', () 
   assert.equal(sameBasis.values.proteinPer100g, '21');
   assert.equal(sameBasis.basisConflict, undefined);
 });
+
+test('a per-serving-only label scan never fills per-100 fields or the basis', () => {
+  const update = extractionFormValuesModule.labelScanToFormUpdate(
+    scanResult({ outcome: 'per-serving-only', basisSuggestion: undefined }),
+    EMPTY_LABEL_FORM,
+  );
+  assert.deepEqual(update, { values: {} });
+});
