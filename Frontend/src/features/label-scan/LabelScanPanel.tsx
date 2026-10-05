@@ -3,7 +3,9 @@ import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import type { LabelFormUpdate } from '../add-product/extractionFormValues';
 import {
   applicableReadings,
+  canApplyLabelSelection,
   defaultLabelSelection,
+  toggleLabelSelection,
 } from '../add-product/extractionFormValues';
 import {
   readLabel,
@@ -124,12 +126,15 @@ export function LabelScanPanel({ preview, onApply }: Props) {
         ensureEngine(),
       ]);
       const layout = await ocr.recognize(prepared);
+      // Parsed before the photo's object URL exists, so a failure here
+      // can't leave one allocated.
+      const result = readLabel(layout);
+      if (thisRun !== run.current) return;
       const reviewImage = await reviewImageOf(prepared);
       if (thisRun !== run.current) {
         URL.revokeObjectURL(reviewImage.url);
         return;
       }
-      const result = readLabel(layout);
       showImage(reviewImage);
       setState({
         kind: 'review',
@@ -227,10 +232,11 @@ export function LabelScanPanel({ preview, onApply }: Props) {
             applicable={review.applicable}
             selected={state.selected}
             onToggle={(field) => {
-              const selected = new Set(state.selected);
-              if (selected.has(field)) selected.delete(field);
-              else selected.add(field);
-              setState({ ...state, selected, appliedNote: undefined });
+              setState({
+                ...state,
+                selected: toggleLabelSelection(state.selected, field),
+                appliedNote: undefined,
+              });
             }}
             conflicts={review.plan.conflicts}
             missingRequired={review.plan.missingRequired}
@@ -241,7 +247,7 @@ export function LabelScanPanel({ preview, onApply }: Props) {
             <PrimaryButton
               type="button"
               className="self-start"
-              disabled={state.selected.size === 0}
+              disabled={!canApplyLabelSelection(state.selected)}
               onClick={() => {
                 setState({
                   ...state,

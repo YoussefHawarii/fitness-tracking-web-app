@@ -177,8 +177,8 @@ export function LabelReview({
           <ul className="flex flex-col gap-1 text-body text-text">
             {conflicts.map((c) => (
               <li key={c.field}>
-                {LABEL_FIELD_NAMES[c.field]}: label says {c.label}, you entered{' '}
-                {c.form}
+                {LABEL_FIELD_NAMES[c.field]}: label says {c.label},{' '}
+                {c.form ? `you entered ${c.form}` : 'you cleared it'}
               </li>
             ))}
           </ul>

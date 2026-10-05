@@ -83,6 +83,10 @@ export function AddProductForm({
   const [scanFilled, setScanFilled] = useState<ReadonlySet<LabelFormField>>(
     new Set(),
   );
+  // User-edited fields: typed into, changed or cleared by the user.
+  const [userEdited, setUserEdited] = useState<ReadonlySet<LabelFormField>>(
+    new Set(),
+  );
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -106,6 +110,9 @@ export function AddProductForm({
     value: string,
   ) {
     set(value);
+    setUserEdited((previous) =>
+      previous.has(field) ? previous : new Set([...previous, field]),
+    );
     setScanFilled((previous) => {
       if (!previous.has(field)) return previous;
       const next = new Set(previous);
@@ -133,6 +140,7 @@ export function AddProductForm({
       basis: declaredNutritionBasis,
       basisSelectedByUser: basisSelectedByUser.current,
       scanFilled,
+      userEdited,
     };
   }
 
@@ -166,9 +174,16 @@ export function AddProductForm({
     };
     const applied = Object.entries(update.values) as [LabelFormField, string][];
     for (const [field, value] of applied) setters[field](value);
-    setScanFilled(
-      (previous) => new Set([...previous, ...applied.map(([field]) => field)]),
-    );
+    // A field cleared by the plan (a stale value after a basis change) is
+    // no longer scan-filled.
+    setScanFilled((previous) => {
+      const next = new Set(previous);
+      for (const [field, value] of applied) {
+        if (value === '') next.delete(field);
+        else next.add(field);
+      }
+      return next;
+    });
     if (update.basis) setDeclaredNutritionBasis(update.basis);
     return applied.length === 0
       ? 'Nothing was applied — the form already has your values.'

@@ -675,18 +675,29 @@ test('Add Product labels sodium in mg for the selected basis', () => {
   );
 });
 
-test('a label scan whose basis differs from the form basis applies nothing', () => {
-  for (const basisSelectedByUser of [true, false]) {
-    const update = extractionFormValuesModule.labelScanToFormUpdate(
-      scanResult({ basisSuggestion: 'PER_100_G' }),
-      { ...EMPTY_LABEL_FORM, basis: 'PER_100_ML', basisSelectedByUser },
-    );
-    assert.deepEqual(update.values, {});
-    assert.deepEqual(update.basisConflict, {
-      label: 'PER_100_G',
-      form: 'PER_100_ML',
-    });
-  }
+test('a label basis that differs from a user-chosen basis applies nothing per-100', () => {
+  const update = extractionFormValuesModule.labelScanToFormUpdate(
+    scanResult({ basisSuggestion: 'PER_100_G' }),
+    { ...EMPTY_LABEL_FORM, basis: 'PER_100_ML', basisSelectedByUser: true },
+  );
+  assert.deepEqual(update.values, {});
+  assert.deepEqual(update.basisConflict, {
+    label: 'PER_100_G',
+    form: 'PER_100_ML',
+  });
+
+  // Not chosen by the user, but per-100 values the user typed would be
+  // reinterpreted by a basis change: also a conflict.
+  const typed = extractionFormValuesModule.labelScanToFormUpdate(
+    scanResult({ basisSuggestion: 'PER_100_G' }),
+    {
+      ...EMPTY_LABEL_FORM,
+      values: { ...EMPTY_LABEL_FORM.values, fatPer100g: '3' },
+      basis: 'PER_100_ML',
+    },
+  );
+  assert.deepEqual(typed.values, {});
+  assert.equal(typed.basisConflict?.label, 'PER_100_G');
 
   const sameBasis = extractionFormValuesModule.labelScanToFormUpdate(
     scanResult({ basisSuggestion: 'PER_100_ML' }),
@@ -962,4 +973,100 @@ test('Add Product shows no "from label" hint before anything is applied', () => 
     }),
   );
   assert.doesNotMatch(html, /from label — check/);
+});
+
+test('a field the user cleared during a scan stays empty, with the conflict listed', () => {
+  const update = extractionFormValuesModule.planLabelApply(PROTEIN_21, {
+    ...FULL_EMPTY_FORM,
+    userEdited: new Set(['proteinPer100g']),
+  });
+  assert.equal(update.values.proteinPer100g, undefined);
+  assert.deepEqual(update.conflicts, [
+    { field: 'proteinPer100g', label: '21', form: '' },
+  ]);
+});
+
+test('a basis set by an earlier scan follows a re-scan, clearing stale scanned values', () => {
+  const update = extractionFormValuesModule.planLabelApply(
+    scanResult({ basisSuggestion: 'PER_100_ML' }),
+    {
+      ...FULL_EMPTY_FORM,
+      values: {
+        ...FULL_EMPTY_FORM.values,
+        proteinPer100g: '18',
+        fiberPer100g: '3',
+      },
+      basis: 'PER_100_G',
+      scanFilled: new Set(['proteinPer100g', 'fiberPer100g']),
+    },
+  );
+  assert.equal(update.basisConflict, undefined);
+  assert.equal(update.basis, 'PER_100_ML');
+  assert.equal(update.values.proteinPer100g, '21');
+  // Fiber came from the earlier (per 100 g) scan and isn't on this one.
+  assert.equal(update.values.fiberPer100g, '');
+});
+
+test('sizes still apply under a basis conflict and compare by number and unit', () => {
+  const sizes = scanResult({
+    basisSuggestion: 'PER_100_G',
+    readings: [
+      {
+        field: 'proteinPer100g',
+        value: 21,
+        unit: 'g',
+        status: 'read',
+        warnings: [],
+      },
+      {
+        field: 'servingSize',
+        value: 30,
+        unit: 'g',
+        status: 'read',
+        warnings: [],
+      },
+      {
+        field: 'packageSize',
+        value: 40,
+        unit: 'g',
+        status: 'read',
+        warnings: [],
+      },
+    ],
+  });
+  const update = extractionFormValuesModule.planLabelApply(sizes, {
+    ...FULL_EMPTY_FORM,
+    values: {
+      ...FULL_EMPTY_FORM.values,
+      packageSize: '40.0',
+      packageUnit: 'G',
+    },
+    basis: 'PER_100_ML',
+    basisSelectedByUser: true,
+    userEdited: new Set(['packageSize', 'packageUnit']),
+  });
+  assert.ok(update.basisConflict);
+  assert.equal(update.values.proteinPer100g, undefined);
+  assert.equal(update.values.servingSize, '30');
+  assert.equal(update.values.servingUnit, 'g');
+  // "40.0 G" typed is the same size as "40 g" scanned: no conflict.
+  assert.deepEqual(update.conflicts, []);
+});
+
+test('selection toggles and Apply is offered only with something selected', () => {
+  const none = new Set();
+  assert.equal(extractionFormValuesModule.canApplyLabelSelection(none), false);
+  const one = extractionFormValuesModule.toggleLabelSelection(
+    none,
+    'proteinPer100g',
+  );
+  assert.deepEqual([...one], ['proteinPer100g']);
+  assert.equal(extractionFormValuesModule.canApplyLabelSelection(one), true);
+  const back = extractionFormValuesModule.toggleLabelSelection(
+    one,
+    'proteinPer100g',
+  );
+  assert.equal(back.size, 0);
+  // The original selection is never mutated.
+  assert.equal(one.size, 1);
 });
