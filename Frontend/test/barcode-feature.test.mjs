@@ -775,3 +775,11 @@ test('a scanned size fills its number and unit together, only into an empty pair
   });
   assert.deepEqual(typedUnit.values, {});
 });
+
+test('a weak scan pre-fills nothing into the form', () => {
+  const update = extractionFormValuesModule.labelScanToFormUpdate(
+    scanResult({ weakScan: true }),
+    EMPTY_LABEL_FORM,
+  );
+  assert.deepEqual(update, { values: {} });
+});

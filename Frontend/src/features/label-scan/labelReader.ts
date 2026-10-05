@@ -81,7 +81,15 @@ export interface LabelScanResult {
   basisSuggestion?: NutritionBasis;
   readings: LabelReading[];
   warnings: string[];
+  // The photo couldn't be read reliably: fewer than two of calories,
+  // protein, carbs and fat passed every check, or the table's words were
+  // recognised with low confidence. Whatever passed is still shown, but
+  // nothing is pre-selected for the form.
+  weakScan?: boolean;
 }
+
+export const WEAK_SCAN_MESSAGE =
+  'Couldn’t read this label reliably — retake closer, flat, and well lit.';
 
 // ---------------------------------------------------------------------------
 // Rows
@@ -560,6 +568,9 @@ function candidatesIn(segment: Segment): Candidate[] {
     if (next?.kind === 'percent') return;
     const unit = unitAt(tokens, i + 1);
     const unitWord = tokens[i + 1]?.word;
+    const before = tokens
+      .slice(Math.max(0, i - 2), i)
+      .map((t) => (t.kind === 'word' ? t.text : t.kind));
     const attached =
       unit !== undefined &&
       unitWord !== undefined &&
@@ -568,7 +579,12 @@ function candidatesIn(segment: Segment): Candidate[] {
       value: token.value,
       unit: attached ? unit.unit : defaultUnit,
       ambiguous: token.ambiguous,
-      lessThan: tokens[i - 1]?.kind === 'less-than',
+      // "<0.5 g", "less than 0.5 g", "أقل من 0.5 جم" state a bound, not a
+      // value.
+      lessThan:
+        before.at(-1) === 'less-than' ||
+        (before[0] === 'less' && before[1] === 'than') ||
+        (before[0] === 'اقل' && before[1] === 'من'),
       word: token.word,
       ...(attached && unitWord !== token.word && { unitWord }),
     });
@@ -658,6 +674,24 @@ function evidenceOf(segment: Segment): LabelEvidence {
   };
 }
 
+const TRACE_WORDS = new Set(['trace', 'traces', 'tr', 'اثار', 'اثر']);
+
+// Below this recognition confidence a number is shown as "needs check"
+// rather than "read". A starting value, to be tuned on real labels.
+export const MIN_NUMBER_CONFIDENCE = 70;
+
+function checkedConfidence(
+  candidate: Candidate,
+  reading: LabelReading,
+): LabelReading {
+  if (candidate.word.confidence >= MIN_NUMBER_CONFIDENCE) return reading;
+  return {
+    ...reading,
+    status: 'needs-check',
+    warnings: [...reading.warnings, 'Not printed clearly — check this value.'],
+  };
+}
+
 function readSegment(
   field: LabelField,
   segment: Segment,
@@ -715,6 +749,16 @@ function readSegment(
   }
 
   if (usable.length === 0) {
+    // "Fat: trace" — a word, not a number, and never read as 0.
+    const trace = segment.tokens.some(
+      (t) =>
+        t.kind === 'word' &&
+        TRACE_WORDS.has(t.text) &&
+        (isQuantity || placeInColumn(t.word.bbox, columns) === columns.target),
+    );
+    if (trace) {
+      return notFound('Printed as “trace” — enter it yourself if needed.');
+    }
     const kj = candidates.filter((c) => c.unit === 'kj');
     if (isEnergy && kj.length === 1) return fromKilojoules(kj[0]);
     if (isEnergy && kj.length > 1) {
@@ -735,7 +779,7 @@ function readSegment(
     return notFound("Couldn't read this number clearly.");
   }
   if (isSodium && candidate.unit === 'g') {
-    return {
+    return checkedConfidence(candidate, {
       field,
       value: Number((candidate.value * 1000).toPrecision(12)),
       unit: 'mg',
@@ -743,16 +787,16 @@ function readSegment(
       warnings: [],
       evidence,
       conversion: 'from-g',
-    };
+    });
   }
-  return {
+  return checkedConfidence(candidate, {
     field,
     value: candidate.value,
     unit: candidate.unit,
     status: 'read',
     warnings: [],
     evidence,
-  };
+  });
 
   // A label printing energy only in kJ: converted (÷ 4.184, to whole kcal)
   // and marked as converted. A kJ number is never used as kcal.
@@ -765,7 +809,7 @@ function readSegment(
     if (c.ambiguous || c.value === undefined) {
       return notFound("Couldn't read this number clearly.");
     }
-    return {
+    return checkedConfidence(c, {
       field,
       value: Math.round(c.value / 4.184),
       unit: 'kcal',
@@ -773,7 +817,7 @@ function readSegment(
       warnings: [],
       evidence,
       conversion: 'from-kj',
-    };
+    });
   }
 }
 
@@ -1178,13 +1222,13 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
       segment,
       reading: readSegment(field, segment, columns),
     }));
-    const read = found.filter((f) => f.reading.status === 'read');
-    if (read.length === 0) {
+    const valued = found.filter((f) => f.reading.value !== undefined);
+    if (valued.length === 0) {
       return (found.find((f) => f.reading.warnings.length > 0) ?? found[0])
         .reading;
     }
-    const values = [...new Set(read.map((f) => f.reading.value as number))];
-    const languages = new Set(read.map((f) => f.segment.arabic));
+    const values = [...new Set(valued.map((f) => f.reading.value as number))];
+    const languages = new Set(valued.map((f) => f.segment.arabic));
     if (values.length > 1) {
       return {
         field,
@@ -1194,13 +1238,15 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
             ? `The English and Arabic text disagree (${values.join(' / ')}) — check the label.`
             : 'The label shows different values for this — check it.',
         ],
-        evidence: read[0].reading.evidence,
+        evidence: valued[0].reading.evidence,
         conflictingValues: values,
       };
     }
+    // Agreeing readings: the clearest one represents them.
+    const best = valued.find((f) => f.reading.status === 'read') ?? valued[0];
     return languages.size > 1
-      ? { ...read[0].reading, confirmedInBothLanguages: true }
-      : read[0].reading;
+      ? { ...best.reading, confirmedInBothLanguages: true }
+      : best.reading;
   }).map((reading) =>
     withQuantityChecks(
       withSaltNote(
@@ -1229,10 +1275,153 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
       ],
     };
   }
+
+  const checked = withPlausibilityChecks(
+    readings,
+    model.target.basis ?? 'PER_100_G',
+  );
+  const tableWords = rows
+    .filter((row) => segmentsOf(row).some((s) => s.keyword.field))
+    .flatMap((row) => row.words);
+  const averageConfidence =
+    tableWords.reduce((sum, w) => sum + w.confidence, 0) /
+    Math.max(1, tableWords.length);
+  const macrosRead = checked.filter(
+    (r) => REQUIRED_MACROS.has(r.field) && r.status === 'read',
+  ).length;
+  const weakScan = macrosRead < 2 || averageConfidence < MIN_TABLE_CONFIDENCE;
   return {
     outcome: 'ok',
     basisSuggestion: model.target.basis,
-    readings,
-    warnings: [],
+    readings: checked,
+    warnings: weakScan ? [WEAK_SCAN_MESSAGE] : [],
+    ...(weakScan && { weakScan }),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Plausibility
+
+const REQUIRED_MACROS: ReadonlySet<LabelField> = new Set([
+  'caloriesPer100g',
+  'proteinPer100g',
+  'carbsPer100g',
+  'fatPer100g',
+]);
+const GRAM_NUTRIENTS: ReadonlySet<LabelField> = new Set([
+  'proteinPer100g',
+  'carbsPer100g',
+  'sugarPer100g',
+  'fatPer100g',
+  'fiberPer100g',
+]);
+// Below this average recognition confidence of the table's words a scan is
+// weak. A starting value, to be tuned on real labels.
+const MIN_TABLE_CONFIDENCE = 60;
+
+// The most a per-100 value can physically be. On a per-100 g label no
+// nutrient can exceed 100 g and energy can't exceed pure fat (~900 kcal);
+// grams per 100 ml can exceed 100 (syrups are denser than water), so the
+// liquid bound is loose.
+function upperBound(
+  field: LabelField,
+  basis: NutritionBasis,
+): number | undefined {
+  if (GRAM_NUTRIENTS.has(field)) return basis === 'PER_100_G' ? 100 : 200;
+  if (field === 'caloriesPer100g') return basis === 'PER_100_G' ? 900 : 950;
+  if (field === 'sodiumMgPer100') return 40000;
+  return undefined;
+}
+
+function flag(reading: LabelReading, warning: string): LabelReading {
+  if (reading.value === undefined || reading.status === 'not-found') {
+    return reading;
+  }
+  return {
+    ...reading,
+    status: 'needs-check',
+    warnings: reading.warnings.includes(warning)
+      ? reading.warnings
+      : [...reading.warnings, warning],
+  };
+}
+
+// Checks the readings against each other and against what a label can
+// physically say. An impossible value is rejected (left empty); values
+// that are possible but don't fit together are kept and marked "needs
+// check" — never silently corrected.
+function withPlausibilityChecks(
+  readings: readonly LabelReading[],
+  basis: NutritionBasis,
+): LabelReading[] {
+  const per = basis === 'PER_100_G' ? '100 g' : '100 ml';
+  let checked = readings.map((reading): LabelReading => {
+    const bound = upperBound(reading.field, basis);
+    if (reading.value === undefined || bound === undefined) return reading;
+    if (reading.value <= bound) return reading;
+    return {
+      field: reading.field,
+      status: 'not-found',
+      warnings: [
+        `${reading.value} ${reading.unit ?? ''} per ${per} isn’t possible — check the label.`,
+      ],
+      ...(reading.evidence && { evidence: reading.evidence }),
+    };
+  });
+
+  const value = (field: LabelField) =>
+    checked.find((r) => r.field === field && r.status !== 'not-found')?.value;
+  const mark = (fields: readonly LabelField[], warning: string) => {
+    checked = checked.map((r) =>
+      fields.includes(r.field) ? flag(r, warning) : r,
+    );
+  };
+
+  const carbs = value('carbsPer100g');
+  const sugars = value('sugarPer100g');
+  // Rounding on the label can make sugars a little above carbs, no more.
+  if (carbs !== undefined && sugars !== undefined && sugars > carbs + 0.5) {
+    mark(
+      ['sugarPer100g', 'carbsPer100g'],
+      'Sugars are more than carbs — check these values.',
+    );
+  }
+
+  const protein = value('proteinPer100g');
+  const fat = value('fatPer100g');
+  if (
+    basis === 'PER_100_G' &&
+    protein !== undefined &&
+    carbs !== undefined &&
+    fat !== undefined &&
+    protein + carbs + fat > 101
+  ) {
+    mark(
+      ['proteinPer100g', 'carbsPer100g', 'fatPer100g'],
+      `Protein, carbs and fat add up to more than 100 g per ${per} — check them.`,
+    );
+  }
+
+  // Energy should match 4 kcal/g protein and carbs and 9 kcal/g fat (plus
+  // up to 2 kcal/g fibre). A mismatch keeps every value but marks all four.
+  const calories = value('caloriesPer100g');
+  if (
+    calories !== undefined &&
+    protein !== undefined &&
+    carbs !== undefined &&
+    fat !== undefined
+  ) {
+    const expected = 4 * protein + 4 * carbs + 9 * fat;
+    const withFiber = expected + 2 * (value('fiberPer100g') ?? 0);
+    const close = (estimate: number) =>
+      Math.abs(calories - estimate) <=
+      Math.max(10, 0.15 * Math.max(calories, estimate));
+    if (!close(expected) && !close(withFiber)) {
+      mark(
+        ['caloriesPer100g', 'proteinPer100g', 'carbsPer100g', 'fatPer100g'],
+        'Calories don’t match protein, carbs and fat — check these values.',
+      );
+    }
+  }
+  return checked;
 }

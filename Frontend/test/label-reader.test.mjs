@@ -78,10 +78,10 @@ test('a clean single-column per 100 g label reads the four macros', () => {
     row(
       80,
       ['Energy', 10],
-      ['1046', 160],
+      ['1473', 160],
       ['kJ', 210],
       ['/', 240],
-      ['250', 260],
+      ['352', 260],
       ['kcal', 300],
     ),
     row(120, ['Protein', 10], ['21', 160], ['g', 190]),
@@ -92,7 +92,7 @@ test('a clean single-column per 100 g label reads the four macros', () => {
   assert.equal(result.outcome, 'ok');
   assert.equal(result.basisSuggestion, 'PER_100_G');
   assert.deepEqual(values(result), {
-    caloriesPer100g: 250,
+    caloriesPer100g: 352,
     proteinPer100g: 21,
     carbsPer100g: 40,
     fatPer100g: 12,
@@ -322,9 +322,9 @@ test('a per serving | per 100 g | %RI table reads only the per-100 g column', ()
     row(
       80,
       ['Energy', 10],
-      ['75', 200],
+      ['106', 200],
       ['kcal', 230],
-      ['250', 420],
+      ['352', 420],
       ['kcal', 455],
       ['13%', 570],
     ),
@@ -381,7 +381,7 @@ test('a per serving | per 100 g | %RI table reads only the per-100 g column', ()
   assert.equal(result.outcome, 'ok');
   assert.equal(result.basisSuggestion, 'PER_100_G');
   assert.deepEqual(values(result), {
-    caloriesPer100g: 250,
+    caloriesPer100g: 352,
     proteinPer100g: 21,
     carbsPer100g: 40,
     fatPer100g: 12,
@@ -734,7 +734,7 @@ test('Arabic digits, the Arabic decimal separator and decimal commas parse', () 
 test('an Arabic-only per 100 g label reads every macro', () => {
   const result = read(
     row(40, ['لكل', 300], ['١٠٠', 240], ['جم', 200]),
-    row(80, ['طاقة', 300], ['٢٥٠', 220], ['سعر', 170], ['حراري', 110]),
+    row(80, ['طاقة', 300], ['٣٥٧', 220], ['سعر', 170], ['حراري', 110]),
     row(120, ['بروتين', 300], ['٢١', 200], ['جم', 160]),
     row(160, ['كربوهيدرات', 300], ['٤٠', 200], ['جم', 160]),
     row(200, ['دهون', 300], ['١٢٫٥', 190], ['جم', 140]),
@@ -743,7 +743,7 @@ test('an Arabic-only per 100 g label reads every macro', () => {
   assert.equal(result.outcome, 'ok');
   assert.equal(result.basisSuggestion, 'PER_100_G');
   assert.deepEqual(values(result), {
-    caloriesPer100g: 250,
+    caloriesPer100g: 357,
     proteinPer100g: 21,
     carbsPer100g: 40,
     fatPer100g: 12.5,
@@ -1192,4 +1192,151 @@ test('the salt note appears only when no sodium row is printed', () => {
     sodium.warnings.some((w) => /salt/i.test(w)),
     false,
   );
+});
+
+// --- Confidence, plausibility and weak scans (#35) -----------------------
+
+// A consistent per 100 g table: 352 kcal ≈ 4·21 + 4·40 + 9·12.
+const CONSISTENT_ROWS = [
+  row(80, ['Energy', 10], ['352', 160], ['kcal', 200]),
+  row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  row(160, ['Carbohydrate', 10], ['40', 160], ['g', 190]),
+  row(200, ['Fat', 10], ['12', 160], ['g', 190]),
+];
+
+test('"<0.5 g", "less than", "أقل من" and "trace" stay empty, never 0', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    ...CONSISTENT_ROWS,
+    row(
+      240,
+      ['Fibre', 10],
+      ['less', 160],
+      ['than', 200],
+      ['0.5', 250],
+      ['g', 285],
+    ),
+    row(270, ['of', 30], ['which', 60], ['sugars', 120], ['trace', 200]),
+  );
+  for (const field of ['fiberPer100g', 'sugarPer100g']) {
+    const r = reading(result, field);
+    assert.equal(r.status, 'not-found', field);
+    assert.equal(r.value, undefined, field);
+    assert.equal(r.warnings.length, 1, field);
+  }
+
+  const arabic = read(
+    row(40, ['لكل', 300], ['١٠٠', 240], ['جم', 200]),
+    row(
+      240,
+      ['الياف', 330],
+      ['أقل', 270],
+      ['من', 240],
+      ['٠٫٥', 200],
+      ['جم', 160],
+    ),
+  );
+  assert.equal(reading(arabic, 'fiberPer100g').value, undefined);
+  assert.match(reading(arabic, 'fiberPer100g').warnings[0], /less than/);
+});
+
+test('a number recognised with low confidence needs a check', () => {
+  const words = [...PER_100_G_HEADER, ...CONSISTENT_ROWS.flat()].map((w) =>
+    w.text === '21' ? { ...w, confidence: 55 } : w,
+  );
+  const result = reader.readLabel({ words });
+  const protein = reading(result, 'proteinPer100g');
+  assert.equal(protein.value, 21);
+  assert.equal(protein.status, 'needs-check');
+  assert.match(protein.warnings[0], /clearly/);
+});
+
+test('an impossible per 100 g value is rejected; per 100 ml is not capped at 100', () => {
+  const grams = read(
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['120', 160], ['g', 200]),
+  );
+  const protein = reading(grams, 'proteinPer100g');
+  assert.equal(protein.status, 'not-found');
+  assert.equal(protein.value, undefined);
+  assert.match(protein.warnings[0], /isn’t possible/);
+
+  const syrup = read(
+    row(40, ['per', 160], ['100', 195], ['ml', 230]),
+    row(160, ['Carbohydrate', 10], ['110', 160], ['g', 200]),
+  );
+  assert.equal(reading(syrup, 'carbsPer100g').value, 110);
+  assert.notEqual(reading(syrup, 'carbsPer100g').status, 'not-found');
+});
+
+test('sugars more than slightly above carbs need a check', () => {
+  const over = read(
+    PER_100_G_HEADER,
+    row(160, ['Carbohydrate', 10], ['12', 160], ['g', 190]),
+    row(190, ['Sugars', 10], ['24', 160], ['g', 190]),
+  );
+  assert.equal(reading(over, 'sugarPer100g').status, 'needs-check');
+  assert.equal(reading(over, 'carbsPer100g').status, 'needs-check');
+
+  const rounding = read(
+    PER_100_G_HEADER,
+    row(160, ['Carbohydrate', 10], ['12', 160], ['g', 190]),
+    row(190, ['Sugars', 10], ['12.4', 160], ['g', 200]),
+  );
+  assert.equal(reading(rounding, 'sugarPer100g').status, 'read');
+});
+
+test('energy that doesn’t match the macros marks all four but keeps them', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(80, ['Energy', 10], ['250', 160], ['kcal', 200]),
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+    row(160, ['Carbohydrate', 10], ['40', 160], ['g', 190]),
+    row(200, ['Fat', 10], ['12', 160], ['g', 190]),
+  );
+  for (const field of MACROS) {
+    const r = reading(result, field);
+    assert.equal(r.status, 'needs-check', field);
+    assert.notEqual(r.value, undefined, field);
+  }
+  // Two macros still "read" isn't possible here, so the scan is weak.
+  assert.equal(result.weakScan, true);
+
+  const consistent = read(PER_100_G_HEADER, ...CONSISTENT_ROWS);
+  for (const field of MACROS) {
+    assert.equal(reading(consistent, field).status, 'read', field);
+  }
+  assert.equal(consistent.weakScan, undefined);
+});
+
+test('fibre counted in energy (2 kcal/g) still matches', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(80, ['Energy', 10], ['412', 160], ['kcal', 200]),
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+    row(160, ['Carbohydrate', 10], ['40', 160], ['g', 190]),
+    row(200, ['Fat', 10], ['12', 160], ['g', 190]),
+    row(240, ['Fibre', 10], ['30', 160], ['g', 190]),
+  );
+  assert.equal(reading(result, 'caloriesPer100g').status, 'read');
+});
+
+test('fewer than two required macros passing makes a weak scan', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.weakScan, true);
+  assert.equal(result.warnings[0], reader.WEAK_SCAN_MESSAGE);
+  // What passed is still there to show.
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('a table recognised with low confidence overall is a weak scan', () => {
+  const words = [...PER_100_G_HEADER, ...CONSISTENT_ROWS.flat()].map((w) =>
+    /^[A-Za-z]/.test(w.text) && w.bbox.y0 >= 80 ? { ...w, confidence: 20 } : w,
+  );
+  const result = reader.readLabel({ words });
+  assert.equal(result.weakScan, true);
 });

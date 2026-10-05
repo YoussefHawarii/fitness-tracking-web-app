@@ -45,6 +45,8 @@ export function labelScanToFormUpdate(
   // Only readings from a column the label headed per 100 g / 100 ml may
   // fill a per-100 field (ADR 0009); anything else is reference only.
   if (result.outcome !== 'ok') return { values: {} };
+  // A weak scan pre-selects nothing: the user decides what to keep.
+  if (result.weakScan) return { values: {} };
   if (
     state.basis !== '' &&
     result.basisSuggestion !== undefined &&

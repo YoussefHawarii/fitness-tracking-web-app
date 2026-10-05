@@ -227,7 +227,7 @@ export function LabelScanPanel({ onApply }: Props) {
             <PrimaryButton
               type="button"
               className="self-start"
-              disabled={state.result.outcome !== 'ok'}
+              disabled={state.result.outcome !== 'ok' || state.result.weakScan}
               onClick={() => {
                 setState({ ...state, appliedNote: onApply(state.result) });
               }}
