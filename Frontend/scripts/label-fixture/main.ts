@@ -28,9 +28,11 @@ function fixtureTemplate(photoName: string, layout: OcrLayout) {
       // true only for a sharp, flat, well-lit photo — the 80% recall
       // target is measured on these.
       clear: TODO,
-      // Every value as printed on the label: per 100 (sodium in mg,
-      // calories in kcal), serving and package size as numbers in the
-      // label's unit. null for anything the label does not print.
+      // Every value as printed on the label, from its per-100 column — or,
+      // on a per-serving-only label, its per-serving column (sodium in mg,
+      // calories in kcal). Serving and package size as
+      // { "value": 30, "unit": "g" } with unit g, kg, ml, l or cl. null
+      // for anything the label does not print.
       values: {
         caloriesPer100g: TODO,
         proteinPer100g: TODO,

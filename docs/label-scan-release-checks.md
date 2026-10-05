@@ -17,10 +17,14 @@ memory, cellular download time, or the CSP with real third-party sign-in.
    the on-device engine and the self-hosted language data. Nothing is
    uploaded. Each photo downloads as a `<name>.json` fixture.
 3. Put the downloads in `test/fixtures/labels/pending/` (gitignored). Fill
-   in every `TODO` from the printed label, never from the OCR output. That
-   means every per-100 value, the serving size and the package size, with
-   `null` for anything not printed. Review the whole file, then move it
-   into `test/fixtures/labels/`.
+   in every `TODO` from the printed label, never from the OCR output:
+   - every nutrient value from the per-100 column, or from the per-serving
+     column on a per-serving-only label;
+   - the serving size and the package size with their printed unit, for
+     example `{ "value": 30, "unit": "g" }`;
+   - `null` for anything not printed.
+
+   Review the whole file, then move it into `test/fixtures/labels/`.
 4. Photos are not committed unless the owner chooses to commit them.
 5. Run `npm test`. `test/label-fixtures.test.mjs` checks every committed
    fixture against the release targets:

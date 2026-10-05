@@ -22,6 +22,10 @@ const MACROS = [
   'fatPer100g',
 ];
 const RECALL_TARGET = 0.8;
+// Serving and package sizes are recorded with their printed unit, which the
+// form applies along with the number.
+const SIZE_FIELDS = ['servingSize', 'packageSize'];
+const SIZE_UNITS = ['g', 'kg', 'ml', 'l', 'cl'];
 // A calorie value converted from kJ is compared to the printed kcal to
 // within rounding.
 const KJ_CONVERSION_TOLERANCE = 1;
@@ -85,7 +89,16 @@ for (const fixture of fixtures) {
       [...reader.LABEL_FIELDS].sort(),
     );
     for (const [field, value] of Object.entries(truth.values)) {
-      assert.ok(value === null || typeof value === 'number', field);
+      if (SIZE_FIELDS.includes(field)) {
+        assert.ok(
+          value === null ||
+            (typeof value?.value === 'number' &&
+              SIZE_UNITS.includes(value.unit)),
+          field,
+        );
+      } else {
+        assert.ok(value === null || typeof value === 'number', field);
+      }
     }
     assert.ok(Array.isArray(layout.words) && layout.words.length > 0);
   });
@@ -95,9 +108,14 @@ for (const fixture of fixtures) {
     for (const reading of result.readings) {
       if (reading.status !== 'read') continue;
       const printed = truth.values[reading.field];
+      const matches = SIZE_FIELDS.includes(reading.field)
+        ? printed !== null &&
+          sameValue(reading, printed.value) &&
+          reading.unit === printed.unit
+        : printed !== null && sameValue(reading, printed);
       assert.ok(
-        printed !== null && sameValue(reading, printed),
-        `${reading.field} read as ${reading.value}, label prints ${printed}`,
+        matches,
+        `${reading.field} read as ${reading.value} ${reading.unit ?? ''}, label prints ${JSON.stringify(printed)}`,
       );
     }
   });
