@@ -36,10 +36,10 @@ function toNumber(v: string): number | undefined {
 // Labels print sodium in milligrams, so the form collects it in mg, but the
 // stored Sodium value (and the create-product API) is grams per 100 base
 // units — the convention Open Food Facts data already uses. Convert only at
-// this submission boundary; rounding to 6 decimals strips float noise
-// (e.g. 123.4 / 1000) without losing any precision a label can print.
+// this submission boundary. Rounding to 12 significant digits strips float
+// noise (123.4 / 1000) without zeroing any small positive value.
 export function sodiumMgToGrams(mg: number): number {
-  return Number((mg / 1000).toFixed(6));
+  return Number((mg / 1000).toPrecision(12));
 }
 
 // Builds the create-product request from already-validated form fields: the

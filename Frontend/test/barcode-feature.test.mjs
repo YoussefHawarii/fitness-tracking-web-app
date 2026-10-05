@@ -699,6 +699,14 @@ test('Add Product submits sodium typed in mg as grams per 100', () => {
     ).sodiumPer100g,
     0.1234,
   );
+  assert.equal(
+    addProductGuardModule.buildPackagedProductInput(
+      '6221007012345',
+      { ...ADD_PRODUCT_FIELDS, sodiumMgPer100: '0.0004' },
+      'PER_100_ML',
+    ).sodiumPer100g,
+    0.0000004,
+  );
 });
 
 test('Add Product submits a typed 0 mg sodium as 0 and omits a blank one', () => {
