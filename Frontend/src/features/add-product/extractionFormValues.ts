@@ -17,6 +17,10 @@ export interface LabelFormState {
 export interface LabelFormUpdate {
   values: Partial<LabelFormValues>;
   basis?: NutritionBasis;
+  // Set when the form already has a different basis than the label states:
+  // the label's per-100 values would be filed under the wrong denominator,
+  // so none are applied and the user decides.
+  basisConflict?: { label: NutritionBasis; form: NutritionBasis };
 }
 
 export function labelScanToFormUpdate(
@@ -26,6 +30,16 @@ export function labelScanToFormUpdate(
   // Only readings from a column the label headed per 100 g / 100 ml may
   // fill a per-100 field (ADR 0009); anything else is reference only.
   if (result.outcome !== 'ok') return { values: {} };
+  if (
+    state.basis !== '' &&
+    result.basisSuggestion !== undefined &&
+    state.basis !== result.basisSuggestion
+  ) {
+    return {
+      values: {},
+      basisConflict: { label: result.basisSuggestion, form: state.basis },
+    };
+  }
 
   const values: Partial<LabelFormValues> = {};
   for (const reading of result.readings) {

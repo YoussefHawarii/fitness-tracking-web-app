@@ -34,11 +34,14 @@ type PanelState =
   | { kind: 'closed' }
   | { kind: 'choosing' }
   | { kind: 'recognizing' }
-  | { kind: 'review'; result: LabelScanResult; applied: boolean }
+  // `appliedNote` is set once Apply was pressed: what the form did with it.
+  | { kind: 'review'; result: LabelScanResult; appliedNote?: string }
   | { kind: 'error'; message: string };
 
 interface Props {
-  onApply: (result: LabelScanResult) => void;
+  // Applies the result to the form and returns a note describing what
+  // happened, shown in place of the Apply button.
+  onApply: (result: LabelScanResult) => string;
 }
 
 export function LabelReviewList({ result }: { result: LabelScanResult }) {
@@ -86,14 +89,24 @@ export function LabelScanPanel({ onApply }: Props) {
 
   useEffect(() => stopEngine, []);
 
+  // One engine per scanning session. A load that fails is forgotten so the
+  // next scan can retry — but only if it is still the current engine, so a
+  // late failure never orphans a newer worker that close() must terminate.
+  function ensureEngine(): Promise<OcrEngine> {
+    if (engine.current) return engine.current;
+    const created = createTesseractEngine(setProgress);
+    engine.current = created;
+    created.catch(() => {
+      if (engine.current === created) engine.current = null;
+    });
+    return created;
+  }
+
   function open() {
     setState({ kind: 'choosing' });
     // Start loading the engine as soon as scanning is opened, so it is
     // ready sooner while the user takes the photo.
-    engine.current ??= createTesseractEngine(setProgress);
-    engine.current.catch(() => {
-      engine.current = null;
-    });
+    void ensureEngine().catch(() => undefined);
   }
 
   function close() {
@@ -106,14 +119,13 @@ export function LabelScanPanel({ onApply }: Props) {
     const thisRun = ++run.current;
     setState({ kind: 'recognizing' });
     try {
-      engine.current ??= createTesseractEngine(setProgress);
       const [image, ocr] = await Promise.all([
         prepareLabelImage(file),
-        engine.current,
+        ensureEngine(),
       ]);
       const layout = await ocr.recognize(image);
       if (thisRun !== run.current) return;
-      setState({ kind: 'review', result: readLabel(layout), applied: false });
+      setState({ kind: 'review', result: readLabel(layout) });
     } catch (err) {
       if (thisRun !== run.current) return;
       setState({
@@ -190,19 +202,15 @@ export function LabelScanPanel({ onApply }: Props) {
       {state.kind === 'review' && (
         <>
           <LabelReviewList result={state.result} />
-          {state.applied ? (
-            <p className="text-body text-text-muted">
-              Applied to the form — check the values before creating the
-              product.
-            </p>
+          {state.appliedNote ? (
+            <p className="text-body text-text-muted">{state.appliedNote}</p>
           ) : (
             <PrimaryButton
               type="button"
               className="self-start"
               disabled={state.result.outcome !== 'ok'}
               onClick={() => {
-                onApply(state.result);
-                setState({ ...state, applied: true });
+                setState({ ...state, appliedNote: onApply(state.result) });
               }}
             >
               Apply

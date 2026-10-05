@@ -24,6 +24,11 @@ interface Props {
   onCancel?: () => void;
 }
 
+const BASIS_NAMES: Record<NutritionBasis, string> = {
+  PER_100_G: '100 g',
+  PER_100_ML: '100 ml',
+};
+
 export function validateNonNegative(v: string, label: string): string | null {
   if (v.trim() === '') return null;
   const n = Number(v);
@@ -74,12 +79,15 @@ export function AddProductForm({
     return Number.isFinite(n) ? n : undefined;
   }
 
-  function handleApplyLabelScan(result: LabelScanResult) {
+  function handleApplyLabelScan(result: LabelScanResult): string {
     const update = labelScanToFormUpdate(result, {
       values: { caloriesPer100g, proteinPer100g, carbsPer100g, fatPer100g },
       basis: declaredNutritionBasis,
       basisSelectedByUser: basisSelectedByUser.current,
     });
+    if (update.basisConflict) {
+      return `The label lists values per ${BASIS_NAMES[update.basisConflict.label]}, but the form is set to per ${BASIS_NAMES[update.basisConflict.form]} — nothing was applied. Change the basis or enter the values yourself.`;
+    }
     if (update.values.caloriesPer100g !== undefined)
       setCaloriesPer100g(update.values.caloriesPer100g);
     if (update.values.proteinPer100g !== undefined)
@@ -89,6 +97,7 @@ export function AddProductForm({
     if (update.values.fatPer100g !== undefined)
       setFatPer100g(update.values.fatPer100g);
     if (update.basis) setDeclaredNutritionBasis(update.basis);
+    return 'Applied to the form — check the values before creating the product.';
   }
 
   async function handleSubmit(e: React.FormEvent) {

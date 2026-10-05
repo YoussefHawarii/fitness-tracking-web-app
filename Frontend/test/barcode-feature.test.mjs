@@ -671,3 +671,23 @@ test('Add Product labels sodium in mg for the selected basis', () => {
     'Sodium must be 0 or more.',
   );
 });
+
+test('a label scan whose basis differs from the form basis applies nothing', () => {
+  for (const basisSelectedByUser of [true, false]) {
+    const update = extractionFormValuesModule.labelScanToFormUpdate(
+      scanResult({ basisSuggestion: 'PER_100_G' }),
+      { ...EMPTY_LABEL_FORM, basis: 'PER_100_ML', basisSelectedByUser },
+    );
+    assert.deepEqual(update, {
+      values: {},
+      basisConflict: { label: 'PER_100_G', form: 'PER_100_ML' },
+    });
+  }
+
+  const sameBasis = extractionFormValuesModule.labelScanToFormUpdate(
+    scanResult({ basisSuggestion: 'PER_100_ML' }),
+    { ...EMPTY_LABEL_FORM, basis: 'PER_100_ML', basisSelectedByUser: true },
+  );
+  assert.equal(sameBasis.values.proteinPer100g, '21');
+  assert.equal(sameBasis.basisConflict, undefined);
+});

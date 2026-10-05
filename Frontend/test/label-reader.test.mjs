@@ -256,3 +256,32 @@ test('Tesseract blocks flatten to words, dropping empty ones', () => {
   });
   assert.deepEqual(layout.layoutFromBlocks(null), { words: [] });
 });
+
+test('mono-, poly- and unsaturated fat rows never fill total fat', () => {
+  for (const words of [
+    [
+      ['Monounsaturated', 10],
+      ['fat', 180],
+    ],
+    [
+      ['Polyunsaturated', 10],
+      ['fat', 180],
+    ],
+    [
+      ['Unsaturated', 10],
+      ['fat', 140],
+    ],
+    [
+      ['Trans', 10],
+      ['fat', 80],
+    ],
+  ]) {
+    const result = read(
+      PER_100_G_HEADER,
+      row(240, ...words, ['5', 260], ['g', 290]),
+    );
+    const fat = reading(result, 'fatPer100g');
+    assert.equal(fat.status, 'not-found', words[0][0]);
+    assert.equal(fat.value, undefined, words[0][0]);
+  }
+});
