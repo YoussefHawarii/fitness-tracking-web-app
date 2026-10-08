@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { after, before, test as baseTest } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { createServer } from 'vite';
+
+// A regressed run fails fast instead of hanging `npm test`.
+const test = (name, fn) => baseTest(name, { timeout: 5000 }, fn);
 
 // The label-scan panel mounted in a DOM with a fake session engine: the
 // worker and the review photo are released when the form unmounts (which
 // is what happens after the product is created), cancel closes scanning,
-// a failed load offers "Try again", and review choices start fresh on
-// every retake.
+// a failed load offers "Try again", review choices start fresh on every
+// retake, and a chosen photo is shown with a crop box so the user reads
+// either the selected area or the whole photo.
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   pretendToBeVisual: true,
@@ -24,6 +28,36 @@ for (const key of [
 ]) {
   globalThis[key] = key === 'window' ? dom.window : dom.window[key];
 }
+// jsdom has no PointerEvent and no pointer capture. React dispatches
+// onPointerDown/Move/Up by the native event's type, so a MouseEvent
+// subclass carrying the pointer fields is enough; capture is a no-op, and
+// the tests send every move and up to the element the drag started on, as
+// capture would in a browser.
+class PointerEvent extends dom.window.MouseEvent {
+  constructor(type, init = {}) {
+    super(type, init);
+    this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? 'touch';
+    this.isPrimary = init.isPrimary ?? true;
+  }
+}
+dom.window.PointerEvent = PointerEvent;
+globalThis.PointerEvent = PointerEvent;
+// Capture is recorded but not enforced: the tests send every move and up to
+// the element the drag started on, as capture would in a browser.
+const captured = new WeakMap();
+Object.assign(dom.window.Element.prototype, {
+  setPointerCapture(id) {
+    if (!captured.has(this)) captured.set(this, new Set());
+    captured.get(this).add(id);
+  },
+  releasePointerCapture(id) {
+    captured.get(this)?.delete(id);
+  },
+  hasPointerCapture(id) {
+    return captured.get(this)?.has(id) ?? false;
+  },
+});
 if (!('navigator' in globalThis)) {
   Object.defineProperty(globalThis, 'navigator', {
     value: dom.window.navigator,
@@ -105,7 +139,12 @@ function fakeSession() {
       const load = deferred();
       const engine = {
         terminated: 0,
-        recognize: async () => LAYOUT,
+        // The options of every recognition, in order.
+        recognized: [],
+        recognize: async (_image, options) => {
+          engine.recognized.push(options);
+          return LAYOUT;
+        },
         async terminate() {
           engine.terminated += 1;
         },
@@ -152,12 +191,13 @@ function button(container, text) {
 }
 
 async function click(element) {
+  assert.ok(element, 'the element to click is shown');
   await act(async () => {
     element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
 
-async function openAndReview(fake, container) {
+async function openAndCrop(fake, container) {
   await click(button(container, 'Scan nutrition label'));
   await settle();
   fake.engines[0].load.resolve();
@@ -165,6 +205,12 @@ async function openAndReview(fake, container) {
   await act(async () => {
     await fake.session.scan('photo');
   });
+}
+
+async function openAndReview(fake, container) {
+  await openAndCrop(fake, container);
+  await click(button(container, 'Read whole photo'));
+  await settle();
 }
 
 test('unmounting the form terminates the worker and releases the review photo', async () => {
@@ -220,6 +266,8 @@ test('review choices start fresh on every retake', async () => {
   await act(async () => {
     await fake.session.scan('retake');
   });
+  await click(button(container, 'Read whole photo'));
+  await settle();
   assert.equal(proteinBox().checked, true);
   // The earlier review photo was released when the retake started.
   assert.deepEqual(fake.released, ['blob:review-0']);
@@ -235,4 +283,374 @@ test('Apply is disabled once nothing is selected', async () => {
   }
   assert.equal(button(container, 'Apply selected').disabled, true);
   await act(async () => root.unmount());
+});
+
+// --- The crop step ---
+
+// The prepared photo is 1000 × 600 (see fakeSession). jsdom has no layout,
+// so every element is measured as the photo's displayed box: `width` ×
+// `height` CSS pixels whose top-left corner sits at (20, 10) in the
+// viewport. Whatever element the panel measures, a drag of d CSS pixels
+// is d × 1000 / width photo pixels.
+const DISPLAY_LEFT = 20;
+const DISPLAY_TOP = 10;
+
+// Only the photo's frame -- the element showing the photo, or an ancestor
+// of it that doesn't also hold the read buttons -- is measured as the
+// displayed photo. Every other element (the crop box, its handles, the
+// panel) measures as a decoy box, so a panel that measures the wrong
+// element fails here as it would on a phone.
+const DECOY = { left: 3, top: 4, width: 137, height: 59 };
+
+function isPhotoFrame(el) {
+  const doc = el.ownerDocument;
+  const photo = [...doc.querySelectorAll('[src], [style]')].find((e) =>
+    /blob:review-/.test(
+      (e.getAttribute('src') ?? '') + (e.getAttribute('style') ?? ''),
+    ),
+  );
+  if (!photo || !el.contains(photo)) return false;
+  return ![...el.querySelectorAll('button')].some((b) =>
+    /^Read (selected area|whole photo)$/.test(b.textContent),
+  );
+}
+
+function displayAt(width, height) {
+  const proto = dom.window.Element.prototype;
+  const htmlProto = dom.window.HTMLElement.prototype;
+  const saved = [];
+  const box = (el) =>
+    isPhotoFrame(el)
+      ? { left: DISPLAY_LEFT, top: DISPLAY_TOP, width, height }
+      : DECOY;
+  const sized = {
+    clientWidth: (el) => box(el).width,
+    clientHeight: (el) => box(el).height,
+    offsetWidth: (el) => box(el).width,
+    offsetHeight: (el) => box(el).height,
+  };
+  for (const [name, measure] of Object.entries(sized)) {
+    for (const target of [proto, htmlProto]) {
+      saved.push([target, name, Object.getOwnPropertyDescriptor(target, name)]);
+      Object.defineProperty(target, name, {
+        configurable: true,
+        get() {
+          return measure(this);
+        },
+      });
+    }
+  }
+  saved.push([
+    proto,
+    'getBoundingClientRect',
+    Object.getOwnPropertyDescriptor(proto, 'getBoundingClientRect'),
+  ]);
+  Object.defineProperty(proto, 'getBoundingClientRect', {
+    configurable: true,
+    writable: true,
+    value() {
+      const { left, top, width: w, height: h } = box(this);
+      return {
+        left,
+        top,
+        right: left + w,
+        bottom: top + h,
+        x: left,
+        y: top,
+        width: w,
+        height: h,
+        toJSON() {},
+      };
+    },
+  });
+  return () => {
+    for (const [target, name, descriptor] of saved.reverse()) {
+      if (descriptor) Object.defineProperty(target, name, descriptor);
+      else delete target[name];
+    }
+  };
+}
+
+function labelled(container, pattern) {
+  return [...container.querySelectorAll('[aria-label]')].filter((el) =>
+    pattern.test(el.getAttribute('aria-label')),
+  );
+}
+
+// The crop box: the element labelled as the crop area (not a handle).
+function cropBox(container) {
+  const [box] = labelled(container, /crop/i).filter(
+    (el) => !/resize/i.test(el.getAttribute('aria-label')),
+  );
+  return box;
+}
+
+// The handle that resizes from the bottom-right corner: the only resize
+// handle, or the one labelled bottom right.
+function cornerHandle(container) {
+  const handles = labelled(container, /resize/i);
+  return handles.length === 1
+    ? handles[0]
+    : handles.find((el) =>
+        /bottom.?right/i.test(el.getAttribute('aria-label')),
+      );
+}
+
+function pointer(element, type, clientX, clientY) {
+  element.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      clientX,
+      clientY,
+      button: 0,
+      buttons: type === 'pointerup' ? 0 : 1,
+    }),
+  );
+}
+
+// Drags from one viewport point to another in a few steps, as a finger
+// would.
+async function drag(element, [fromX, fromY], [toX, toY]) {
+  assert.ok(element, 'the element to drag is shown');
+  await act(async () => pointer(element, 'pointerdown', fromX, fromY));
+  for (const step of [1, 2, 3]) {
+    await act(async () =>
+      pointer(
+        element,
+        'pointermove',
+        fromX + ((toX - fromX) * step) / 3,
+        fromY + ((toY - fromY) * step) / 3,
+      ),
+    );
+  }
+  await act(async () => pointer(element, 'pointerup', toX, toY));
+}
+
+test('a chosen photo is shown with a crop box and both read buttons, before anything is read', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  await openAndCrop(fake, container);
+  await settle();
+
+  assert.ok(
+    container.innerHTML.includes('blob:review-0'),
+    'the chosen photo is shown',
+  );
+  assert.ok(cropBox(container), 'a crop box is shown');
+  assert.ok(button(container, 'Read selected area'));
+  assert.ok(button(container, 'Read whole photo'));
+  assert.deepEqual(fake.engines[0].engine.recognized, []);
+  assert.doesNotMatch(container.textContent, /Apply selected/);
+  await act(async () => root.unmount());
+});
+
+test('"Read whole photo" reads the whole photo and shows the review', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  await openAndCrop(fake, container);
+  await click(button(container, 'Read whole photo'));
+  await settle();
+  assert.deepEqual(fake.engines[0].engine.recognized, [undefined]);
+  assert.match(container.textContent, /Apply selected/);
+  await act(async () => root.unmount());
+});
+
+test('"Read selected area" with the default box reads the whole photo as a region', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  const restore = displayAt(500, 300);
+  try {
+    await openAndCrop(fake, container);
+    await click(button(container, 'Read selected area'));
+    await settle();
+    assert.deepEqual(fake.engines[0].engine.recognized, [
+      { region: { left: 0, top: 0, width: 1000, height: 600 } },
+    ]);
+    assert.match(container.textContent, /Apply selected/);
+  } finally {
+    restore();
+    await act(async () => root.unmount());
+  }
+});
+
+for (const [width, height] of [
+  [500, 300],
+  [250, 150],
+]) {
+  test(`resizing and moving the crop box changes the region read, in photo pixels (shown at ${width}×${height})`, async () => {
+    const fake = fakeSession();
+    const { container, root } = await mount(fake.session);
+    const restore = displayAt(width, height);
+    // CSS pixels per photo pixel.
+    const k = width / 1000;
+    const at = (x, y) => [DISPLAY_LEFT + x * k, DISPLAY_TOP + y * k];
+    try {
+      await openAndCrop(fake, container);
+      const handle = cornerHandle(container);
+      assert.ok(handle, 'the crop box has a corner resize handle');
+
+      // Bottom-right corner from (1000, 600) to (500, 300): the box is now
+      // the top-left quarter of the photo.
+      await drag(handle, at(1000, 600), at(500, 300));
+      // Then move it by (200, 100), grabbing it inside.
+      await drag(cropBox(container), at(250, 150), at(450, 250));
+
+      await click(button(container, 'Read selected area'));
+      await settle();
+      assert.deepEqual(fake.engines[0].engine.recognized, [
+        { region: { left: 200, top: 100, width: 500, height: 300 } },
+      ]);
+    } finally {
+      restore();
+      await act(async () => root.unmount());
+    }
+  });
+}
+
+test('the crop box cannot be moved off the photo', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  const restore = displayAt(500, 300);
+  const at = (x, y) => [DISPLAY_LEFT + x / 2, DISPLAY_TOP + y / 2];
+  try {
+    await openAndCrop(fake, container);
+    await drag(cornerHandle(container), at(1000, 600), at(500, 300));
+    // Dragged far past the bottom-right edge: it stops at the edge.
+    await drag(cropBox(container), at(250, 150), at(2250, 1150));
+    await click(button(container, 'Read selected area'));
+    await settle();
+    assert.deepEqual(fake.engines[0].engine.recognized, [
+      { region: { left: 500, top: 300, width: 500, height: 300 } },
+    ]);
+  } finally {
+    restore();
+    await act(async () => root.unmount());
+  }
+});
+
+test('choosing another photo while cropping shows the new photo and releases the old one', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  await openAndCrop(fake, container);
+  assert.match(container.textContent, /take photo/i);
+  assert.match(container.textContent, /choose (another )?photo/i);
+
+  const input = container.querySelector('input[type="file"]:not([capture])');
+  Object.defineProperty(input, 'files', {
+    configurable: true,
+    value: [new dom.window.Blob(['another'])],
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await settle();
+
+  assert.deepEqual(fake.released, ['blob:review-0']);
+  assert.ok(container.innerHTML.includes('blob:review-1'));
+  assert.ok(button(container, 'Read whole photo'));
+  assert.deepEqual(fake.engines[0].engine.recognized, []);
+  await act(async () => root.unmount());
+});
+
+test('cancel while cropping closes scanning, releases the photo and reads nothing', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  await openAndCrop(fake, container);
+  const cancel =
+    button(container, 'Cancel') ?? button(container, 'Close scanner');
+  await click(cancel);
+  await settle();
+  assert.ok(button(container, 'Scan nutrition label'));
+  assert.equal(fake.engines[0].engine.terminated, 1);
+  assert.deepEqual(fake.released, ['blob:review-0']);
+  assert.deepEqual(fake.engines[0].engine.recognized, []);
+  await act(async () => root.unmount());
+});
+
+test('the privacy note is shown while cropping', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  await openAndCrop(fake, container);
+  assert.ok(
+    button(container, 'Read whole photo'),
+    'the photo is shown for cropping',
+  );
+  assert.ok(
+    container.textContent.includes(sessionModule.LABEL_SCAN_PRIVACY_NOTE),
+  );
+  await act(async () => root.unmount());
+});
+
+test('the crop box cannot be resized past the photo or collapsed', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  const restore = displayAt(500, 300);
+  const at = (x, y) => [DISPLAY_LEFT + x / 2, DISPLAY_TOP + y / 2];
+  try {
+    await openAndCrop(fake, container);
+    // The top-left quarter, moved to (250, 150): the corner sits at
+    // (750, 450), with 250 × 150 photo pixels to spare.
+    await drag(cornerHandle(container), at(1000, 600), at(500, 300));
+    await drag(cropBox(container), at(250, 150), at(500, 300));
+    // Dragged far past the bottom-right edge: it stops at the edge.
+    await drag(cornerHandle(container), at(750, 450), at(3000, 3000));
+    await click(button(container, 'Read selected area'));
+    await settle();
+    assert.deepEqual(fake.engines[0].engine.recognized, [
+      { region: { left: 250, top: 150, width: 750, height: 450 } },
+    ]);
+  } finally {
+    restore();
+    await act(async () => root.unmount());
+  }
+});
+
+test('the crop box keeps a usable size when its corner is dragged past its opposite corner', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  const restore = displayAt(500, 300);
+  const at = (x, y) => [DISPLAY_LEFT + x / 2, DISPLAY_TOP + y / 2];
+  try {
+    await openAndCrop(fake, container);
+    await drag(cornerHandle(container), at(1000, 600), at(-2000, -2000));
+    await click(button(container, 'Read selected area'));
+    await settle();
+    const [{ region }] = fake.engines[0].engine.recognized;
+    assert.equal(region.left, 0);
+    assert.equal(region.top, 0);
+    assert.ok(
+      region.width >= 1 && region.width <= 1000,
+      `width ${region.width}`,
+    );
+    assert.ok(
+      region.height >= 1 && region.height <= 600,
+      `height ${region.height}`,
+    );
+  } finally {
+    restore();
+    await act(async () => root.unmount());
+  }
+});
+
+test('a new photo starts with the crop box over the whole photo', async () => {
+  const fake = fakeSession();
+  const { container, root } = await mount(fake.session);
+  const restore = displayAt(500, 300);
+  const at = (x, y) => [DISPLAY_LEFT + x / 2, DISPLAY_TOP + y / 2];
+  try {
+    await openAndCrop(fake, container);
+    await drag(cornerHandle(container), at(1000, 600), at(500, 300));
+    await act(async () => {
+      await fake.session.scan('another photo');
+    });
+    await click(button(container, 'Read selected area'));
+    await settle();
+    assert.deepEqual(fake.engines[0].engine.recognized, [
+      { region: { left: 0, top: 0, width: 1000, height: 600 } },
+    ]);
+  } finally {
+    restore();
+    await act(async () => root.unmount());
+  }
 });

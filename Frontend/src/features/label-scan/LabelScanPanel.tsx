@@ -14,6 +14,7 @@ import {
   LABEL_SCAN_PRIVACY_NOTE,
   type LabelScanSession,
 } from './labelScanSession';
+import { CropStep } from './CropStep';
 import { LabelReview } from './LabelReview';
 import { createTesseractEngine } from './ocrEngine';
 import { prepareLabelImage } from './prepareImage';
@@ -80,13 +81,6 @@ export function LabelScanPanel({
   // (including after the product is created).
   useEffect(() => () => session.dispose(), [session]);
 
-  // Until the crop step has its own controls, a photo shown for cropping
-  // is read whole straight away.
-  const cropping = view.scan.kind === 'cropping';
-  useEffect(() => {
-    if (cropping) void session.readWholePhoto();
-  }, [session, cropping]);
-
   function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     // Reset so choosing the same photo again still fires a change.
@@ -107,10 +101,7 @@ export function LabelScanPanel({
   }
 
   const { scan, progress } = view;
-  const busy =
-    scan.kind === 'preparing' ||
-    scan.kind === 'cropping' ||
-    scan.kind === 'recognizing';
+  const busy = scan.kind === 'preparing' || scan.kind === 'recognizing';
   const percent = progress ? Math.round(progress.progress * 100) : null;
   const progressText =
     view.engine === 'loading'
@@ -143,7 +134,9 @@ export function LabelScanPanel({
       </p>
       <div className="flex flex-wrap gap-2">
         <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-          {scan.kind === 'review' ? 'Retake photo' : 'Take photo'}
+          {scan.kind === 'review' || scan.kind === 'cropping'
+            ? 'Retake photo'
+            : 'Take photo'}
           <input
             type="file"
             accept="image/*"
@@ -153,7 +146,9 @@ export function LabelScanPanel({
           />
         </label>
         <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-          {scan.kind === 'review' ? 'Choose another photo' : 'Choose photo'}
+          {scan.kind === 'review' || scan.kind === 'cropping'
+            ? 'Choose another photo'
+            : 'Choose photo'}
           <input
             type="file"
             accept="image/*"
@@ -184,6 +179,15 @@ export function LabelScanPanel({
 
       {scan.kind === 'error' && scan.message !== ENGINE_LOAD_FAILED_MESSAGE && (
         <p className="text-body text-warn">{scan.message}</p>
+      )}
+
+      {scan.kind === 'cropping' && (
+        <CropStep
+          key={scan.image.url}
+          image={scan.image}
+          onReadRegion={(region) => void session.readRegion(region)}
+          onReadWhole={() => void session.readWholePhoto()}
+        />
       )}
 
       {scan.kind === 'review' && review && (
