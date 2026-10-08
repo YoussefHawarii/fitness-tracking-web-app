@@ -112,12 +112,12 @@ you be able to send requests again" requirement without custom plumbing.
   needs.
 
 **Deployment note (documented, not a blocker)**: `@nestjs/throttler`'s
-default storage is in-memory per-process. The current Railway deployment
-(dashboard-managed, single instance) runs a single instance, so this is correct as-is. If the
-service is ever scaled to multiple instances, the storage should move to a
-shared store (e.g. `@nestjs/throttler`'s Redis adapter) so the 50/5min limit
-is enforced across instances rather than per-instance — flagged here as a
-future scaling note, not part of this feature's scope.
+default storage is in-memory per-process. The backend runs as a Vercel
+Function, where instances come and go with traffic, so the limit is enforced
+per instance (accepted in `docs/adr/0011-backend-on-vercel-functions.md`).
+Enforcing the 50/5min limit across instances needs a shared store (e.g.
+`@nestjs/throttler`'s Redis adapter) — flagged here as a future scaling note,
+not part of this feature's scope.
 
 ## Decision 5: Where the fixed-expiry, no-sliding-window behavior (FR-012) is enforced
 

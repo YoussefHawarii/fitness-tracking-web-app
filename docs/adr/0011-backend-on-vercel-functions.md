@@ -1,6 +1,6 @@
 # Backend runs on Vercel Functions
 
-In October 2026 Railway stopped the backend once its free credit ran out, and the owner chose not to pay for hosting. We moved the NestJS backend to Vercel's free tier instead. It runs as its own Vercel project with root directory `Backend/`, separate from the frontend's. Vercel detects NestJS from `src/main.ts` and runs the whole app as one Vercel Function on Fluid compute in `iad1`, next to the `us-east-1` database. No code restructuring or committed manifest was needed. Prisma's client is generated at install (`postinstall`) so a cached `node_modules` can never ship a stale client.
+In October 2026 the free trial on the backend's previous host ended and the backend was stopped; the owner chose not to pay for hosting. We moved the NestJS backend to Vercel's free tier instead. It runs as its own Vercel project with root directory `Backend/`, separate from the frontend's. Vercel detects NestJS from `src/main.ts` and runs the whole app as one Vercel Function on Fluid compute in `iad1`, next to the `us-east-1` database. No code restructuring or committed manifest was needed. Prisma's client is generated at install (`postinstall`) so a cached `node_modules` can never ship a stale client.
 
 Serverless changes three things a long-lived server took for granted:
 
@@ -10,6 +10,6 @@ Serverless changes three things a long-lived server took for granted:
 
 Considered options:
 
-- **Pay for Railway:** declined on cost.
+- **Pay the previous host to keep an always-on server:** declined on cost.
 - **Another always-on free host** (for example Render): its free instances sleep on idle, so cold starts are no better, and it adds a third provider.
 - **Serving the API through the frontend project** (one origin, no CORS): couples the two deploys, and was rejected to keep the frontend and backend deploying independently as before.

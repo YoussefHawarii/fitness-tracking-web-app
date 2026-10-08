@@ -32,8 +32,8 @@ with the timeout is:
 ( unset DATABASE_URL; set -a; . ./.env.supabase || exit 1; set +a; : "${DATABASE_URL:?failed to load .env.supabase}"; DATABASE_URL="${DATABASE_URL}&connect_timeout=30"; npm run db:backfill-amounts -- --snapshot "$TEMP/amounts-before.json" )
 ```
 
-Before the snapshot, stop the backend service in the Railway dashboard. Keep
-it stopped through compare, then restart it after compare completes.
+Before the snapshot, pause the backend project in the Vercel dashboard. Keep
+it paused through compare, then resume it after compare completes.
 
 ```sh
 ( unset DATABASE_URL; set -a; . ./.env.supabase || exit 1; set +a; : "${DATABASE_URL:?failed to load .env.supabase}"; npm run db:backfill-amounts -- --snapshot "$TEMP/amounts-before.json" )
@@ -69,7 +69,7 @@ backfill writes only amount/amountUnit/portionKind and never computed nutrition.
 
 The production pass of 2026-09-28 ran while the deployed backend still
 predated dual-write: the dual-write backend is only on the feature branch, and
-Railway deploys `master`. After the dual-write backend is live on Railway,
+production deploys `master`. After the dual-write backend is live in production,
 re-run snapshot → dry-run → backfill → verify → compare in production. Run the
 same sequence again as the pre-flight gate before the contract step that
 retires `grams`.
