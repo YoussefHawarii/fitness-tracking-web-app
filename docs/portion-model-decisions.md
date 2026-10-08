@@ -436,7 +436,7 @@ including the create-path release batch, the transitional representation of ML
 entries, and compatibility of the barcode-lookup and product-submission
 contracts (spec M3). Decided in ticket 01. **Decided (2026-09-25):**
 
-- *Evidence.* Frontend (Vercel) and backend (Railway) deploy independently
+- *Evidence.* Frontend and backend (separate Vercel projects) deploy independently
   from the same repository, with no committed manifest ordering them
   (AGENTS.md), so one merge can reach either side first. The global
   validation pipe sets `forbidNonWhitelisted: true`: a backend that does not
