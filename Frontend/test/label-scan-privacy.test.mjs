@@ -71,7 +71,7 @@ test('the site-wide CSP is enforced and keeps OCR on this origin', () => {
   // upload) and Google sign-in.
   assert.deepEqual(csp['connect-src'], [
     "'self'",
-    'https://calorie-weight-tracking-api-production.up.railway.app',
+    'https://fitness-tracking-api.vercel.app',
     'https://api.cloudinary.com',
     'https://accounts.google.com/gsi/',
   ]);
