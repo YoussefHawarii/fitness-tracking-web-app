@@ -76,9 +76,16 @@ export function LabelScanPanel({
   );
   const [choice, setChoice] = useState<ReviewChoice | null>(null);
 
-  // The worker and the review photo are released when the form goes away
+  // The worker and the photo are released when the form goes away
   // (including after the product is created).
   useEffect(() => () => session.dispose(), [session]);
+
+  // Until the crop step has its own controls, a photo shown for cropping
+  // is read whole straight away.
+  const cropping = view.scan.kind === 'cropping';
+  useEffect(() => {
+    if (cropping) void session.readWholePhoto();
+  }, [session, cropping]);
 
   function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -100,7 +107,10 @@ export function LabelScanPanel({
   }
 
   const { scan, progress } = view;
-  const busy = scan.kind === 'recognizing';
+  const busy =
+    scan.kind === 'preparing' ||
+    scan.kind === 'cropping' ||
+    scan.kind === 'recognizing';
   const percent = progress ? Math.round(progress.progress * 100) : null;
   const progressText =
     view.engine === 'loading'
