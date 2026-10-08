@@ -27,9 +27,9 @@ A fitness tracking web app: `Frontend/` (React 19 + Vite + TypeScript, Tailwind 
 - Format: `npm run format` (prettier)
 - Env vars: `VITE_API_BASE_URL`, `VITE_GOOGLE_CLIENT_ID`
 
-## Feature workflow (spec-kit)
+## Feature workflow
 
-New non-trivial features should follow the existing spec-kit pattern seen in `specs/001-calorie-weight-tracking/` and `specs/002-jwt-auth-rate-limit/`: write `spec.md` → `plan.md` → `tasks.md` before implementing, rather than jumping straight to code. Agents with the `speckit-specify`/`speckit-plan`/`speckit-tasks` skills should use them; without that tooling, produce the same three documents by hand, matching the structure of the existing `specs/*/` folders. Note: `.specify/memory/constitution.md` is still an unfilled placeholder template — don't treat it as a ratified set of project principles.
+Spec Kit is no longer used for this project: do not create new `spec.md`/`plan.md`/`tasks.md` files or run the `speckit-*` skills. Settle a non-trivial feature's design by interview first, recording domain terms in `CONTEXT.md` and significant decisions as ADRs in `docs/adr/`. The existing `specs/*/` folders are historical records (some still hold operator runbooks referenced above).
 
 ## Sensitive files
 

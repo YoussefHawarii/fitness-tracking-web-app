@@ -327,7 +327,7 @@ export class ProductSubmissionError extends Error {
   }
 }
 
-export async function createPackagedProduct(input: {
+export interface CreatePackagedProductInput {
   barcode: string;
   name: string;
   nameAr?: string;
@@ -344,9 +344,14 @@ export async function createPackagedProduct(input: {
   fatPer100g: number;
   fiberPer100g?: number;
   sugarPer100g?: number;
+  // Grams per 100 base units — the form collects milligrams and converts.
   sodiumPer100g?: number;
   country?: string;
-}): Promise<PackagedProduct> {
+}
+
+export async function createPackagedProduct(
+  input: CreatePackagedProductInput,
+): Promise<PackagedProduct> {
   try {
     const { data } = await apiClient.post('/food/products', input);
     return data;
@@ -371,43 +376,4 @@ export async function createPackagedProduct(input: {
     }
     throw err;
   }
-}
-
-export interface ExtractedNutritionCandidate {
-  caloriesPer100g?: number;
-  proteinPer100g?: number;
-  carbsPer100g?: number;
-  fatPer100g?: number;
-  fiberPer100g?: number;
-  sugarPer100g?: number;
-  sodiumPer100g?: number;
-  servingSize?: number;
-  servingUnit?: string;
-}
-
-export interface DeclaredNutritionBasisSuggestion {
-  basis: NutritionBasis;
-  confident: boolean;
-}
-
-export interface NutritionLabelExtractionResult {
-  available: boolean;
-  reason?: string;
-  basisSuggestion?: DeclaredNutritionBasisSuggestion;
-  candidate?: ExtractedNutritionCandidate;
-}
-
-export async function extractNutritionLabel(
-  file: File,
-): Promise<NutritionLabelExtractionResult> {
-  const formData = new FormData();
-  formData.append('image', file);
-  const { data } = await apiClient.post(
-    '/food/nutrition-label/extract',
-    formData,
-    {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    },
-  );
-  return data;
 }

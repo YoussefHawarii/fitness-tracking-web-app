@@ -1,7 +1,6 @@
 import { useRef, useState } from 'react';
 import {
   createPackagedProduct,
-  extractNutritionLabel,
   ProductConflictError,
   ProductSubmissionError,
   type NutritionBasis,
@@ -9,8 +8,18 @@ import {
 } from '../../services/foodService';
 import { FieldLabel, Input, Select } from '../../components/ui/Input';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
-import { completeNutritionLabelExtraction } from './extractionFormValues';
-import { withDeclaredNutritionBasis } from './submissionGuard';
+import {
+  applyLabelUpdate,
+  planLabelApply,
+  type LabelFormField,
+  type LabelFormState,
+} from './extractionFormValues';
+import { LabelScanPanel } from '../label-scan/LabelScanPanel';
+import type { LabelField, LabelScanResult } from '../label-scan/labelReader';
+import {
+  buildPackagedProductInput,
+  withDeclaredNutritionBasis,
+} from './submissionGuard';
 
 interface Props {
   barcode: string;
@@ -18,6 +27,17 @@ interface Props {
   initialBrand?: string;
   onCreated: (product: PackagedProduct) => void;
   onCancel?: () => void;
+}
+
+// Shown under a field whose value came from a Label scan, until the user
+// edits it.
+function ScanHint({ show }: { show: boolean }) {
+  if (!show) return null;
+  return (
+    <span className="text-label normal-case tracking-normal text-accent">
+      from label — check
+    </span>
+  );
 }
 
 export function validateNonNegative(v: string, label: string): string | null {
@@ -44,7 +64,7 @@ export function AddProductForm({
   const [fatPer100g, setFatPer100g] = useState('');
   const [fiberPer100g, setFiberPer100g] = useState('');
   const [sugarPer100g, setSugarPer100g] = useState('');
-  const [sodiumPer100g, setSodiumPer100g] = useState('');
+  const [sodiumMgPer100, setSodiumMgPer100] = useState('');
   const [servingSize, setServingSize] = useState('');
   const [servingUnit, setServingUnit] = useState('');
   const [packageSize, setPackageSize] = useState('');
@@ -54,12 +74,15 @@ export function AddProductForm({
   >('');
   const basisSelectedByUser = useRef(false);
   const [country, setCountry] = useState('');
-
-  const [labelFile, setLabelFile] = useState<File | null>(null);
-  const [labelStatus, setLabelStatus] = useState<
-    'idle' | 'extracting' | 'done'
-  >('idle');
-  const [labelReason, setLabelReason] = useState<string | null>(null);
+  // Fields whose value came from a Label scan and hasn't been edited since.
+  // Any other non-empty field is a User-edited field a scan never touches.
+  const [scanFilled, setScanFilled] = useState<ReadonlySet<LabelFormField>>(
+    new Set(),
+  );
+  // User-edited fields: typed into, changed or cleared by the user.
+  const [userEdited, setUserEdited] = useState<ReadonlySet<LabelFormField>>(
+    new Set(),
+  );
 
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -76,43 +99,83 @@ export function AddProductForm({
     return Number.isFinite(n) ? n : undefined;
   }
 
-  async function handleExtractLabel() {
-    if (!labelFile) return;
-    setLabelStatus('extracting');
-    setLabelReason(null);
-    try {
-      await completeNutritionLabelExtraction(extractNutritionLabel(labelFile), {
-        applyValues: (values) => {
-          if (values.caloriesPer100g !== undefined)
-            setCaloriesPer100g(values.caloriesPer100g);
-          if (values.proteinPer100g !== undefined)
-            setProteinPer100g(values.proteinPer100g);
-          if (values.carbsPer100g !== undefined)
-            setCarbsPer100g(values.carbsPer100g);
-          if (values.fatPer100g !== undefined) setFatPer100g(values.fatPer100g);
-          if (values.fiberPer100g !== undefined)
-            setFiberPer100g(values.fiberPer100g);
-          if (values.sugarPer100g !== undefined)
-            setSugarPer100g(values.sugarPer100g);
-          if (values.sodiumPer100g !== undefined)
-            setSodiumPer100g(values.sodiumPer100g);
-          if (values.servingSize !== undefined)
-            setServingSize(values.servingSize);
-          if (values.servingUnit !== undefined)
-            setServingUnit(values.servingUnit);
-        },
-        updateBasis: (resolveBasis) => {
-          setDeclaredNutritionBasis((currentBasis) =>
-            resolveBasis(currentBasis, basisSelectedByUser.current),
-          );
-        },
-        setUnavailableReason: setLabelReason,
-      });
-      setLabelStatus('done');
-    } catch {
-      setLabelStatus('done');
-      setLabelReason('Could not process this image.');
-    }
+  // A user edit makes the field the user's: a later scan won't touch it.
+  function userEdit(
+    field: LabelFormField,
+    set: (value: string) => void,
+    value: string,
+  ) {
+    set(value);
+    setUserEdited((previous) =>
+      previous.has(field) ? previous : new Set([...previous, field]),
+    );
+    setScanFilled((previous) => {
+      if (!previous.has(field)) return previous;
+      const next = new Set(previous);
+      next.delete(field);
+      return next;
+    });
+  }
+
+  function labelFormState(): LabelFormState {
+    return {
+      values: {
+        caloriesPer100g,
+        proteinPer100g,
+        carbsPer100g,
+        sugarPer100g,
+        fatPer100g,
+        fiberPer100g,
+        sodiumMgPer100,
+        servingSize,
+        servingUnit,
+        packageSize,
+        packageUnit,
+      },
+      name,
+      basis: declaredNutritionBasis,
+      basisSelectedByUser: basisSelectedByUser.current,
+      scanFilled,
+      userEdited,
+    };
+  }
+
+  function previewLabelScan(
+    result: LabelScanResult,
+    selected: ReadonlySet<LabelField>,
+  ) {
+    return planLabelApply(result, labelFormState(), selected);
+  }
+
+  function handleApplyLabelScan(
+    result: LabelScanResult,
+    selected: ReadonlySet<LabelField>,
+  ): string {
+    const update = planLabelApply(result, labelFormState(), selected);
+    const setters: Record<LabelFormField, (value: string) => void> = {
+      caloriesPer100g: setCaloriesPer100g,
+      proteinPer100g: setProteinPer100g,
+      carbsPer100g: setCarbsPer100g,
+      sugarPer100g: setSugarPer100g,
+      fatPer100g: setFatPer100g,
+      fiberPer100g: setFiberPer100g,
+      sodiumMgPer100: setSodiumMgPer100,
+      servingSize: setServingSize,
+      servingUnit: setServingUnit,
+      packageSize: setPackageSize,
+      packageUnit: setPackageUnit,
+    };
+    return applyLabelUpdate(update, {
+      write: (field, value) => setters[field](value),
+      markScanFilled: (field, filled) =>
+        setScanFilled((previous) => {
+          const next = new Set(previous);
+          if (filled) next.add(field);
+          else next.delete(field);
+          return next;
+        }),
+      setBasis: setDeclaredNutritionBasis,
+    });
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -148,7 +211,7 @@ export function AddProductForm({
       [fatPer100g, 'Fat'],
       [fiberPer100g, 'Fiber'],
       [sugarPer100g, 'Sugar'],
-      [sodiumPer100g, 'Sodium'],
+      [sodiumMgPer100, 'Sodium'],
     ] as const) {
       const msg = validateNonNegative(val, label);
       if (msg) {
@@ -157,35 +220,33 @@ export function AddProductForm({
       }
     }
 
-    const fiber = toNumber(fiberPer100g);
-    const sugar = toNumber(sugarPer100g);
-    const sodium = toNumber(sodiumPer100g);
-    const serving = toNumber(servingSize);
-    const pkgSize = toNumber(packageSize);
-
     const submission = withDeclaredNutritionBasis(
       declaredNutritionBasis,
       (selectedNutritionBasis) =>
-        createPackagedProduct({
-          barcode,
-          name: name.trim(),
-          ...(nameAr.trim() && { nameAr: nameAr.trim() }),
-          ...(brand.trim() && { brand: brand.trim() }),
-          ...(category.trim() && { category: category.trim() }),
-          caloriesPer100g: cal,
-          proteinPer100g: prot,
-          carbsPer100g: carb,
-          fatPer100g: fat,
-          ...(fiber !== undefined && { fiberPer100g: fiber }),
-          ...(sugar !== undefined && { sugarPer100g: sugar }),
-          ...(sodium !== undefined && { sodiumPer100g: sodium }),
-          ...(serving !== undefined && { servingSize: serving }),
-          ...(servingUnit.trim() && { servingUnit: servingUnit.trim() }),
-          ...(pkgSize !== undefined && { packageSize: pkgSize }),
-          ...(packageUnit.trim() && { packageUnit: packageUnit.trim() }),
-          declaredNutritionBasis: selectedNutritionBasis,
-          ...(country.trim() && { country: country.trim() }),
-        }),
+        createPackagedProduct(
+          buildPackagedProductInput(
+            barcode,
+            {
+              name,
+              nameAr,
+              brand,
+              category,
+              caloriesPer100g,
+              proteinPer100g,
+              carbsPer100g,
+              fatPer100g,
+              fiberPer100g,
+              sugarPer100g,
+              sodiumMgPer100,
+              servingSize,
+              servingUnit,
+              packageSize,
+              packageUnit,
+              country,
+            },
+            selectedNutritionBasis,
+          ),
+        ),
     );
     if (!submission.allowed) {
       setError(submission.error);
@@ -221,23 +282,10 @@ export function AddProductForm({
         <p className="text-label text-text-muted normal-case tracking-normal">
           Scan nutrition label (optional)
         </p>
-        <input
-          type="file"
-          accept="image/jpeg,image/png,image/webp"
-          onChange={(e) => setLabelFile(e.target.files?.[0] ?? null)}
-          className="text-body text-text"
+        <LabelScanPanel
+          preview={previewLabelScan}
+          onApply={handleApplyLabelScan}
         />
-        <SecondaryButton
-          type="button"
-          disabled={!labelFile || labelStatus === 'extracting'}
-          onClick={handleExtractLabel}
-          className="self-start"
-        >
-          {labelStatus === 'extracting' ? 'Extracting…' : 'Extract from label'}
-        </SecondaryButton>
-        {labelReason && (
-          <p className="text-body text-text-muted">{labelReason}</p>
-        )}
       </div>
 
       <FieldLabel>
@@ -304,8 +352,11 @@ export function AddProductForm({
             min={0}
             step="any"
             value={caloriesPer100g}
-            onChange={(e) => setCaloriesPer100g(e.target.value)}
+            onChange={(e) =>
+              userEdit('caloriesPer100g', setCaloriesPer100g, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('caloriesPer100g')} />
         </FieldLabel>
         <FieldLabel>
           Protein / {nutritionBasisLabel} (required)
@@ -314,8 +365,11 @@ export function AddProductForm({
             min={0}
             step="any"
             value={proteinPer100g}
-            onChange={(e) => setProteinPer100g(e.target.value)}
+            onChange={(e) =>
+              userEdit('proteinPer100g', setProteinPer100g, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('proteinPer100g')} />
         </FieldLabel>
         <FieldLabel>
           Carbs / {nutritionBasisLabel} (required)
@@ -324,8 +378,11 @@ export function AddProductForm({
             min={0}
             step="any"
             value={carbsPer100g}
-            onChange={(e) => setCarbsPer100g(e.target.value)}
+            onChange={(e) =>
+              userEdit('carbsPer100g', setCarbsPer100g, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('carbsPer100g')} />
         </FieldLabel>
         <FieldLabel>
           Fat / {nutritionBasisLabel} (required)
@@ -334,8 +391,11 @@ export function AddProductForm({
             min={0}
             step="any"
             value={fatPer100g}
-            onChange={(e) => setFatPer100g(e.target.value)}
+            onChange={(e) =>
+              userEdit('fatPer100g', setFatPer100g, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('fatPer100g')} />
         </FieldLabel>
         <FieldLabel>
           Fiber / {nutritionBasisLabel}
@@ -344,8 +404,11 @@ export function AddProductForm({
             min={0}
             step="any"
             value={fiberPer100g}
-            onChange={(e) => setFiberPer100g(e.target.value)}
+            onChange={(e) =>
+              userEdit('fiberPer100g', setFiberPer100g, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('fiberPer100g')} />
         </FieldLabel>
         <FieldLabel>
           Sugar / {nutritionBasisLabel}
@@ -354,18 +417,24 @@ export function AddProductForm({
             min={0}
             step="any"
             value={sugarPer100g}
-            onChange={(e) => setSugarPer100g(e.target.value)}
+            onChange={(e) =>
+              userEdit('sugarPer100g', setSugarPer100g, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('sugarPer100g')} />
         </FieldLabel>
         <FieldLabel>
-          Sodium / {nutritionBasisLabel}
+          Sodium (mg) / {nutritionBasisLabel}
           <Input
             type="number"
             min={0}
             step="any"
-            value={sodiumPer100g}
-            onChange={(e) => setSodiumPer100g(e.target.value)}
+            value={sodiumMgPer100}
+            onChange={(e) =>
+              userEdit('sodiumMgPer100', setSodiumMgPer100, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('sodiumMgPer100')} />
         </FieldLabel>
       </div>
 
@@ -377,16 +446,22 @@ export function AddProductForm({
             min={0}
             step="any"
             value={servingSize}
-            onChange={(e) => setServingSize(e.target.value)}
+            onChange={(e) =>
+              userEdit('servingSize', setServingSize, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('servingSize')} />
         </FieldLabel>
         <FieldLabel>
           Serving unit
           <Input
             value={servingUnit}
-            onChange={(e) => setServingUnit(e.target.value)}
+            onChange={(e) =>
+              userEdit('servingUnit', setServingUnit, e.target.value)
+            }
             placeholder="e.g. g, ml"
           />
+          <ScanHint show={scanFilled.has('servingUnit')} />
         </FieldLabel>
         <FieldLabel>
           Package size
@@ -395,16 +470,22 @@ export function AddProductForm({
             min={0}
             step="any"
             value={packageSize}
-            onChange={(e) => setPackageSize(e.target.value)}
+            onChange={(e) =>
+              userEdit('packageSize', setPackageSize, e.target.value)
+            }
           />
+          <ScanHint show={scanFilled.has('packageSize')} />
         </FieldLabel>
         <FieldLabel>
           Package unit
           <Input
             value={packageUnit}
-            onChange={(e) => setPackageUnit(e.target.value)}
+            onChange={(e) =>
+              userEdit('packageUnit', setPackageUnit, e.target.value)
+            }
             placeholder="e.g. g, ml"
           />
+          <ScanHint show={scanFilled.has('packageUnit')} />
         </FieldLabel>
       </div>
 

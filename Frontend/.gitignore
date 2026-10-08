@@ -10,6 +10,8 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+# Self-hosted OCR runtime, copied from node_modules by ocrAssets.ts
+public/ocr
 *.local
 
 # Editor directories and files
@@ -22,3 +24,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Label-scan fixtures awaiting review (scripts/label-fixture/)
+test/fixtures/labels/pending/

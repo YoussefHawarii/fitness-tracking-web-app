@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Label fixture generator (developer only)</title>
+  </head>
+  <body style="font-family: system-ui, sans-serif; margin: 2rem">
+    <h1>Label fixture generator</h1>
+    <p>
+      Developer only — served by <code>npm run dev</code>, never part of the
+      production build. Runs the app's own label-scan pipeline in this browser;
+      nothing is uploaded. Each photo downloads as a fixture JSON with the truth
+      to fill in by hand.
+    </p>
+    <input id="photos" type="file" accept="image/*" multiple />
+    <pre id="log"></pre>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

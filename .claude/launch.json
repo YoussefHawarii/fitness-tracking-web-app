@@ -4,15 +4,42 @@
     {
       "name": "frontend-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "Frontend", "run", "dev", "--", "--host"],
+      "runtimeArgs": [
+        "--prefix",
+        "Frontend",
+        "run",
+        "dev",
+        "--",
+        "--host"
+      ],
       "port": 5173,
       "autoPort": false
     },
     {
       "name": "backend-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "Backend", "run", "start:dev"],
+      "runtimeArgs": [
+        "--prefix",
+        "Backend",
+        "run",
+        "start:dev"
+      ],
       "port": 3000
+    },
+    {
+      "name": "frontend-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "--prefix",
+        "Frontend",
+        "run",
+        "preview",
+        "--",
+        "--port",
+        "4173",
+        "--strictPort"
+      ],
+      "port": 4173
     }
   ]
 }
