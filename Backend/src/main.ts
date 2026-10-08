@@ -9,8 +9,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   const configService = app.get(ConfigService);
 
-  // Frontend runs on a separate origin (Vercel) from the API (Railway),
+  // Frontend and API are separate Vercel projects on different origins,
   // so CORS must be enabled explicitly rather than left to same-origin defaults.
+  // On Vercel this file is the auto-detected NestJS entrypoint and runs as a
+  // single Vercel Function; app.listen() is still how it receives requests.
   app.enableCors(
     corsOptionsFromEnv(configService.get<string>('FRONTEND_ORIGIN')),
   );
