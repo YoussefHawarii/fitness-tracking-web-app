@@ -30,7 +30,7 @@ before the contract step removes the compatibility unit columns.
 Production execution requires the owner's explicit request in the current
 session and must happen only after the local sequence passes. Never edit
 `Backend/.env`, never print `.env.supabase`, and never run these commands as
-part of authoring this runbook. Stop the Railway backend for the full
+part of authoring this runbook. Pause the backend Vercel project for the full
 dry-run→normalize→verify sequence so older writers cannot race it.
 
 ```sh
@@ -40,7 +40,7 @@ dry-run→normalize→verify sequence so older writers cannot race it.
 ( unset DATABASE_URL; set -a; . ./.env.supabase || exit 1; set +a; : "${DATABASE_URL:?failed to load .env.supabase}"; npm run db:normalize-product-units )
 ```
 
-Restart Railway only after verify passes and the final normalization reports
+Resume the backend only after verify passes and the final normalization reports
 zero changed rows. If verify fails, inspect the printed `row-id:dimension`
 references and do not proceed to the contract step that removes legacy units.
 

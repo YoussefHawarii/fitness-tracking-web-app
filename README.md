@@ -10,10 +10,17 @@ A calorie, macro, exercise, and weight tracking web app. Users log meals (via ba
 
 This is a monorepo, but Frontend and Backend deploy independently:
 - **Frontend** → Vercel (root directory set to `Frontend/` in the Vercel dashboard; framework auto-detected, no committed manifest)
-- **Backend** → Railway (root directory set to `Backend/` in the Railway dashboard; build/deploy config is managed there, not via a committed manifest)
+- **Backend** → Vercel, as its own project (root directory set to `Backend/`; NestJS is auto-detected and runs as a single Vercel Function; env vars are managed in the Vercel dashboard, no committed manifest)
 - **Database** → Supabase Postgres (database only — Supabase Auth, Storage and the Data API are not used). Local development and e2e use the Docker Postgres in `docker-compose.yml`.
 
 See `docs/architecture.md` for the full system design and `docs/business-logic.md` for the calorie/TDEE/prediction formulas.
+
+### Hosting history
+
+The backend has run on two different hosts:
+
+1. **Railway (free trial)**: the NestJS backend first ran on Railway as an always-on server. Its root directory was set to `Backend/` and its build, deploy and environment variables were managed in the Railway dashboard. Every feature up to October 2026 was built and shipped on it: auth with email OTP, food and exercise logging, barcode lookup, and profiles and avatars. This is where I learned to host a backend: connecting a monorepo subfolder, managing secrets on the platform, and wiring CORS between separately hosted frontend and backend.
+2. **Vercel (current)**: when the free trial ended in October 2026, Railway stopped the service. I moved the backend to Vercel's free tier instead of paying. It now runs as a serverless Vercel Function, so it connects to the database through Supabase's transaction pooler. The reasons and trade-offs are recorded in `docs/adr/0011-backend-on-vercel-functions.md`.
 
 ## Getting started
 
