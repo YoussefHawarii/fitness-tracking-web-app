@@ -192,7 +192,7 @@ test('"less than" values and unclear numbers stay empty, never 0', () => {
   const result = read(
     PER_100_G_HEADER,
     row(120, ['Protein', 10], ['<0.5', 160], ['g', 210]),
-    row(160, ['Fat', 10], ['1,046', 160], ['g', 200]),
+    row(160, ['Fat', 10], ['1,046.5', 160], ['g', 240]),
   );
   for (const field of ['proteinPer100g', 'fatPer100g']) {
     const r = reading(result, field);
@@ -200,6 +200,20 @@ test('"less than" values and unclear numbers stay empty, never 0', () => {
     assert.equal(r.value, undefined);
     assert.equal(r.warnings.length, 1);
   }
+  // Several separators is unclear, not merely an impossible amount.
+  assert.deepEqual(reading(result, 'fatPer100g').warnings, [
+    "Couldn't read this number clearly.",
+  ]);
+});
+
+test('a three-decimal value with a comma reads as a decimal, never as thousands', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(160, ['Fat', 10], ['1,046', 160], ['g', 220]),
+  );
+  const fat = reading(result, 'fatPer100g');
+  assert.equal(fat.status, 'read');
+  assert.equal(fat.value, 1.046);
 });
 
 test('a row with several gram values is left unresolved rather than guessed', () => {
@@ -726,8 +740,15 @@ test('Arabic digits, the Arabic decimal separator and decimal commas parse', () 
     value: 0.125,
     ambiguous: false,
   });
-  assert.deepEqual(reader.parseLabelNumber('1,046'), { ambiguous: true });
-  assert.deepEqual(reader.parseLabelNumber('1.046'), { ambiguous: true });
+  // Three decimals are always a decimal, never thousands.
+  assert.deepEqual(reader.parseLabelNumber('1,046'), {
+    value: 1.046,
+    ambiguous: false,
+  });
+  assert.deepEqual(reader.parseLabelNumber('1.046'), {
+    value: 1.046,
+    ambiguous: false,
+  });
   assert.deepEqual(reader.parseLabelNumber('1,046.5'), { ambiguous: true });
 });
 
@@ -760,6 +781,60 @@ test('a decimal comma reads as a decimal, never as thousands', () => {
     row(160, ['Fat', 10], ['2,5', 160], ['g', 200]),
   );
   assert.equal(reading(result, 'fatPer100g').value, 2.5);
+});
+
+// A value printed with three decimals is always a decimal: "415.932" is
+// 415.932, never 415932. Values from a real Egyptian cookie label.
+test('three-decimal values on a per 100 g label read as decimals', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(80, ['Energy', 10], ['415.932', 160], ['kcal', 240]),
+    row(120, ['Total', 10], ['carbohydrates', 70], ['83.651', 220], ['g', 290]),
+    row(160, ['Total', 10], ['fat', 70], ['6.232', 160], ['g', 220]),
+    row(200, ['Saturated', 10], ['fat', 110], ['4.997', 160], ['g', 220]),
+    row(240, ['Protein', 10], ['6.51', 160], ['g', 210]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.deepEqual(values(result), {
+    caloriesPer100g: 415.932,
+    proteinPer100g: 6.51,
+    carbsPer100g: 83.651,
+    fatPer100g: 6.232,
+  });
+  for (const field of MACROS) {
+    assert.equal(reading(result, field).status, 'read', field);
+  }
+});
+
+test('a dotted kJ value beside kcal never changes the kcal reading', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(
+      80,
+      ['Energy', 10],
+      ['1.046', 160],
+      ['kJ', 220],
+      ['/', 250],
+      ['250', 270],
+      ['kcal', 310],
+    ),
+  );
+  const calories = reading(result, 'caloriesPer100g');
+  assert.equal(calories.status, 'read');
+  assert.equal(calories.value, 250);
+  assert.equal(calories.conversion, undefined);
+});
+
+test('a three-decimal value with a decimal comma reads as a decimal', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(80, ['Energy', 10], ['415,932', 160], ['kcal', 240]),
+  );
+  const calories = reading(result, 'caloriesPer100g');
+  assert.equal(calories.status, 'read');
+  assert.equal(calories.value, 415.932);
+  assert.equal(calories.unit, 'kcal');
 });
 
 test('Arabic per-100 headings choose the column like English ones', () => {

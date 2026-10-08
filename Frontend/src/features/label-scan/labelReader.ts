@@ -174,10 +174,10 @@ export function normalizeLabelText(text: string): string {
 
 const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|[a-z]+|[\u0621-\u064a]+|<|%/g;
 
-// One separator: "." or "," as a decimal point ("2.5", "2,5"), except
-// that a separator followed by exactly three digits ("1,046", "1.046") may
-// be a thousands separator and is never read. Two or more separators are
-// never read either.
+// One separator: "." or "," is always a decimal point, however many digits
+// follow it ("2.5", "2,5", "415.932", "415,932"); labels print three decimals
+// routinely, so a three-digit fraction is never taken for a thousands group.
+// Two or more separators ("1,046.5") are never read.
 export function parseLabelNumber(text: string): {
   value?: number;
   ambiguous: boolean;
@@ -186,7 +186,6 @@ export function parseLabelNumber(text: string): {
   if (separators.length === 0) return { value: Number(text), ambiguous: false };
   if (separators.length > 1) return { ambiguous: true };
   const [whole, fraction] = text.split(/[.,]/);
-  if (fraction.length === 3 && whole !== '0') return { ambiguous: true };
   return { value: Number(`${whole}.${fraction}`), ambiguous: false };
 }
 
