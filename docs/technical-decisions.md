@@ -17,7 +17,7 @@
 ### Database
 - **Engine:** PostgreSQL.
 - **Host:** Supabase Postgres (free tier), **database only**. Supabase Auth, Storage, Edge Functions and the Data API are not used; Prisma is the only data-access path. It became the production database in September 2026, when the previous host's free compute quota ran out and made the database unreachable. The previous database held only disposable test data, so the cutover started from an empty database built from the Prisma schema.
-  - **Connection:** the Railway backend is a long-lived server in US-East, so it connects through the Supavisor **session** pooler (port 5432, IPv4, supports prepared statements) as a dedicated `prisma` user, with `sslmode=require` and an explicit `connection_limit`. No `DIRECT_URL` is needed. The transaction pooler (port 6543, needs `pgbouncer=true`) is meant for serverless, and the direct host is IPv6-only unless the IPv4 add-on is bought. `prisma db push` runs over the same session connection.
+  - **Connection:** the backend runs as a Vercel Function in US-East (`iad1`), where instances come and go with traffic, so it connects through the Supavisor **transaction** pooler (port 6543, IPv4) as the dedicated `prisma` user, with `pgbouncer=true` (Prisma then skips prepared statements), `sslmode=require` and a small `connection_limit`. The session pooler (port 5432) suited the earlier long-lived Railway server, but each serverless instance would hold its own session connections and exhaust the free tier's small pool. `prisma db push` and other operator procedures still use the **session** pooler URL from the gitignored `Backend/.env.supabase`, never the runtime URL. The direct host is IPv6-only unless the IPv4 add-on is bought.
   - **Data API:** turned off, and `anon`/`authenticated` hold no privileges on application tables, so the Supabase publishable key cannot read them.
   - **Free-tier trade-offs:** 500 MB per project, and a project pauses after 7 days of low activity. There is no point-in-time restore, so destructive schema steps take an explicit `pg_dump` first.
 - **Local development and e2e:** the Docker Postgres in the repo-root `docker-compose.yml` (Postgres 17, matching production). Local `.env` and tests must never point at the deployed database.
@@ -32,11 +32,11 @@
 
 ### Repository Structure
 - **Monorepo** with `/client` and `/server` folders.
-- **Deployment note:** Vercel and Railway both need to be configured to build/deploy only their respective subfolder rather than the whole repo — a common first-time monorepo misconfiguration. Do a test deploy early to confirm this works before building the rest of the app on top of it.
+- **Deployment note:** the two Vercel projects (frontend and backend) each need to be configured to build/deploy only their own subfolder rather than the whole repo — a common first-time monorepo misconfiguration. Do a test deploy early to confirm this works before building the rest of the app on top of it.
 
 ### Hosting (all free tier, targeting $0/month total)
 | Layer | Service |
 |---|---|
 | Frontend | Vercel |
-| Backend | Railway |
+| Backend | Vercel (separate project, NestJS as a Vercel Function — see ADR 0011) |
 | Database | Supabase (Postgres only) |
