@@ -106,19 +106,61 @@ function verticalOverlapRatio(a: BBox, y0: number, y1: number): number {
   return smaller > 0 ? overlap / smaller : 0;
 }
 
+const median = (values: readonly number[]): number => {
+  const sorted = [...values].sort((a, b) => a - b);
+  return sorted[Math.floor(sorted.length / 2)];
+};
+
+const centreX = (box: BBox) => (box.x0 + box.x1) / 2;
+const centreY = (box: BBox) => (box.y0 + box.y1) / 2;
+
+// The tilt of the text lines (vertical change per pixel across) from words
+// that sit next to each other on one line: the median over each word and its
+// nearest neighbour to the right. A photographed table is rarely level, and
+// a tilt of a few degrees already lifts the far end of a row by more than
+// the row spacing. Zero when there are too few pairs to measure it.
+function lineSlope(words: readonly OcrWord[]): number {
+  const byX = [...words].sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const height = median(words.map((w) => w.bbox.y1 - w.bbox.y0));
+  const slopes: number[] = [];
+  for (let i = 0; i < byX.length; i += 1) {
+    const a = byX[i].bbox;
+    for (let j = i + 1; j < byX.length; j += 1) {
+      const b = byX[j].bbox;
+      if (b.x0 - a.x1 > 3 * height) break;
+      const dx = centreX(b) - centreX(a);
+      if (dx < height || verticalOverlapRatio(b, a.y0, a.y1) < 0.3) continue;
+      slopes.push((centreY(b) - centreY(a)) / dx);
+      break;
+    }
+  }
+  if (slopes.length < 6) return 0;
+  const slope = median(slopes);
+  return Math.abs(slope) <= 0.2 ? slope : 0;
+}
+
 // Groups words into visual rows: a word joins the row it overlaps
-// vertically by at least half of the shorter height. Words in a row are
-// then ordered left to right by position.
+// vertically by at least half of the shorter height. Words are placed left to
+// right, each compared with the word before it in the row and moved along the
+// text's tilt — not with the whole row so far, which on a tilted photo grows
+// until it swallows the rows above and below. A row's y0/y1 are measured
+// level (tilt removed), so rows compare in the same terms wherever their
+// words sit. Words in a row are then ordered left to right by position.
 function groupRows(words: readonly OcrWord[]): Row[] {
-  const sorted = [...words].sort(
-    (a, b) => a.bbox.y0 + a.bbox.y1 - (b.bbox.y0 + b.bbox.y1),
-  );
-  const rows: Row[] = [];
+  if (words.length === 0) return [];
+  const slope = lineSlope(words);
+  const sorted = [...words].sort((a, b) => a.bbox.x0 - b.bbox.x0);
+  const rows: Array<{ words: OcrWord[]; last: BBox }> = [];
   for (const word of sorted) {
-    let best: Row | undefined;
+    let best: (typeof rows)[number] | undefined;
     let bestRatio = 0.5;
     for (const row of rows) {
-      const ratio = verticalOverlapRatio(word.bbox, row.y0, row.y1);
+      const drift = slope * (centreX(word.bbox) - centreX(row.last));
+      const ratio = verticalOverlapRatio(
+        word.bbox,
+        row.last.y0 + drift,
+        row.last.y1 + drift,
+      );
       if (ratio >= bestRatio) {
         best = row;
         bestRatio = ratio;
@@ -126,14 +168,20 @@ function groupRows(words: readonly OcrWord[]): Row[] {
     }
     if (best) {
       best.words.push(word);
-      best.y0 = Math.min(best.y0, word.bbox.y0);
-      best.y1 = Math.max(best.y1, word.bbox.y1);
+      best.last = word.bbox;
     } else {
-      rows.push({ words: [word], y0: word.bbox.y0, y1: word.bbox.y1 });
+      rows.push({ words: [word], last: word.bbox });
     }
   }
-  for (const row of rows) row.words.sort((a, b) => a.bbox.x0 - b.bbox.x0);
-  return rows.sort((a, b) => a.y0 - b.y0);
+  const centre = median(words.map((w) => centreX(w.bbox)));
+  const level = (word: OcrWord) => slope * (centreX(word.bbox) - centre);
+  return rows
+    .map(({ words: rowWords }) => ({
+      words: rowWords.sort((a, b) => a.bbox.x0 - b.bbox.x0),
+      y0: Math.min(...rowWords.map((w) => w.bbox.y0 - level(w))),
+      y1: Math.max(...rowWords.map((w) => w.bbox.y1 - level(w))),
+    }))
+    .sort((a, b) => a.y0 - b.y0);
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +231,9 @@ export function parseLabelNumber(text: string): {
   ambiguous: boolean;
 } {
   const separators = text.match(/[.,]/g) ?? [];
+  // No label prints "02" for two: a whole number with a leading zero is a
+  // decimal point lost ("0.2" on a photo with glare), and is never read.
+  if (separators.length === 0 && /^0\d/.test(text)) return { ambiguous: true };
   if (separators.length === 0) return { value: Number(text), ambiguous: false };
   if (separators.length > 1) return { ambiguous: true };
   const [whole, fraction] = text.split(/[.,]/);

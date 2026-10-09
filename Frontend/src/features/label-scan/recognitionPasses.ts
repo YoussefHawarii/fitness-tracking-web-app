@@ -114,8 +114,11 @@ export function numberCrop(
   };
 }
 
+// The digits of every number in a text, with the decimal mark normalised: the
+// reader takes "." and "," alike as the decimal point of a number, so a point
+// read as a comma (78,76 for 78.76) is the same reading, not a different one.
 function digitsOf(text: string): string {
-  return (text.match(/\d+(?:[.,]\d+)*/g) ?? []).join('|');
+  return (text.match(/\d+(?:[.,]\d+)*/g) ?? []).join('|').replace(/,/g, '.');
 }
 
 // Applies an English re-read of a number's crop. A number is verified only

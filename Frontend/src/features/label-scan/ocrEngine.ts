@@ -1,3 +1,14 @@
+import { canvasCodec, type GrayCodec } from './grayCodec';
+import {
+  boxToPhoto,
+  cleanForRecognition,
+  enlargeCrop,
+  numberInkCrop,
+  rereadScale,
+  rectangleToCopy,
+  type GrayImage,
+  type Transform,
+} from './labelCleanup';
 import { layoutFromBlocks, type OcrLayout, type OcrWord } from './ocrLayout';
 import {
   hasDigit,
@@ -16,6 +27,12 @@ import {
 // One worker holds both languages and switches between them: an English
 // page pass, an Arabic page pass, then an English re-read of every number
 // from its own crop (see recognitionPasses.ts for why).
+//
+// Every pass reads a cleaned copy of the photo — straightened, its grid
+// lines erased, its lighting evened out (labelCleanup.ts) — made here on
+// the device from the photo and used only for recognition. Recognised
+// positions are mapped back, so evidence boxes still sit on the photo. If
+// the copy can't be made, the photo itself is read as before.
 
 export type OcrProgressStage = 'loading' | 'recognizing';
 
@@ -50,8 +67,25 @@ const PSM_SPARSE_TEXT = '11';
 // unverified and are never read.
 const MAX_NUMBER_CHECKS = 80;
 
+// The cleaned copy of a photo and where it came from, or nothing when the
+// photo can't be decoded here.
+async function cleanedCopy(
+  image: Blob,
+  codec: GrayCodec,
+): Promise<{ blob: Blob; image: GrayImage; transform: Transform } | undefined> {
+  try {
+    const { image: copy, transform } = cleanForRecognition(
+      await codec.decode(image),
+    );
+    return { blob: await codec.encode(copy), image: copy, transform };
+  } catch {
+    return undefined;
+  }
+}
+
 export async function createTesseractEngine(
   onProgress: (progress: OcrProgress) => void,
+  codec: GrayCodec = canvasCodec,
 ): Promise<OcrEngine> {
   const { createWorker } = await import('tesseract.js');
   const worker = await createWorker([...__OCR_LANGUAGES__], OEM_LSTM_ONLY, {
@@ -93,28 +127,70 @@ export async function createTesseractEngine(
 
   return {
     async recognize(image, options = {}) {
-      const { region, layout } = options;
+      const { layout } = options;
+      const cleaned = await cleanedCopy(image, codec);
+      const target = cleaned?.blob ?? image;
+      const region =
+        options.region && cleaned
+          ? rectangleToCopy(options.region, cleaned.transform)
+          : options.region;
       // A region is read as one block; the sparse layout is for the whole
-      // photo. Page mode is set after every switch, which resets it.
-      const pageMode = region
-        ? PSM_SINGLE_BLOCK
-        : layout === 'sparse'
-          ? PSM_SPARSE_TEXT
-          : layout === 'block'
-            ? PSM_SINGLE_BLOCK
-            : PSM_AUTO;
+      // photo. Page mode is set after every switch, which resets it. A
+      // cleaned copy is always read as sparse text: a table is not a block,
+      // and read as one (or as automatic columns) its cells run together —
+      // on the label measured, sparse mode found every row label and most
+      // values where block mode found half the labels. The reader regroups
+      // words by position anyway.
+      const pageMode = cleaned
+        ? PSM_SPARSE_TEXT
+        : region
+          ? PSM_SINGLE_BLOCK
+          : layout === 'sparse'
+            ? PSM_SPARSE_TEXT
+            : layout === 'block'
+              ? PSM_SINGLE_BLOCK
+              : PSM_AUTO;
       await switchLanguage('eng', pageMode);
-      const english = await wordsIn(image, region);
+      const english = await wordsIn(target, region);
       let arabic: OcrWord[] = [];
       if (__OCR_LANGUAGES__.includes('ara')) {
         await switchLanguage('ara', pageMode);
-        arabic = await wordsIn(image, region);
+        arabic = await wordsIn(target, region);
       }
       const words = mergeRecognitionPasses(english, arabic);
 
-      const photo = await createImageBitmap(image);
-      const { width, height } = photo;
-      photo.close();
+      let { width, height } = cleaned?.transform.copy ?? {
+        width: 0,
+        height: 0,
+      };
+      if (!cleaned) {
+        const photo = await createImageBitmap(image);
+        ({ width, height } = photo);
+        photo.close();
+      }
+
+      // A number is re-read from its own crop. From a cleaned copy that is a
+      // tight, enlarged crop of its ink, read as its own small image; its
+      // words come back in the copy's coordinates, where the page words are.
+      async function rereadNumber(word: OcrWord): Promise<OcrWord[]> {
+        const rect = cleaned && numberInkCrop(cleaned.image, word.bbox);
+        if (cleaned && rect) {
+          const factor = rereadScale(rect.height);
+          const crop = await codec.encode(
+            enlargeCrop(cleaned.image, rect, factor),
+          );
+          return (await wordsIn(crop)).map((w) => ({
+            ...w,
+            bbox: {
+              x0: rect.left + w.bbox.x0 / factor,
+              y0: rect.top + w.bbox.y0 / factor,
+              x1: rect.left + w.bbox.x1 / factor,
+              y1: rect.top + w.bbox.y1 / factor,
+            },
+          }));
+        }
+        return wordsIn(target, numberCrop(word.bbox, width, height));
+      }
 
       await switchLanguage('eng', PSM_SINGLE_LINE);
       let checks = 0;
@@ -125,13 +201,17 @@ export async function createTesseractEngine(
           continue;
         }
         checks += 1;
-        const reread = await wordsIn(
-          image,
-          numberCrop(words[i].bbox, width, height),
-        );
+        const reread = await rereadNumber(words[i]);
         words[i] = verifyNumberWord(words[i], reread);
       }
-      return { words };
+      return {
+        words: cleaned
+          ? words.map((word) => ({
+              ...word,
+              bbox: boxToPhoto(word.bbox, cleaned.transform),
+            }))
+          : words,
+      };
     },
     async terminate() {
       await worker.terminate();
