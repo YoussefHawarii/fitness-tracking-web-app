@@ -28,10 +28,11 @@ import {
 export interface LabelCameraProps {
   onCapture: (photo: Blob) => void;
   onClose: () => void;
-  // Reports whether the camera is showing a problem (permission denied, no
-  // camera, busy, interrupted…), so the panel can offer the photo buttons
-  // as the way forward.
-  onProblemChange?: (problem: boolean) => void;
+  // Reports whether the camera is live (showing the picture). While it is
+  // still starting, or showing a problem (permission denied, no camera,
+  // busy, interrupted…), the panel offers the photo buttons as the way
+  // forward.
+  onLiveChange?: (live: boolean) => void;
 }
 
 const INTERRUPTED_MESSAGE =
@@ -40,7 +41,7 @@ const INTERRUPTED_MESSAGE =
 export function LabelCamera({
   onCapture,
   onClose,
-  onProblemChange,
+  onLiveChange,
 }: LabelCameraProps) {
   const [videoGate] = useState(() => createElementGate<HTMLVideoElement>());
   const sessionRef = useRef<ReturnType<typeof createScanSession> | null>(null);
@@ -50,6 +51,7 @@ export function LabelCamera({
   const [state, setState] = useState<ScanState>(INITIAL_SCAN_STATE);
   const [shape, setShape] = useState<LabelFrameShape>('tall');
   const [capturing, setCapturing] = useState(false);
+  const [captureFailed, setCaptureFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,6 +83,7 @@ export function LabelCamera({
     const video = videoGate.current();
     if (!video || capturing) return;
     setCapturing(true);
+    setCaptureFailed(false);
     try {
       const photo = await captureFramedStill(video, shape);
       if (!openRef.current) return;
@@ -90,16 +93,17 @@ export function LabelCamera({
         return;
       }
     } catch {
-      // A frame that can't be drawn yet: the user can tap again.
+      // A frame that can't be drawn yet: told below, so the user can tap again.
     }
+    setCaptureFailed(true);
     setCapturing(false);
   }
 
   const problem = cameraProblemMessage(state.status, INTERRUPTED_MESSAGE);
-  const hasProblem = problem !== null;
+  const live = state.status === 'scanning';
   useEffect(() => {
-    onProblemChange?.(hasProblem);
-  }, [hasProblem, onProblemChange]);
+    onLiveChange?.(live);
+  }, [live, onLiveChange]);
 
   if (problem) {
     return (
@@ -122,7 +126,6 @@ export function LabelCamera({
     );
   }
 
-  const scanning = state.status === 'scanning';
   return (
     <div className="flex flex-col gap-3">
       <p className="text-body text-text-muted">
@@ -132,14 +135,19 @@ export function LabelCamera({
       <Viewfinder
         videoRef={videoGate.set}
         shape={shape}
-        starting={!scanning}
+        starting={!live}
         torch={state.torch}
         onToggleTorch={() => void sessionRef.current?.toggleTorch()}
       />
+      {captureFailed && (
+        <p role="alert" className="text-body text-warn">
+          Couldn&apos;t take the photo — hold steady and try again.
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         <PrimaryButton
           type="button"
-          disabled={!scanning || capturing}
+          disabled={!live || capturing}
           onClick={() => void capture()}
         >
           Take label photo

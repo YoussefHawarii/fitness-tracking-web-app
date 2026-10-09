@@ -9,7 +9,8 @@ const test = (name, fn) => baseTest(name, { timeout: 5000 }, fn);
 // The label camera mounted in a DOM with a fake camera at the getUserMedia
 // boundary: the frame toggle and the flashlight say what state they are in
 // to a screen reader, and a camera problem is announced with wording that
-// fits a single photo (nothing to "resume").
+// fits a single photo (nothing to "resume"), and a photo that can't be taken
+// says so.
 
 const dom = new JSDOM('<!doctype html><html><body></body></html>', {
   pretendToBeVisual: true,
@@ -70,8 +71,9 @@ const settle = () =>
   });
 
 // A rear camera with a flashlight whose track can be ended like the OS
-// does, or a getUserMedia that fails with the given error name.
-function useFakeCamera({ failWith } = {}) {
+// does, a getUserMedia that fails with the given error name, or one that
+// never settles (a permission prompt nobody has answered).
+function useFakeCamera({ failWith, pending } = {}) {
   const track = Object.assign(new dom.window.EventTarget(), {
     getCapabilities: () => ({ torch: true }),
     applyConstraints: async () => {},
@@ -85,6 +87,7 @@ function useFakeCamera({ failWith } = {}) {
     configurable: true,
     value: {
       getUserMedia: async () => {
+        if (pending) return new Promise(() => {});
         if (failWith) throw new DOMException('no', failWith);
         return stream;
       },
@@ -161,7 +164,7 @@ test('a denied camera is announced as an alert and reported as a problem', async
   useFakeCamera({ failWith: 'NotAllowedError' });
   const reported = [];
   const { container, root } = await mount({
-    onProblemChange: (problem) => reported.push(problem),
+    onLiveChange: (live) => reported.push(live),
   });
 
   const alert = container.querySelector('p[role="alert"]');
@@ -169,7 +172,7 @@ test('a denied camera is announced as an alert and reported as a problem', async
   assert.match(alert.textContent, /permission was denied/i);
   assert.ok(byName(container, 'Try again'));
   assert.ok(byName(container, 'Close camera'));
-  assert.equal(reported.at(-1), true);
+  assert.equal(reported.at(-1), false);
   await act(async () => root.unmount());
 });
 
@@ -189,13 +192,51 @@ test('a camera taken away mid-view says so without talking about resuming a scan
   await act(async () => root.unmount());
 });
 
-test('a working camera reports no problem', async () => {
+test('a working camera reports that it is live', async () => {
   useFakeCamera();
   const reported = [];
   const { root } = await mount({
-    onProblemChange: (problem) => reported.push(problem),
+    onLiveChange: (live) => reported.push(live),
+  });
+  assert.equal(reported.at(-1), true);
+  await act(async () => root.unmount());
+});
+
+test('a camera that is still starting reports that it is not live', async () => {
+  useFakeCamera({ pending: true });
+  const reported = [];
+  const { container, root } = await mount({
+    onLiveChange: (live) => reported.push(live),
   });
   assert.ok(reported.length > 0);
-  assert.ok(reported.every((problem) => problem === false));
+  assert.ok(reported.every((live) => live === false));
+  assert.match(container.textContent, /Starting camera/);
+  assert.equal(byName(container, 'Take label photo').disabled, true);
+  await act(async () => root.unmount());
+});
+
+test('a photo that cannot be taken says so, and the message clears on the next try', async () => {
+  useFakeCamera();
+  let captured = 0;
+  const { container, root } = await mount({
+    onCapture: () => {
+      captured += 1;
+    },
+  });
+  assert.equal(container.querySelector('[role="alert"]'), null);
+
+  // jsdom's video never has a frame, so there is nothing to draw.
+  await click(byName(container, 'Take label photo'));
+  await settle();
+  const alert = container.querySelector('p[role="alert"]');
+  assert.ok(alert);
+  assert.match(alert.textContent, /couldn.t take the photo/i);
+  assert.equal(captured, 0);
+  assert.equal(byName(container, 'Take label photo').disabled, false);
+
+  // Another try clears the message first; here it fails again, so it returns.
+  await click(byName(container, 'Take label photo'));
+  await settle();
+  assert.equal(container.querySelectorAll('p[role="alert"]').length, 1);
   await act(async () => root.unmount());
 });

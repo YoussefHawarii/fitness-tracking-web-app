@@ -99,6 +99,10 @@ First-scan download, for reference: worker 0.11 MB, one engine build about
 - In-app label camera: the resolution it actually delivers (log or inspect
   the captured photo's size)
 - In-app label camera: 2x zoom and continuous focus on Android
+- In-app label camera: on iPhone Safari there is no zoom control (the frame
+  stays at 1x, so move closer), focus is automatic (no tap-to-focus in the
+  web viewfinder) and the resolution is often about 1080p; passes if the
+  table inside the frame is sharp and readable
 - In-app label camera: flashlight turns on and off
 - In-app label camera: the tall and wide frames match what is captured
 - In-app label camera: a captured photo is read immediately, with no crop

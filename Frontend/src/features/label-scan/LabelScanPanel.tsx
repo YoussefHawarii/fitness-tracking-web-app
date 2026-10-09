@@ -86,22 +86,22 @@ export function LabelScanPanel({
   );
   const [choice, setChoice] = useState<ReviewChoice | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
-  // The open camera is showing a problem; the photo buttons are then the
-  // way forward.
-  const [cameraProblem, setCameraProblem] = useState(false);
+  // The open camera is showing the picture. Until it does (still starting,
+  // or showing a problem) the photo buttons are the way forward.
+  const [cameraLive, setCameraLive] = useState(false);
 
   // The worker and the photo are released when the form goes away
   // (including after the product is created).
   useEffect(() => () => session.dispose(), [session]);
 
   function openCamera() {
-    setCameraProblem(false);
+    setCameraLive(false);
     setCameraOpen(true);
   }
 
   function closeCamera() {
     setCameraOpen(false);
-    setCameraProblem(false);
+    setCameraLive(false);
   }
 
   function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
@@ -166,10 +166,10 @@ export function LabelScanPanel({
             void session.scanFramed(photo);
           }}
           onClose={closeCamera}
-          onProblemChange={setCameraProblem}
+          onLiveChange={setCameraLive}
         />
       )}
-      {(!cameraOpen || cameraProblem) && (
+      {(!cameraOpen || !cameraLive) && (
         <div className="flex flex-wrap gap-2">
           {!cameraOpen && (
             <PrimaryButton type="button" onClick={openCamera}>
