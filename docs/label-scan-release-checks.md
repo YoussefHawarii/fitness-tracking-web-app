@@ -33,6 +33,9 @@ memory, cellular download time, or the CSP with real third-party sign-in.
    - On clear labels, at least 80% of calories, protein, carbs and fat are
      read from a per-100 column on the label's own basis.
 
+The fixture page reads whole photos only, so it does not exercise the label
+camera or region reads. Those are checked on the phones, below.
+
 The shipped app has no OCR export or debug path. The page lives outside
 `src/`, and the production build only bundles the app's own `index.html`.
 
@@ -92,6 +95,16 @@ First-scan download, for reference: worker 0.11 MB, one engine build about
 **Cases (run on each device and record the result)**
 
 - Camera capture
+- In-app label camera: opens with the permission prompt
+- In-app label camera: the resolution it actually delivers (log or inspect
+  the captured photo's size)
+- In-app label camera: 2x zoom and continuous focus on Android
+- In-app label camera: flashlight turns on and off
+- In-app label camera: the tall and wide frames match what is captured
+- In-app label camera: a captured photo is read immediately, with no crop
+  step
+- In-app label camera: with camera permission denied, "Take photo" and
+  "Choose photo" are offered and work
 - Gallery pick
 - HEIC photo
 - Rotated or EXIF-oriented photo
@@ -123,6 +136,8 @@ First-scan download, for reference: worker 0.11 MB, one engine build about
 - [ ] Per-serving-only labels never fill per-100 fields
 - [ ] First-scan download within about 15 s on 4G
 - [ ] No tab crash or reload on either iPhone across 5 consecutive scans
+- [ ] No tab crash or reload on either iPhone across 5 consecutive in-app
+      label camera scans (full-resolution crops use more memory)
 - [ ] Clean-profile network inspection on every device. The only requests
       during capture, scan, cancel and apply are same-origin OCR asset
       requests. The only request carrying product data is the create-product

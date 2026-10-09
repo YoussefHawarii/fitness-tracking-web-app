@@ -86,16 +86,31 @@ export function LabelScanPanel({
   );
   const [choice, setChoice] = useState<ReviewChoice | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  // The open camera is showing a problem; the photo buttons are then the
+  // way forward.
+  const [cameraProblem, setCameraProblem] = useState(false);
 
   // The worker and the photo are released when the form goes away
   // (including after the product is created).
   useEffect(() => () => session.dispose(), [session]);
 
+  function openCamera() {
+    setCameraProblem(false);
+    setCameraOpen(true);
+  }
+
+  function closeCamera() {
+    setCameraOpen(false);
+    setCameraProblem(false);
+  }
+
   function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     // Reset so choosing the same photo again still fires a change.
     e.target.value = '';
-    if (file) void session.scan(file);
+    if (!file) return;
+    closeCamera();
+    void session.scan(file);
   }
 
   if (!view.open) {
@@ -112,6 +127,8 @@ export function LabelScanPanel({
 
   const { scan, progress } = view;
   const busy = scan.kind === 'preparing' || scan.kind === 'recognizing';
+  // A photo was already taken, so the buttons offer another one.
+  const rescanning = scan.kind === 'review' || scan.kind === 'cropping';
   const percent = progress ? Math.round(progress.progress * 100) : null;
   const progressText =
     view.engine === 'loading'
@@ -145,23 +162,22 @@ export function LabelScanPanel({
       {cameraOpen && (
         <Camera
           onCapture={(photo) => {
-            setCameraOpen(false);
+            closeCamera();
             void session.scanFramed(photo);
           }}
-          onClose={() => setCameraOpen(false)}
+          onClose={closeCamera}
+          onProblemChange={setCameraProblem}
         />
       )}
-      {!cameraOpen && (
+      {(!cameraOpen || cameraProblem) && (
         <div className="flex flex-wrap gap-2">
-          <PrimaryButton type="button" onClick={() => setCameraOpen(true)}>
-            {scan.kind === 'review' || scan.kind === 'cropping'
-              ? 'Scan again with camera'
-              : 'Scan with camera'}
-          </PrimaryButton>
+          {!cameraOpen && (
+            <PrimaryButton type="button" onClick={openCamera}>
+              {rescanning ? 'Scan again with camera' : 'Scan with camera'}
+            </PrimaryButton>
+          )}
           <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-            {scan.kind === 'review' || scan.kind === 'cropping'
-              ? 'Retake photo'
-              : 'Take photo'}
+            {rescanning ? 'Retake photo' : 'Take photo'}
             <input
               type="file"
               accept="image/*"
@@ -171,9 +187,7 @@ export function LabelScanPanel({
             />
           </label>
           <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-            {scan.kind === 'review' || scan.kind === 'cropping'
-              ? 'Choose another photo'
-              : 'Choose photo'}
+            {rescanning ? 'Choose another photo' : 'Choose photo'}
             <input
               type="file"
               accept="image/*"
@@ -259,7 +273,7 @@ export function LabelScanPanel({
         onClick={() => {
           session.cancel();
           setChoice(null);
-          setCameraOpen(false);
+          closeCamera();
         }}
         className="self-start"
       >

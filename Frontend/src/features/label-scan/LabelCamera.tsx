@@ -28,9 +28,20 @@ import {
 export interface LabelCameraProps {
   onCapture: (photo: Blob) => void;
   onClose: () => void;
+  // Reports whether the camera is showing a problem (permission denied, no
+  // camera, busy, interrupted…), so the panel can offer the photo buttons
+  // as the way forward.
+  onProblemChange?: (problem: boolean) => void;
 }
 
-export function LabelCamera({ onCapture, onClose }: LabelCameraProps) {
+const INTERRUPTED_MESSAGE =
+  'The camera stopped, for example because the screen locked or another app took it. Try again to reopen it.';
+
+export function LabelCamera({
+  onCapture,
+  onClose,
+  onProblemChange,
+}: LabelCameraProps) {
   const [videoGate] = useState(() => createElementGate<HTMLVideoElement>());
   const sessionRef = useRef<ReturnType<typeof createScanSession> | null>(null);
   // False once the camera is closed, so a photo still being encoded then is
@@ -84,11 +95,18 @@ export function LabelCamera({ onCapture, onClose }: LabelCameraProps) {
     setCapturing(false);
   }
 
-  const problem = cameraProblemMessage(state.status);
+  const problem = cameraProblemMessage(state.status, INTERRUPTED_MESSAGE);
+  const hasProblem = problem !== null;
+  useEffect(() => {
+    onProblemChange?.(hasProblem);
+  }, [hasProblem, onProblemChange]);
+
   if (problem) {
     return (
       <div className="flex flex-col gap-2">
-        <p className="text-body text-warn">{problem}</p>
+        <p role="alert" className="text-body text-warn">
+          {problem}
+        </p>
         <div className="flex flex-wrap gap-2">
           <SecondaryButton
             type="button"
@@ -128,9 +146,11 @@ export function LabelCamera({ onCapture, onClose }: LabelCameraProps) {
         </PrimaryButton>
         <SecondaryButton
           type="button"
+          aria-pressed={shape === 'wide'}
+          className={shape === 'wide' ? 'border-accent text-accent' : ''}
           onClick={() => setShape(shape === 'tall' ? 'wide' : 'tall')}
         >
-          {shape === 'tall' ? 'Wide table' : 'Tall table'}
+          Wide table frame
         </SecondaryButton>
         <SecondaryButton type="button" onClick={onClose}>
           Close camera
@@ -188,11 +208,11 @@ function Viewfinder({
       {torch.available && (
         <button
           type="button"
-          aria-label={torch.on ? 'Turn off flashlight' : 'Turn on flashlight'}
+          aria-pressed={torch.on}
           onClick={onToggleTorch}
-          className="absolute bottom-4 right-4 rounded-full bg-black/70 px-4 py-2 text-body text-white"
+          className={`absolute bottom-4 right-4 rounded-full px-4 py-2 text-body ${torch.on ? 'bg-accent text-bg' : 'bg-black/70 text-white'}`}
         >
-          {torch.on ? 'Turn off flashlight' : 'Turn on flashlight'}
+          Flashlight
         </button>
       )}
     </div>

@@ -21,11 +21,11 @@ export function createCameraOpener({
       );
     }
     const video = await videoGate.whenReady();
-    if (isCancelled()) throw new DOMException('Scanner closed.', 'AbortError');
+    if (isCancelled()) throw new DOMException('Camera closed.', 'AbortError');
     const stream = await navigator.mediaDevices.getUserMedia(constraints);
     if (isCancelled() || videoGate.current() !== video) {
       stream.getTracks().forEach((track) => track.stop());
-      throw new DOMException('Scanner closed.', 'AbortError');
+      throw new DOMException('Camera closed.', 'AbortError');
     }
     video.srcObject = stream;
     void video.play().catch(() => {});

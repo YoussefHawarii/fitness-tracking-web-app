@@ -1,8 +1,12 @@
 import type { ScanStatus } from './scan-session';
 
 // What to tell the user when the camera isn't running, or null while it
-// is (or is starting). Shared with the label camera.
-export function cameraProblemMessage(status: ScanStatus): string | null {
+// is (or is starting). Shared with the label camera, which words the
+// interrupted case for itself (it has no scan to resume).
+export function cameraProblemMessage(
+  status: ScanStatus,
+  interruptedMessage = 'The camera stopped, for example because the screen locked or another app took it. Try again to resume scanning.',
+): string | null {
   return status === 'permission-denied'
     ? 'Camera permission was denied. Allow camera access in your browser settings and try again.'
     : status === 'unavailable'
@@ -14,6 +18,6 @@ export function cameraProblemMessage(status: ScanStatus): string | null {
           : status === 'unsupported'
             ? 'The camera needs a secure (https) page in a supported browser.'
             : status === 'interrupted'
-              ? 'The camera stopped, for example because the screen locked or another app took it. Try again to resume scanning.'
+              ? interruptedMessage
               : null;
 }

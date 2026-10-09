@@ -258,7 +258,9 @@ export function createLabelScanSession(
         const retried = readLabel(sparse);
         if (retried.outcome !== 'no-per-100-column') result = retried;
       }
-      if (!held) return;
+      // Not reachable while the run is current; if it ever were, fail with
+      // the usual error instead of leaving "Reading label…" up for good.
+      if (!held) throw new Error('No photo held.');
       set({
         scan: { kind: 'review', result, image: held.image, run: thisRun },
       });

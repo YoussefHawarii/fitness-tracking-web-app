@@ -667,13 +667,17 @@ test('a new photo starts with the crop box over the whole photo', async () => {
 // --- The label camera ---
 
 // A stand-in for the framed camera, so the panel is tested without a real
-// one: it counts how often it is mounted and unmounted and takes a photo
-// when asked.
+// one: it counts how often it is mounted and unmounted, takes a photo when
+// asked, and reports a problem on demand (camera.reportProblem).
 const FRAMED_PHOTO = 'framed photo';
 
 function fakeCamera() {
-  const camera = { mounted: 0, unmounted: 0 };
-  camera.Component = function FakeCamera({ onCapture, onClose }) {
+  const camera = { mounted: 0, unmounted: 0, props: null };
+  camera.reportProblem = (problem) =>
+    act(async () => camera.props.onProblemChange(problem));
+  camera.Component = function FakeCamera(props) {
+    const { onCapture, onClose } = props;
+    camera.props = props;
     React.useEffect(() => {
       camera.mounted += 1;
       return () => {
@@ -820,5 +824,68 @@ test('a photo taken with the camera replaces the earlier review and releases its
   assert.deepEqual(fake.released, ['blob:review-0']);
   assert.ok(container.innerHTML.includes('blob:review-1'));
   assert.match(container.textContent, /Apply selected/);
+  await act(async () => root.unmount());
+});
+
+test('while the camera shows a problem, "Take photo" and "Choose photo" are offered', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  await click(button(container, 'Scan with camera'));
+  assert.equal(fileButtonsShown(container), false);
+
+  await camera.reportProblem(true);
+  assert.equal(camera.shown(container), true);
+  assert.ok(fileButtonsShown(container));
+  assert.match(container.textContent, /Take photo/);
+  assert.match(container.textContent, /Choose photo/);
+  // The camera itself is retried or closed from its own buttons.
+  assert.equal(button(container, 'Scan with camera'), undefined);
+  assert.ok(button(container, 'Close camera'));
+
+  // The problem clears (a retry worked): the photo buttons go away again.
+  await camera.reportProblem(false);
+  assert.equal(fileButtonsShown(container), false);
+  await act(async () => root.unmount());
+});
+
+test('choosing a photo while the camera shows a problem closes it and goes to the crop step', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  await click(button(container, 'Scan with camera'));
+  await camera.reportProblem(true);
+
+  const input = container.querySelector('input[type="file"]:not([capture])');
+  Object.defineProperty(input, 'files', {
+    configurable: true,
+    value: [new dom.window.Blob(['chosen'])],
+  });
+  await act(async () => {
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await settle();
+
+  assert.equal(camera.shown(container), false);
+  assert.equal(camera.unmounted, 1);
+  assert.ok(button(container, 'Read whole photo'));
+  assert.deepEqual(fake.engines[0].engine.recognized, []);
+  await act(async () => root.unmount());
+});
+
+test('a problem from an earlier camera does not show the photo buttons on the next one', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  await click(button(container, 'Scan with camera'));
+  await camera.reportProblem(true);
+  await click(button(container, 'Close camera'));
+
+  await click(button(container, 'Scan with camera'));
+  assert.equal(camera.shown(container), true);
+  assert.equal(fileButtonsShown(container), false);
   await act(async () => root.unmount());
 });
