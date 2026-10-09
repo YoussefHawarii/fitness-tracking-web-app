@@ -192,7 +192,7 @@ test('"less than" values and unclear numbers stay empty, never 0', () => {
   const result = read(
     PER_100_G_HEADER,
     row(120, ['Protein', 10], ['<0.5', 160], ['g', 210]),
-    row(160, ['Fat', 10], ['1,046', 160], ['g', 200]),
+    row(160, ['Fat', 10], ['1,046.5', 160], ['g', 240]),
   );
   for (const field of ['proteinPer100g', 'fatPer100g']) {
     const r = reading(result, field);
@@ -200,6 +200,20 @@ test('"less than" values and unclear numbers stay empty, never 0', () => {
     assert.equal(r.value, undefined);
     assert.equal(r.warnings.length, 1);
   }
+  // Several separators is unclear, not merely an impossible amount.
+  assert.deepEqual(reading(result, 'fatPer100g').warnings, [
+    "Couldn't read this number clearly.",
+  ]);
+});
+
+test('a three-decimal value with a comma reads as a decimal, never as thousands', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(160, ['Fat', 10], ['1,046', 160], ['g', 220]),
+  );
+  const fat = reading(result, 'fatPer100g');
+  assert.equal(fat.status, 'read');
+  assert.equal(fat.value, 1.046);
 });
 
 test('a row with several gram values is left unresolved rather than guessed', () => {
@@ -726,8 +740,15 @@ test('Arabic digits, the Arabic decimal separator and decimal commas parse', () 
     value: 0.125,
     ambiguous: false,
   });
-  assert.deepEqual(reader.parseLabelNumber('1,046'), { ambiguous: true });
-  assert.deepEqual(reader.parseLabelNumber('1.046'), { ambiguous: true });
+  // Three decimals are always a decimal, never thousands.
+  assert.deepEqual(reader.parseLabelNumber('1,046'), {
+    value: 1.046,
+    ambiguous: false,
+  });
+  assert.deepEqual(reader.parseLabelNumber('1.046'), {
+    value: 1.046,
+    ambiguous: false,
+  });
   assert.deepEqual(reader.parseLabelNumber('1,046.5'), { ambiguous: true });
 });
 
@@ -760,6 +781,60 @@ test('a decimal comma reads as a decimal, never as thousands', () => {
     row(160, ['Fat', 10], ['2,5', 160], ['g', 200]),
   );
   assert.equal(reading(result, 'fatPer100g').value, 2.5);
+});
+
+// A value printed with three decimals is always a decimal: "415.932" is
+// 415.932, never 415932. Values from a real Egyptian cookie label.
+test('three-decimal values on a per 100 g label read as decimals', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(80, ['Energy', 10], ['415.932', 160], ['kcal', 240]),
+    row(120, ['Total', 10], ['carbohydrates', 70], ['83.651', 220], ['g', 290]),
+    row(160, ['Total', 10], ['fat', 70], ['6.232', 160], ['g', 220]),
+    row(200, ['Saturated', 10], ['fat', 110], ['4.997', 160], ['g', 220]),
+    row(240, ['Protein', 10], ['6.51', 160], ['g', 210]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.deepEqual(values(result), {
+    caloriesPer100g: 415.932,
+    proteinPer100g: 6.51,
+    carbsPer100g: 83.651,
+    fatPer100g: 6.232,
+  });
+  for (const field of MACROS) {
+    assert.equal(reading(result, field).status, 'read', field);
+  }
+});
+
+test('a dotted kJ value beside kcal never changes the kcal reading', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(
+      80,
+      ['Energy', 10],
+      ['1.046', 160],
+      ['kJ', 220],
+      ['/', 250],
+      ['250', 270],
+      ['kcal', 310],
+    ),
+  );
+  const calories = reading(result, 'caloriesPer100g');
+  assert.equal(calories.status, 'read');
+  assert.equal(calories.value, 250);
+  assert.equal(calories.conversion, undefined);
+});
+
+test('a three-decimal value with a decimal comma reads as a decimal', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(80, ['Energy', 10], ['415,932', 160], ['kcal', 240]),
+  );
+  const calories = reading(result, 'caloriesPer100g');
+  assert.equal(calories.status, 'read');
+  assert.equal(calories.value, 415.932);
+  assert.equal(calories.unit, 'kcal');
 });
 
 test('Arabic per-100 headings choose the column like English ones', () => {
@@ -919,6 +994,134 @@ test('English and Arabic per-100 headings far apart on one row stay separate', (
   );
   assert.equal(result.outcome, 'no-per-100-column');
   assert.equal(result.basisSuggestion, undefined);
+});
+
+test('a bilingual table title states the per-100 basis', () => {
+  // Title words and boxes copied from a real OCR read of the label (noise
+  // words "sd" and "f" left out). The OCR missed الغذائيه in the printed
+  // Arabic title and prefixed القيمة with _. The value rows are synthetic,
+  // placed where the real numbers sat: right of "100g", not under it.
+  const result = read(
+    [
+      {
+        text: 'Nutrition',
+        bbox: { x0: 62, y0: 39, x1: 155, y1: 56 },
+        confidence: 95,
+      },
+      {
+        text: 'Facts',
+        bbox: { x0: 166, y0: 38, x1: 215, y1: 54 },
+        confidence: 95,
+      },
+      {
+        text: 'for',
+        bbox: { x0: 226, y0: 37, x1: 248, y1: 50 },
+        confidence: 96,
+      },
+      {
+        text: '100g',
+        bbox: { x0: 263, y0: 35, x1: 303, y1: 49 },
+        confidence: 94,
+      },
+      {
+        text: '_القيمة',
+        bbox: { x0: 584, y0: 22, x1: 622, y1: 39 },
+        confidence: 68,
+      },
+      {
+        text: 'لكل',
+        bbox: { x0: 505, y0: 39, x1: 509, y1: 41 },
+        confidence: 92,
+      },
+      {
+        text: '100',
+        bbox: { x0: 468, y0: 29, x1: 495, y1: 42 },
+        confidence: 92,
+      },
+      {
+        text: 'جم',
+        bbox: { x0: 441, y0: 33, x1: 458, y1: 40 },
+        confidence: 96,
+      },
+    ],
+    row(100, ['Protein', 10], ['6.51', 306], ['g', 351]),
+    row(140, ['Sugars', 10], ['11.60', 306], ['g', 361]),
+    row(180, ['Fiber', 10], ['0.2', 306], ['g', 341]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.equal(reading(result, 'proteinPer100g').value, 6.51);
+});
+
+test('an English per-100 heading right beside a bilingual Arabic title is one column', () => {
+  const result = read(
+    // Normal 10 px word gaps; the Arabic title reads right to left.
+    row(
+      40,
+      ['Nutrition', 120],
+      ['Facts', 220],
+      ['for', 280],
+      ['100g', 320],
+      ['جم', 370],
+      ['100', 400],
+      ['لكل', 440],
+      ['الغذائيه', 480],
+      ['القيمة', 570],
+    ),
+    row(120, ['Protein', 10], ['6.51', 320], ['g', 365]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(result.basisSuggestion, 'PER_100_G');
+  assert.equal(reading(result, 'proteinPer100g').value, 6.51);
+});
+
+test('per-100 as sold and prepared headings stay separate even under a table title', () => {
+  const result = read(
+    row(
+      40,
+      ['Nutrition', 10],
+      ['Facts', 110],
+      ['Per', 220],
+      ['100g', 260],
+      ['as', 310],
+      ['sold', 340],
+      ['Per', 500],
+      ['100g', 540],
+      ['prepared', 590],
+    ),
+    row(120, ['Protein', 10], ['6.51', 260], ['g', 305]),
+  );
+  assert.equal(result.outcome, 'no-per-100-column');
+  assert.equal(result.basisSuggestion, undefined);
+});
+
+test('a per-serving value is never read as per-100 under a bilingual title', () => {
+  const result = read(
+    row(
+      40,
+      ['Nutrition', 10],
+      ['Facts', 110],
+      ['for', 170],
+      ['100g', 210],
+      ['جم', 470],
+      ['100', 500],
+      ['لكل', 540],
+      ['القيمة', 590],
+    ),
+    row(70, ['Per', 380], ['serving', 415], ['30g', 495]),
+    row(
+      120,
+      ['Protein', 10],
+      ['6.51', 210],
+      ['g', 255],
+      ['1.95', 400],
+      ['g', 445],
+    ),
+  );
+  // Whether this resolves is open; a serving number must never be used.
+  assert.ok(
+    result.outcome !== 'ok' || reading(result, 'proteinPer100g').value === 6.51,
+  );
 });
 
 // --- More fields and units (#34) -----------------------------------------

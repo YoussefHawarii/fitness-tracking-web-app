@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
-import { after, before, test } from 'node:test';
+import { after, before, test as baseTest } from 'node:test';
 import { createServer } from 'vite';
 
+// A regressed run fails fast instead of hanging `npm test`.
+const test = (name, fn) => baseTest(name, { timeout: 5000 }, fn);
+
 // Label-scan session seam: the scanning lifecycle driven with a fake OCR
-// engine — loading and progress, load failure and retry, cancel and retake
-// mid-run, stale results, one reused worker, and releasing the worker and
-// the review photo. Tesseract never runs here.
+// engine — loading and progress, load failure and retry, the crop step
+// (read a region or the whole photo, with one sparse fallback pass), cancel
+// and retake mid-run, stale results, one reused worker, and releasing the
+// worker and the photo. Tesseract never runs here.
 
 let vite;
 let sessionModule;
@@ -57,6 +61,16 @@ const LAYOUT = {
     word('g', 185, 120),
   ],
 };
+// Rows with no per 100 header: the reader's outcome is no-per-100-column.
+const NO_HEADER = {
+  words: [word('Protein', 10, 120), word('21', 160, 120), word('g', 185, 120)],
+};
+const NO_HEADER_FAT = {
+  words: [word('Fat', 10, 120), word('5', 160, 120), word('g', 185, 120)],
+};
+// The fields a result actually read a value for.
+const fieldsRead = (result) =>
+  result.readings.filter((r) => r.status === 'read').map((r) => r.field);
 
 // A fake engine factory whose loads and recognitions the test controls.
 function fakeDependencies() {
@@ -64,8 +78,10 @@ function fakeDependencies() {
   const recognitions = [];
   const shown = [];
   const released = [];
+  const prepared = [];
   return {
     engines,
+    prepared,
     recognitions,
     shown,
     released,
@@ -74,8 +90,10 @@ function fakeDependencies() {
         const load = deferred();
         const engine = {
           terminated: 0,
-          recognize() {
+          recognize(image, options) {
             const job = deferred();
+            job.image = image;
+            job.options = options;
             recognitions.push(job);
             return job.promise;
           },
@@ -87,6 +105,7 @@ function fakeDependencies() {
         return load.promise.then(() => engine);
       },
       prepareImage: async (photo) => {
+        prepared.push(photo);
         if (photo === 'heic') throw new prepareModule.LabelImageDecodeError();
         return `prepared:${photo}`;
       },
@@ -145,28 +164,33 @@ test('a failed engine load can be retried', async () => {
 test('a scan during a failed load reports the load failure', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
-  const scanning = session.scan('a');
+  await session.scan('a');
+  const reading = session.readWholePhoto();
   await flush();
   fake.engines[0].load.reject(new Error('offline'));
-  await scanning;
+  await reading;
   assert.deepEqual(session.view().scan, {
     kind: 'error',
     message: sessionModule.ENGINE_LOAD_FAILED_MESSAGE,
   });
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
 });
 
-test('a scan goes recognizing → review with readings and the photo', async () => {
+test('reading the whole photo goes recognizing → review with readings and the photo', async () => {
   const fake = fakeDependencies();
   const session = sessionModule.createLabelScanSession(fake.deps);
   session.open();
   await flush();
   fake.engines[0].load.resolve();
-  const scanning = session.scan('a');
+  await session.scan('a');
+  const reading = session.readWholePhoto();
   await flush();
   assert.equal(session.view().scan.kind, 'recognizing');
 
   fake.recognitions[0].resolve(LAYOUT);
-  await scanning;
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  await reading;
   const { scan } = session.view();
   assert.equal(scan.kind, 'review');
   assert.equal(scan.result.outcome, 'ok');
@@ -187,19 +211,22 @@ test('cancel mid-recognition terminates the worker and discards the late result'
   session.open();
   await flush();
   fake.engines[0].load.resolve();
-  const scanning = session.scan('a');
+  await session.scan('a');
+  const reading = session.readWholePhoto();
   await flush();
 
   session.cancel();
   await flush();
   assert.equal(fake.engines[0].engine.terminated, 1);
   assert.equal(session.view().open, false);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
 
   fake.recognitions[0].resolve(LAYOUT);
-  await scanning;
+  await reading;
   assert.equal(session.view().open, false);
   assert.equal(session.view().scan.kind, 'none');
-  assert.deepEqual(fake.shown, []);
+  assert.deepEqual(fake.shown, ['blob:prepared:a:0']);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
 });
 
 test('a retake mid-run reuses the worker, waits its turn and ignores the replaced run', async () => {
@@ -208,9 +235,11 @@ test('a retake mid-run reuses the worker, waits its turn and ignores the replace
   session.open();
   await flush();
   fake.engines[0].load.resolve();
-  const first = session.scan('a');
+  await session.scan('a');
+  const first = session.readWholePhoto();
   await flush();
-  const second = session.scan('b');
+  await session.scan('b');
+  const second = session.readWholePhoto();
   await flush();
   assert.equal(fake.engines.length, 1);
   // Never two recognitions at once on the shared worker.
@@ -226,8 +255,9 @@ test('a retake mid-run reuses the worker, waits its turn and ignores the replace
   fake.recognitions[1].resolve(LAYOUT);
   await second;
   assert.equal(session.view().scan.kind, 'review');
-  assert.equal(session.view().scan.image.url, 'blob:prepared:b:0');
-  assert.deepEqual(fake.shown, ['blob:prepared:b:0']);
+  assert.equal(session.view().scan.image.url, 'blob:prepared:b:1');
+  assert.deepEqual(fake.shown, ['blob:prepared:a:0', 'blob:prepared:b:1']);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
 });
 
 test('a queued run cancelled while it waits never starts', async () => {
@@ -236,9 +266,11 @@ test('a queued run cancelled while it waits never starts', async () => {
   session.open();
   await flush();
   fake.engines[0].load.resolve();
-  const first = session.scan('a');
+  await session.scan('a');
+  const first = session.readWholePhoto();
   await flush();
-  const second = session.scan('b');
+  await session.scan('b');
+  const second = session.readWholePhoto();
   await flush();
   session.cancel();
   fake.recognitions[0].resolve(LAYOUT);
@@ -246,6 +278,7 @@ test('a queued run cancelled while it waits never starts', async () => {
   await flush();
   assert.equal(fake.recognitions.length, 1);
   assert.equal(session.view().open, false);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0', 'blob:prepared:b:1']);
 });
 
 test('cancelling during the engine load and reopening never runs two workers', async () => {
@@ -274,16 +307,19 @@ test('the review photo is released on retake, cancel and dispose', async () => {
   session.open();
   await flush();
   fake.engines[0].load.resolve();
-  const first = session.scan('a');
+  await session.scan('a');
+  const first = session.readWholePhoto();
   await flush();
   fake.recognitions[0].resolve(LAYOUT);
   await first;
 
   const retake = session.scan('b');
   assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  await retake;
+  const second = session.readWholePhoto();
   await flush();
   fake.recognitions[1].resolve(LAYOUT);
-  await retake;
+  await second;
 
   session.cancel();
   assert.deepEqual(fake.released, ['blob:prepared:a:0', 'blob:prepared:b:1']);
@@ -291,13 +327,18 @@ test('the review photo is released on retake, cancel and dispose', async () => {
   session.open();
   await flush();
   fake.engines[1].load.resolve();
-  const third = session.scan('c');
+  await session.scan('c');
+  const third = session.readWholePhoto();
   await flush();
   fake.recognitions[2].resolve(LAYOUT);
   await third;
   session.dispose();
   await flush();
-  assert.equal(fake.released.at(-1), 'blob:prepared:c:2');
+  assert.deepEqual(fake.released, [
+    'blob:prepared:a:0',
+    'blob:prepared:b:1',
+    'blob:prepared:c:2',
+  ]);
   assert.equal(fake.engines[1].engine.terminated, 1);
 });
 
@@ -344,14 +385,305 @@ test('a session never touches browser storage or the network', async () => {
     session.open();
     await flush();
     fake.engines[0].load.resolve();
-    const scanning = session.scan('a');
+    await session.scan('a');
+    const reading = session.readWholePhoto();
     await flush();
     fake.recognitions[0].resolve(LAYOUT);
-    await scanning;
+    await reading;
     session.cancel();
     session.dispose();
   } finally {
     Object.assign(globalThis, saved);
   }
   assert.deepEqual(touched, []);
+});
+
+// The crop step: a chosen photo is shown for cropping first; recognition
+// runs only when the user reads a region or the whole photo.
+
+async function readySession() {
+  const fake = fakeDependencies();
+  const session = sessionModule.createLabelScanSession(fake.deps);
+  session.open();
+  await flush();
+  fake.engines[0].load.resolve();
+  await flush();
+  return { fake, session };
+}
+
+// Resolves the whole-photo pass with no per-100 column and waits for the
+// fallback pass to start.
+async function failFirstPass(fake) {
+  fake.recognitions[0].resolve(NO_HEADER);
+  await flush();
+  await flush();
+}
+
+test('choosing a photo shows it for cropping and runs no recognition yet', async () => {
+  const { fake, session } = await readySession();
+  const scanning = session.scan('a');
+  assert.equal(session.view().scan.kind, 'preparing');
+  await scanning;
+  await flush();
+  assert.deepEqual(session.view().scan, {
+    kind: 'cropping',
+    image: { url: 'blob:prepared:a:0', width: 1000, height: 600 },
+  });
+  assert.equal(fake.recognitions.length, 0);
+  assert.deepEqual(fake.released, []);
+});
+
+test('reading a region passes it to the engine and reviews that result', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const region = { left: 100, top: 50, width: 400, height: 300 };
+  const reading = session.readRegion(region);
+  await flush();
+  assert.equal(session.view().scan.kind, 'recognizing');
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(fake.recognitions[0].image, 'prepared:a');
+  assert.deepEqual(fake.recognitions[0].options, { region });
+
+  fake.recognitions[0].resolve(LAYOUT);
+  await reading;
+  const { scan } = session.view();
+  assert.equal(scan.kind, 'review');
+  assert.equal(scan.result.outcome, 'ok');
+  assert.equal(
+    scan.result.readings.find((r) => r.field === 'proteinPer100g').value,
+    21,
+  );
+  // The review shows the photo already shown for cropping.
+  assert.deepEqual(scan.image, {
+    url: 'blob:prepared:a:0',
+    width: 1000,
+    height: 600,
+  });
+  assert.deepEqual(fake.shown, ['blob:prepared:a:0']);
+});
+
+test('reading the whole photo with no per-100 column runs one sparse pass and uses it', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readWholePhoto();
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(fake.recognitions[0].image, 'prepared:a');
+  assert.equal(fake.recognitions[0].options, undefined);
+
+  await failFirstPass(fake);
+  assert.equal(session.view().scan.kind, 'recognizing');
+  assert.equal(fake.recognitions.length, 2);
+  assert.equal(fake.recognitions[1].image, 'prepared:a');
+  assert.deepEqual(fake.recognitions[1].options, { layout: 'sparse' });
+
+  fake.recognitions[1].resolve(LAYOUT);
+  await reading;
+  const { scan } = session.view();
+  assert.equal(scan.kind, 'review');
+  assert.equal(scan.result.outcome, 'ok');
+  assert.equal(
+    scan.result.readings.find((r) => r.field === 'proteinPer100g').value,
+    21,
+  );
+  assert.equal(scan.image.url, 'blob:prepared:a:0');
+  assert.equal(fake.recognitions.length, 2);
+  assert.deepEqual(fake.prepared, ['a']);
+  assert.deepEqual(fake.shown, ['blob:prepared:a:0']);
+});
+
+test('when the sparse pass finds no per-100 column either, the first result is kept', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readWholePhoto();
+  await flush();
+  await failFirstPass(fake);
+  assert.equal(fake.recognitions.length, 2);
+  fake.recognitions[1].resolve(NO_HEADER_FAT);
+  await reading;
+  await flush();
+
+  const { scan } = session.view();
+  assert.equal(scan.kind, 'review');
+  assert.equal(scan.result.outcome, 'no-per-100-column');
+  // Protein came from the first pass; fat only from the sparse one.
+  assert.deepEqual(fieldsRead(scan.result), ['proteinPer100g']);
+  assert.equal(fake.recognitions.length, 2);
+});
+
+test('reading a region never runs the fallback pass', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readRegion({
+    left: 0,
+    top: 0,
+    width: 500,
+    height: 300,
+  });
+  await flush();
+  fake.recognitions[0].resolve(NO_HEADER);
+  await reading;
+  await flush();
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  const { scan } = session.view();
+  assert.equal(scan.kind, 'review');
+  assert.equal(scan.result.outcome, 'no-per-100-column');
+});
+
+test('cancel during cropping closes scanning and releases the photo', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  session.cancel();
+  await flush();
+  assert.equal(session.view().open, false);
+  assert.equal(session.view().scan.kind, 'none');
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  assert.equal(fake.engines[0].engine.terminated, 1);
+  assert.equal(fake.recognitions.length, 0);
+});
+
+test('a new photo during cropping releases the first and crops the new one', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  await session.scan('b');
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  assert.deepEqual(session.view().scan, {
+    kind: 'cropping',
+    image: { url: 'blob:prepared:b:1', width: 1000, height: 600 },
+  });
+  assert.equal(fake.recognitions.length, 0);
+});
+
+test('cancel during the fallback pass discards it and releases the photo', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readWholePhoto();
+  await flush();
+  await failFirstPass(fake);
+  assert.equal(fake.recognitions.length, 2);
+
+  session.cancel();
+  await flush();
+  assert.equal(fake.engines[0].engine.terminated, 1);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+
+  fake.recognitions[1].resolve(LAYOUT);
+  await reading;
+  await flush();
+  assert.equal(session.view().open, false);
+  assert.equal(session.view().scan.kind, 'none');
+  assert.equal(fake.recognitions.length, 2);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+});
+
+test('a new photo during the fallback pass discards it and crops the new photo', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readWholePhoto();
+  await flush();
+  await failFirstPass(fake);
+  assert.equal(fake.recognitions.length, 2);
+
+  await session.scan('b');
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  fake.recognitions[1].resolve(LAYOUT);
+  await reading;
+  await flush();
+  assert.deepEqual(session.view().scan, {
+    kind: 'cropping',
+    image: { url: 'blob:prepared:b:1', width: 1000, height: 600 },
+  });
+  assert.equal(fake.recognitions.length, 2);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+});
+
+test('a photo can be cropped while the engine loads, and a region read waits for it', async () => {
+  const fake = fakeDependencies();
+  const session = sessionModule.createLabelScanSession(fake.deps);
+  session.open();
+  await session.scan('a');
+  assert.equal(session.view().engine, 'loading');
+  assert.equal(session.view().scan.kind, 'cropping');
+  const region = { left: 0, top: 0, width: 500, height: 300 };
+  const reading = session.readRegion(region);
+  await flush();
+  assert.equal(session.view().scan.kind, 'recognizing');
+  assert.equal(fake.recognitions.length, 0);
+
+  fake.engines[0].load.resolve();
+  await flush();
+  assert.equal(fake.engines.length, 1);
+  assert.equal(fake.recognitions.length, 1);
+  assert.deepEqual(fake.recognitions[0].options, { region });
+  fake.recognitions[0].resolve(LAYOUT);
+  await reading;
+  assert.equal(session.view().scan.kind, 'review');
+});
+
+test('a read cancelled before its first pass ends never starts the fallback', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readWholePhoto();
+  await flush();
+  session.cancel();
+  await failFirstPass(fake);
+  await reading;
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  // No new worker is started for a stale fallback.
+  assert.equal(fake.engines.length, 1);
+  assert.equal(session.view().open, false);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+});
+
+test('a read is ignored unless a photo is being cropped', async () => {
+  const { fake, session } = await readySession();
+  await session.readWholePhoto();
+  await session.scan('a');
+  const first = session.readWholePhoto();
+  const again = session.readRegion({ left: 0, top: 0, width: 10, height: 10 });
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(fake.recognitions[0].options, undefined);
+  fake.recognitions[0].resolve(LAYOUT);
+  await Promise.all([first, again]);
+  await session.readWholePhoto();
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(session.view().scan.kind, 'review');
+});
+
+test('a photo replaced while it is being shown is released', async () => {
+  const fake = fakeDependencies();
+  const gate = deferred();
+  const show = fake.deps.showImage;
+  fake.deps.showImage = async (image) => {
+    const shown = await show(image);
+    await gate.promise;
+    return shown;
+  };
+  const session = sessionModule.createLabelScanSession(fake.deps);
+  const first = session.scan('a');
+  await flush();
+  const second = session.scan('b');
+  await flush();
+  gate.resolve();
+  await Promise.all([first, second]);
+  assert.deepEqual(fake.shown, ['blob:prepared:a:0', 'blob:prepared:b:1']);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  assert.deepEqual(session.view().scan, {
+    kind: 'cropping',
+    image: { url: 'blob:prepared:b:1', width: 1000, height: 600 },
+  });
+});
+
+test('dispose during cropping releases the photo once', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  session.dispose();
+  session.cancel();
+  await flush();
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  assert.equal(fake.engines[0].engine.terminated, 1);
 });

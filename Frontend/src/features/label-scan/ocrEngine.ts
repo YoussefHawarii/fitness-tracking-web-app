@@ -25,14 +25,26 @@ export interface OcrProgress {
   progress: number;
 }
 
+// How a photo is read. `region` limits both language passes to that
+// rectangle (photo pixels), read as one block of text. `layout: 'sparse'`
+// reads the whole photo for scattered text instead — the fallback when the
+// automatic reading finds no table. With neither, the whole photo is read
+// in automatic page mode.
+export interface RecognizeOptions {
+  region?: CropRectangle;
+  layout?: 'auto' | 'block' | 'sparse';
+}
+
 export interface OcrEngine {
-  recognize(image: Blob): Promise<OcrLayout>;
+  recognize(image: Blob, options?: RecognizeOptions): Promise<OcrLayout>;
   terminate(): Promise<void>;
 }
 
 const OEM_LSTM_ONLY = 1;
 const PSM_AUTO = '3';
+const PSM_SINGLE_BLOCK = '6';
 const PSM_SINGLE_LINE = '7';
+const PSM_SPARSE_TEXT = '11';
 // Upper bound on numbers re-read per photo, so a photo of dense text can't
 // turn into hundreds of re-reads on a phone. Numbers beyond it stay
 // unverified and are never read.
@@ -80,13 +92,23 @@ export async function createTesseractEngine(
   }
 
   return {
-    async recognize(image) {
-      await switchLanguage('eng', PSM_AUTO);
-      const english = await wordsIn(image);
+    async recognize(image, options = {}) {
+      const { region, layout } = options;
+      // A region is read as one block; the sparse layout is for the whole
+      // photo. Page mode is set after every switch, which resets it.
+      const pageMode = region
+        ? PSM_SINGLE_BLOCK
+        : layout === 'sparse'
+          ? PSM_SPARSE_TEXT
+          : layout === 'block'
+            ? PSM_SINGLE_BLOCK
+            : PSM_AUTO;
+      await switchLanguage('eng', pageMode);
+      const english = await wordsIn(image, region);
       let arabic: OcrWord[] = [];
       if (__OCR_LANGUAGES__.includes('ara')) {
-        await switchLanguage('ara', PSM_AUTO);
-        arabic = await wordsIn(image);
+        await switchLanguage('ara', pageMode);
+        arabic = await wordsIn(image, region);
       }
       const words = mergeRecognitionPasses(english, arabic);
 

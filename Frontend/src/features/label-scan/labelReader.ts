@@ -174,10 +174,10 @@ export function normalizeLabelText(text: string): string {
 
 const TOKEN_PATTERN = /\d+(?:[.,]\d+)*|[a-z]+|[\u0621-\u064a]+|<|%/g;
 
-// One separator: "." or "," as a decimal point ("2.5", "2,5"), except
-// that a separator followed by exactly three digits ("1,046", "1.046") may
-// be a thousands separator and is never read. Two or more separators are
-// never read either.
+// One separator: "." or "," is always a decimal point, however many digits
+// follow it ("2.5", "2,5", "415.932", "415,932"); labels print three decimals
+// routinely, so a three-digit fraction is never taken for a thousands group.
+// Two or more separators ("1,046.5") are never read.
 export function parseLabelNumber(text: string): {
   value?: number;
   ambiguous: boolean;
@@ -186,7 +186,6 @@ export function parseLabelNumber(text: string): {
   if (separators.length === 0) return { value: Number(text), ambiguous: false };
   if (separators.length > 1) return { ambiguous: true };
   const [whole, fraction] = text.split(/[.,]/);
-  if (fraction.length === 3 && whole !== '0') return { ambiguous: true };
   return { value: Number(`${whole}.${fraction}`), ambiguous: false };
 }
 
@@ -906,6 +905,13 @@ const PERCENT_WORDS = new Set([
   'اليوميه',
   'المرجعيه',
 ]);
+const TABLE_TITLE_WORDS = new Set([
+  'nutrition',
+  'nutritional',
+  'facts',
+  'القيمه',
+  'الغذائيه',
+]);
 
 function isWord(
   token: Token | undefined,
@@ -968,8 +974,19 @@ function headerPhrases(tokens: readonly Token[]): Column[] {
       (t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS),
     );
     const justPer = current?.length === 1 && isWord(current[0], PER_WORDS);
+    // Once a phrase holds a number, words in the other script start a
+    // new phrase: "100 g" must not absorb an Arabic table title.
+    const lastWord = current
+      ?.filter((t): t is Extract<Token, { kind: 'word' }> => t.kind === 'word')
+      .at(-1);
+    const scriptBreak =
+      token.kind === 'word' &&
+      lastWord !== undefined &&
+      lastWord.arabic !== token.arabic &&
+      current?.some((t) => t.kind === 'number');
     const starts =
       !current ||
+      scriptBreak ||
       isWord(token, PER_WORDS) ||
       (isWord(token, SERVING_WORDS) && !justPer) ||
       (per100Basis(tokens, i) !== undefined && !justPer && !inServing) ||
@@ -1099,6 +1116,37 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
       return undefined;
     } else {
       columns.push({ ...heading });
+    }
+  }
+
+  // A bilingual table title states one basis for the whole table, even
+  // when its translations sit far apart. Require matching bases, different
+  // scripts and title words on a shared row, with no other value columns.
+  if (columns.length === 2) {
+    const [a, b] = columns;
+    const titleRow = [...a.rows].some(
+      (row) =>
+        b.rows.has(row) &&
+        tokenize(aboveTable[row].row).some((t) => isWord(t, TABLE_TITLE_WORDS)),
+    );
+    if (
+      titleRow &&
+      a.kind === 'per100' &&
+      sameColumnKind(a, b) &&
+      a.script !== undefined &&
+      b.script !== undefined &&
+      a.script !== b.script
+    ) {
+      const x0 = Math.min(a.x0, b.x0);
+      const x1 = Math.max(a.x1, b.x1);
+      columns.splice(0, 2, {
+        ...a,
+        x0,
+        x1,
+        center: (x0 + x1) / 2,
+        script: undefined,
+        rows: new Set([...a.rows, ...b.rows]),
+      });
     }
   }
 

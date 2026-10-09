@@ -1,13 +1,15 @@
 import { readLabel, type LabelScanResult } from './labelReader';
-import type { OcrEngine, OcrProgress } from './ocrEngine';
+import type { OcrEngine, OcrProgress, RecognizeOptions } from './ocrEngine';
 import type { OcrLayout } from './ocrLayout';
 import { LabelImageDecodeError } from './prepareImage';
+import type { CropRectangle } from './recognitionPasses';
 
 // The Label-scan session: everything between opening label scanning and
 // closing it — loading the on-device engine (with progress and retry),
-// preparing each photo, recognition, discarding results of a cancelled or
-// replaced run, reusing one worker for every retake, and releasing the
-// worker and the review photo. It holds no React state and talks to the
+// preparing each photo and showing it for cropping, reading a region of it
+// or the whole photo (with one automatic fallback pass), discarding results
+// of a cancelled or replaced run, reusing one worker for every retake, and
+// releasing the worker and the photo. It holds no React state and talks to the
 // OCR engine and the image helpers only through the dependencies it is
 // given, so its lifecycle is testable with a fake engine.
 //
@@ -25,7 +27,8 @@ export interface LabelScanDependencies {
     onProgress: (progress: OcrProgress) => void,
   ) => Promise<OcrEngine>;
   prepareImage: (file: Blob) => Promise<Blob>;
-  // Makes the prepared photo viewable in the review (an object URL).
+  // Makes the prepared photo viewable for cropping and review (an object
+  // URL).
   showImage: (image: Blob) => Promise<ReviewImage>;
   releaseImage: (url: string) => void;
 }
@@ -34,6 +37,8 @@ export type EngineStatus = 'idle' | 'loading' | 'ready' | 'failed';
 
 export type ScanStatus =
   | { kind: 'none' }
+  | { kind: 'preparing' }
+  | { kind: 'cropping'; image: ReviewImage }
   | { kind: 'recognizing' }
   | { kind: 'review'; result: LabelScanResult; image: ReviewImage; run: number }
   | { kind: 'error'; message: string };
@@ -74,9 +79,18 @@ export interface LabelScanSession {
   open(): void;
   // Loads the engine again after a failed load.
   retry(): void;
-  // Reads a photo. A scan started while another runs replaces it: the
-  // earlier run's result is discarded when it arrives.
+  // Prepares a photo and shows it for cropping; nothing is recognized yet.
+  // A scan started while another runs replaces it: the earlier run's
+  // result is discarded when it arrives.
   scan(photo: Blob): Promise<void>;
+  // Reads one region of the photo being cropped, given in prepared-image
+  // pixels, as a single block of text. Does nothing unless a photo is
+  // being cropped.
+  readRegion(region: CropRectangle): Promise<void>;
+  // Reads the whole photo being cropped. If no per 100 column is found,
+  // one more pass for scattered text is tried and used if it finds one.
+  // Does nothing unless a photo is being cropped.
+  readWholePhoto(): Promise<void>;
   // Stops any recognition, terminates the worker and discards the photo
   // and readings. The form is untouched.
   cancel(): void;
@@ -97,14 +111,22 @@ export function createLabelScanSession(
   // Recognitions on the shared worker run one at a time: the engine
   // switches languages and parameters across several steps per photo.
   let recognitions: Promise<unknown> = Promise.resolve();
+  // The prepared photo and its object URL, from the moment it is shown for
+  // cropping until it is released. Kept separately from the status because
+  // the status holds no photo while recognizing.
+  let held: { prepared: Blob; image: ReviewImage } | null = null;
 
   function set(next: Partial<LabelScanView>) {
     view = { ...view, ...next };
     for (const listener of listeners) listener();
   }
 
-  function releaseReviewImage() {
-    if (view.scan.kind === 'review') deps.releaseImage(view.scan.image.url);
+  // Releases the held photo, at most once.
+  function releaseHeldImage() {
+    if (!held) return;
+    const { image } = held;
+    held = null;
+    deps.releaseImage(image.url);
   }
 
   // One worker per scanning session, created on demand and reused. A
@@ -145,6 +167,55 @@ export function createLabelScanSession(
     stopping = Promise.all([stopping, terminated]).then(() => undefined);
   }
 
+  // Reads the photo being cropped. Queued behind any recognition still
+  // running; a run replaced or cancelled while it waited never starts, and
+  // never starts the fallback pass either.
+  async function read(options?: RecognizeOptions) {
+    if (disposed || view.scan.kind !== 'cropping' || !held) return;
+    const thisRun = run;
+    const { prepared, image } = held;
+    set({ scan: { kind: 'recognizing' } });
+    const recognize = (ocr: OcrEngine, passOptions?: RecognizeOptions) => {
+      const job = recognitions.then<OcrLayout | typeof STALE>(() =>
+        thisRun !== run
+          ? STALE
+          : passOptions
+            ? ocr.recognize(prepared, passOptions)
+            : ocr.recognize(prepared),
+      );
+      recognitions = job.catch(() => undefined);
+      return job;
+    };
+    try {
+      const ocr = await ensureEngine();
+      if (thisRun !== run) return;
+      const layout = await recognize(ocr, options);
+      if (layout === STALE || thisRun !== run) return;
+      let result = readLabel(layout);
+      // Only the plain whole-photo read falls back: a region the user chose
+      // is read as is.
+      if (!options && result.outcome === 'no-per-100-column') {
+        const sparse = await recognize(ocr, { layout: 'sparse' });
+        if (sparse === STALE || thisRun !== run) return;
+        const retried = readLabel(sparse);
+        if (retried.outcome !== 'no-per-100-column') result = retried;
+      }
+      set({ scan: { kind: 'review', result, image, run: thisRun } });
+    } catch {
+      if (thisRun !== run) return;
+      releaseHeldImage();
+      set({
+        scan: {
+          kind: 'error',
+          message:
+            view.engine === 'failed'
+              ? ENGINE_LOAD_FAILED_MESSAGE
+              : IMAGE_FAILED_MESSAGE,
+        },
+      });
+    }
+  }
+
   return {
     view: () => view,
     subscribe(listener) {
@@ -163,32 +234,20 @@ export function createLabelScanSession(
     async scan(photo) {
       if (disposed) return;
       const thisRun = ++run;
-      releaseReviewImage();
-      set({ open: true, scan: { kind: 'recognizing' } });
-      let image: ReviewImage | undefined;
+      releaseHeldImage();
+      set({ open: true, scan: { kind: 'preparing' } });
+      // Loads while the photo is prepared and cropped.
+      void ensureEngine().catch(() => undefined);
       try {
-        const [prepared, ocr] = await Promise.all([
-          deps.prepareImage(photo),
-          ensureEngine(),
-        ]);
+        const prepared = await deps.prepareImage(photo);
         if (thisRun !== run) return;
-        // Queued behind any recognition still running; a run replaced or
-        // cancelled while it waited never starts.
-        const job = recognitions.then<OcrLayout | typeof STALE>(() =>
-          thisRun === run ? ocr.recognize(prepared) : STALE,
-        );
-        recognitions = job.catch(() => undefined);
-        const layout = await job;
-        if (layout === STALE || thisRun !== run) return;
-        // Parsed before the review photo exists, so a failure can't leave
-        // its object URL allocated.
-        const result = readLabel(layout);
-        image = await deps.showImage(prepared);
+        const image = await deps.showImage(prepared);
         if (thisRun !== run) {
           deps.releaseImage(image.url);
           return;
         }
-        set({ scan: { kind: 'review', result, image, run: thisRun } });
+        held = { prepared, image };
+        set({ scan: { kind: 'cropping', image } });
       } catch (err) {
         if (thisRun !== run) return;
         set({
@@ -197,24 +256,24 @@ export function createLabelScanSession(
             message:
               err instanceof LabelImageDecodeError
                 ? IMAGE_FORMAT_MESSAGE
-                : view.engine === 'failed'
-                  ? ENGINE_LOAD_FAILED_MESSAGE
-                  : IMAGE_FAILED_MESSAGE,
+                : IMAGE_FAILED_MESSAGE,
           },
         });
       }
     },
+    readRegion: (region) => read({ region }),
+    readWholePhoto: () => read(),
     cancel() {
       run += 1;
       stopEngine();
-      releaseReviewImage();
+      releaseHeldImage();
       set(CLOSED);
     },
     dispose() {
       if (disposed) return;
       run += 1;
       stopEngine();
-      releaseReviewImage();
+      releaseHeldImage();
       disposed = true;
       view = CLOSED;
       listeners.clear();
