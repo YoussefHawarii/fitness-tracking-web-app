@@ -133,6 +133,9 @@ const LAYOUT = {
 function fakeSession() {
   const engines = [];
   const released = [];
+  // The crop (as fractions of the photo) every preparation was asked for;
+  // undefined for a whole photo.
+  const prepared = [];
   let shown = 0;
   const session = sessionModule.createLabelScanSession({
     createEngine() {
@@ -152,7 +155,10 @@ function fakeSession() {
       engines.push({ load, engine });
       return load.promise.then(() => engine);
     },
-    prepareImage: async (photo) => photo,
+    prepareImage: async (photo, crop) => {
+      prepared.push(crop);
+      return photo;
+    },
     showImage: async () => ({
       url: `blob:review-${shown++}`,
       width: 1000,
@@ -160,7 +166,7 @@ function fakeSession() {
     }),
     releaseImage: (url) => released.push(url),
   });
-  return { session, engines, released };
+  return { session, engines, released, prepared };
 }
 
 const settle = () =>
@@ -168,7 +174,7 @@ const settle = () =>
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 
-async function mount(session) {
+async function mount(session, Camera) {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -178,6 +184,7 @@ async function mount(session) {
         preview: () => ({ values: {}, conflicts: [], missingRequired: [] }),
         onApply: () => 'Applied',
         createSession: () => session,
+        ...(Camera && { Camera }),
       }),
     );
   });
@@ -371,6 +378,17 @@ function displayAt(width, height) {
   };
 }
 
+// A region in the prepared photo's pixels as the fractions of the photo the
+// session asks for the crop (the prepared photo is 1000 × 600).
+function cropOf(left, top, width, height) {
+  return {
+    left: left / 1000,
+    top: top / 600,
+    width: width / 1000,
+    height: height / 600,
+  };
+}
+
 function labelled(container, pattern) {
   return [...container.querySelectorAll('[aria-label]')].filter((el) =>
     pattern.test(el.getAttribute('aria-label')),
@@ -464,9 +482,10 @@ test('"Read selected area" with the default box reads the whole photo as a regio
     await openAndCrop(fake, container);
     await click(button(container, 'Read selected area'));
     await settle();
-    assert.deepEqual(fake.engines[0].engine.recognized, [
-      { region: { left: 0, top: 0, width: 1000, height: 600 } },
-    ]);
+    // The area is cut from the original photo (not a region of the scaled
+    // copy) and read as one block.
+    assert.deepEqual(fake.prepared, [undefined, cropOf(0, 0, 1000, 600)]);
+    assert.deepEqual(fake.engines[0].engine.recognized, [{ layout: 'block' }]);
     assert.match(container.textContent, /Apply selected/);
   } finally {
     restore();
@@ -498,8 +517,9 @@ for (const [width, height] of [
 
       await click(button(container, 'Read selected area'));
       await settle();
+      assert.deepEqual(fake.prepared, [undefined, cropOf(200, 100, 500, 300)]);
       assert.deepEqual(fake.engines[0].engine.recognized, [
-        { region: { left: 200, top: 100, width: 500, height: 300 } },
+        { layout: 'block' },
       ]);
     } finally {
       restore();
@@ -520,9 +540,7 @@ test('the crop box cannot be moved off the photo', async () => {
     await drag(cropBox(container), at(250, 150), at(2250, 1150));
     await click(button(container, 'Read selected area'));
     await settle();
-    assert.deepEqual(fake.engines[0].engine.recognized, [
-      { region: { left: 500, top: 300, width: 500, height: 300 } },
-    ]);
+    assert.deepEqual(fake.prepared, [undefined, cropOf(500, 300, 500, 300)]);
   } finally {
     restore();
     await act(async () => root.unmount());
@@ -597,9 +615,7 @@ test('the crop box cannot be resized past the photo or collapsed', async () => {
     await drag(cornerHandle(container), at(750, 450), at(3000, 3000));
     await click(button(container, 'Read selected area'));
     await settle();
-    assert.deepEqual(fake.engines[0].engine.recognized, [
-      { region: { left: 250, top: 150, width: 750, height: 450 } },
-    ]);
+    assert.deepEqual(fake.prepared, [undefined, cropOf(250, 150, 750, 450)]);
   } finally {
     restore();
     await act(async () => root.unmount());
@@ -616,17 +632,12 @@ test('the crop box keeps a usable size when its corner is dragged past its oppos
     await drag(cornerHandle(container), at(1000, 600), at(-2000, -2000));
     await click(button(container, 'Read selected area'));
     await settle();
-    const [{ region }] = fake.engines[0].engine.recognized;
-    assert.equal(region.left, 0);
-    assert.equal(region.top, 0);
-    assert.ok(
-      region.width >= 1 && region.width <= 1000,
-      `width ${region.width}`,
-    );
-    assert.ok(
-      region.height >= 1 && region.height <= 600,
-      `height ${region.height}`,
-    );
+    const [, crop] = fake.prepared;
+    assert.equal(crop.left, 0);
+    assert.equal(crop.top, 0);
+    const [width, height] = [crop.width * 1000, crop.height * 600];
+    assert.ok(width >= 1 && width <= 1000, `width ${width}`);
+    assert.ok(height >= 1 && height <= 600, `height ${height}`);
   } finally {
     restore();
     await act(async () => root.unmount());
@@ -646,11 +657,168 @@ test('a new photo starts with the crop box over the whole photo', async () => {
     });
     await click(button(container, 'Read selected area'));
     await settle();
-    assert.deepEqual(fake.engines[0].engine.recognized, [
-      { region: { left: 0, top: 0, width: 1000, height: 600 } },
-    ]);
+    assert.deepEqual(fake.prepared.at(-1), cropOf(0, 0, 1000, 600));
   } finally {
     restore();
     await act(async () => root.unmount());
   }
+});
+
+// --- The label camera ---
+
+// A stand-in for the framed camera, so the panel is tested without a real
+// one: it counts how often it is mounted and unmounted and takes a photo
+// when asked.
+const FRAMED_PHOTO = 'framed photo';
+
+function fakeCamera() {
+  const camera = { mounted: 0, unmounted: 0 };
+  camera.Component = function FakeCamera({ onCapture, onClose }) {
+    React.useEffect(() => {
+      camera.mounted += 1;
+      return () => {
+        camera.unmounted += 1;
+      };
+    }, []);
+    return React.createElement(
+      'div',
+      { 'data-testid': 'camera' },
+      React.createElement(
+        'button',
+        { type: 'button', onClick: () => onCapture(FRAMED_PHOTO) },
+        'Take label photo',
+      ),
+      React.createElement(
+        'button',
+        { type: 'button', onClick: onClose },
+        'Close camera',
+      ),
+    );
+  };
+  camera.shown = (container) =>
+    container.querySelector('[data-testid="camera"]') !== null;
+  return camera;
+}
+
+async function openScanner(fake, container) {
+  await click(button(container, 'Scan nutrition label'));
+  await settle();
+  fake.engines[0].load.resolve();
+  await settle();
+}
+
+const fileButtonsShown = (container) =>
+  /Take photo|Choose photo/.test(container.textContent) &&
+  container.querySelectorAll('input[type="file"]').length > 0;
+
+test('"Scan with camera" opens the camera and hides the file buttons', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  assert.ok(fileButtonsShown(container));
+  assert.equal(camera.shown(container), false);
+
+  await click(button(container, 'Scan with camera'));
+  assert.equal(camera.shown(container), true);
+  assert.equal(fileButtonsShown(container), false);
+  assert.equal(button(container, 'Scan with camera'), undefined);
+  // The scanner can still be closed from here.
+  assert.ok(button(container, 'Close scanner'));
+  await act(async () => root.unmount());
+});
+
+test('a photo taken with the camera closes it and is read as one block, with no crop step', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  await click(button(container, 'Scan with camera'));
+
+  await click(button(container, 'Take label photo'));
+  await settle();
+
+  assert.equal(camera.shown(container), false);
+  assert.equal(camera.unmounted, 1);
+  // The framed photo is already cut to the frame: prepared whole, then
+  // read as a block straight away.
+  assert.deepEqual(fake.prepared, [undefined]);
+  assert.deepEqual(fake.engines[0].engine.recognized, [{ layout: 'block' }]);
+  assert.equal(button(container, 'Read selected area'), undefined);
+  assert.equal(button(container, 'Read whole photo'), undefined);
+  assert.match(container.textContent, /Apply selected/);
+  assert.ok(button(container, 'Scan again with camera'));
+  await act(async () => root.unmount());
+});
+
+test('"Close camera" returns to the photo buttons without reading anything', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  await click(button(container, 'Scan with camera'));
+
+  await click(button(container, 'Close camera'));
+  assert.equal(camera.shown(container), false);
+  assert.equal(camera.unmounted, 1);
+  assert.ok(button(container, 'Scan with camera'));
+  assert.ok(fileButtonsShown(container));
+  // The scanner itself is still open.
+  assert.ok(button(container, 'Close scanner'));
+  assert.deepEqual(fake.prepared, []);
+  assert.deepEqual(fake.engines[0].engine.recognized, []);
+  await act(async () => root.unmount());
+});
+
+test('"Close scanner" while the camera is open closes the camera and the scanner', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openScanner(fake, container);
+  await click(button(container, 'Scan with camera'));
+
+  await click(button(container, 'Close scanner'));
+  await settle();
+  assert.equal(camera.shown(container), false);
+  assert.equal(camera.unmounted, 1);
+  assert.ok(button(container, 'Scan nutrition label'));
+  assert.equal(fake.engines[0].engine.terminated, 1);
+
+  // Opening the scanner again starts with the photo buttons, not a camera.
+  await click(button(container, 'Scan nutrition label'));
+  assert.equal(camera.shown(container), false);
+  assert.ok(button(container, 'Scan with camera'));
+  await act(async () => root.unmount());
+});
+
+test('the review is hidden while the camera is open and comes back when it is closed', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openAndReview(fake, container);
+  assert.match(container.textContent, /Apply selected/);
+
+  await click(button(container, 'Scan again with camera'));
+  assert.equal(camera.shown(container), true);
+  assert.doesNotMatch(container.textContent, /Apply selected/);
+
+  await click(button(container, 'Close camera'));
+  assert.match(container.textContent, /Apply selected/);
+  await act(async () => root.unmount());
+});
+
+test('a photo taken with the camera replaces the earlier review and releases its photo', async () => {
+  const fake = fakeSession();
+  const camera = fakeCamera();
+  const { container, root } = await mount(fake.session, camera.Component);
+  await openAndReview(fake, container);
+
+  await click(button(container, 'Scan again with camera'));
+  await click(button(container, 'Take label photo'));
+  await settle();
+
+  assert.deepEqual(fake.released, ['blob:review-0']);
+  assert.ok(container.innerHTML.includes('blob:review-1'));
+  assert.match(container.textContent, /Apply selected/);
+  await act(async () => root.unmount());
 });

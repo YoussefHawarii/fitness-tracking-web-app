@@ -1,4 +1,9 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ComponentType,
+} from 'react';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import type { LabelFormUpdate } from '../add-product/extractionFormValues';
 import {
@@ -15,6 +20,7 @@ import {
   type LabelScanSession,
 } from './labelScanSession';
 import { CropStep } from './CropStep';
+import { LabelCamera, type LabelCameraProps } from './LabelCamera';
 import { LabelReview } from './LabelReview';
 import { createTesseractEngine } from './ocrEngine';
 import { prepareLabelImage } from './prepareImage';
@@ -53,6 +59,8 @@ interface Props {
   ) => string;
   // The scanning session; the browser's Tesseract session by default.
   createSession?: () => LabelScanSession;
+  // The framed label camera; the browser camera by default.
+  Camera?: ComponentType<LabelCameraProps>;
 }
 
 // The user's choices for one review: which readings are selected, and the
@@ -68,6 +76,7 @@ export function LabelScanPanel({
   preview,
   onApply,
   createSession = createBrowserSession,
+  Camera = LabelCamera,
 }: Props) {
   const [session] = useState(createSession);
   const view = useSyncExternalStore(
@@ -76,6 +85,7 @@ export function LabelScanPanel({
     session.view,
   );
   const [choice, setChoice] = useState<ReviewChoice | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
 
   // The worker and the photo are released when the form goes away
   // (including after the product is created).
@@ -132,31 +142,47 @@ export function LabelScanPanel({
       <p className="text-label normal-case tracking-normal text-text-muted">
         {LABEL_SCAN_PRIVACY_NOTE}
       </p>
-      <div className="flex flex-wrap gap-2">
-        <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-          {scan.kind === 'review' || scan.kind === 'cropping'
-            ? 'Retake photo'
-            : 'Take photo'}
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="sr-only"
-            onChange={onFileChosen}
-          />
-        </label>
-        <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-          {scan.kind === 'review' || scan.kind === 'cropping'
-            ? 'Choose another photo'
-            : 'Choose photo'}
-          <input
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            onChange={onFileChosen}
-          />
-        </label>
-      </div>
+      {cameraOpen && (
+        <Camera
+          onCapture={(photo) => {
+            setCameraOpen(false);
+            void session.scanFramed(photo);
+          }}
+          onClose={() => setCameraOpen(false)}
+        />
+      )}
+      {!cameraOpen && (
+        <div className="flex flex-wrap gap-2">
+          <PrimaryButton type="button" onClick={() => setCameraOpen(true)}>
+            {scan.kind === 'review' || scan.kind === 'cropping'
+              ? 'Scan again with camera'
+              : 'Scan with camera'}
+          </PrimaryButton>
+          <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
+            {scan.kind === 'review' || scan.kind === 'cropping'
+              ? 'Retake photo'
+              : 'Take photo'}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="sr-only"
+              onChange={onFileChosen}
+            />
+          </label>
+          <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
+            {scan.kind === 'review' || scan.kind === 'cropping'
+              ? 'Choose another photo'
+              : 'Choose photo'}
+            <input
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={onFileChosen}
+            />
+          </label>
+        </div>
+      )}
 
       {progressText && (
         <p className="text-body text-text-muted" role="status">
@@ -181,7 +207,7 @@ export function LabelScanPanel({
         <p className="text-body text-warn">{scan.message}</p>
       )}
 
-      {scan.kind === 'cropping' && (
+      {!cameraOpen && scan.kind === 'cropping' && (
         <CropStep
           key={scan.image.url}
           image={scan.image}
@@ -190,7 +216,7 @@ export function LabelScanPanel({
         />
       )}
 
-      {scan.kind === 'review' && review && (
+      {!cameraOpen && scan.kind === 'review' && review && (
         <>
           <LabelReview
             result={scan.result}
@@ -233,6 +259,7 @@ export function LabelScanPanel({
         onClick={() => {
           session.cancel();
           setChoice(null);
+          setCameraOpen(false);
         }}
         className="self-start"
       >

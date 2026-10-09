@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import { detectCameraFeatures } from './camera-capabilities';
 import { createCropper } from './cropper';
 import { createElementGate } from './element-gate';
 import { createFrameDecoder } from './frame-decoder';
@@ -8,12 +7,12 @@ import {
   createNativeDetector,
   type NativeBarcodeDetectorConstructor,
 } from './native-detector';
+import { createCameraOpener } from './open-camera';
 import { createRetailDecoder } from './retail-decoder';
 import { DECODE_REGION, computeScanRegion } from './scan-region';
 import {
   INITIAL_SCAN_STATE,
   createScanSession,
-  type CameraHandle,
   type ScanState,
 } from './scan-session';
 import { ScannerView } from './ScannerView';
@@ -54,64 +53,10 @@ export function BarcodeScanner({ onDecoded, onScanError }: Props) {
         decodeFrame = createFrameDecoder({ native, zxing });
     });
 
-    const openCamera = async (
-      constraints: MediaStreamConstraints,
-    ): Promise<CameraHandle> => {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new DOMException(
-          'Camera access requires a secure browser context.',
-          'NotSupportedError',
-        );
-      }
-      const video = await videoGate.whenReady();
-      if (cancelled) throw new DOMException('Scanner closed.', 'AbortError');
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      if (cancelled || videoGate.current() !== video) {
-        stream.getTracks().forEach((track) => track.stop());
-        throw new DOMException('Scanner closed.', 'AbortError');
-      }
-      video.srcObject = stream;
-      void video.play().catch(() => {});
-      const track = stream.getVideoTracks()[0];
-      if (!track) {
-        stream.getTracks().forEach((item) => item.stop());
-        video.srcObject = null;
-        throw new DOMException('No video track.', 'NotFoundError');
-      }
-      const capabilities = (track.getCapabilities?.() ?? {}) as Record<
-        string,
-        unknown
-      >;
-      if (detectCameraFeatures(capabilities).continuousFocus) {
-        void track
-          .applyConstraints({
-            advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
-          })
-          .catch(() => {});
-      }
-      return {
-        capabilities,
-        applyZoom: (zoom) =>
-          track.applyConstraints({
-            advanced: [{ zoom } as MediaTrackConstraintSet],
-          }),
-        setTorch: (torch) =>
-          track.applyConstraints({
-            advanced: [{ torch } as MediaTrackConstraintSet],
-          }),
-        onEnded(listener) {
-          track.addEventListener('ended', listener);
-          return () => track.removeEventListener('ended', listener);
-        },
-        // Pausing before stopping keeps the last frame on screen while the
-        // decoded barcode is looked up; srcObject is left in place for that
-        // reason and is replaced by the next stream on retry or remount.
-        stop() {
-          video.pause();
-          stream.getTracks().forEach((item) => item.stop());
-        },
-      };
-    };
+    const openCamera = createCameraOpener({
+      videoGate,
+      isCancelled: () => cancelled,
+    });
 
     const session = createScanSession({
       openCamera,

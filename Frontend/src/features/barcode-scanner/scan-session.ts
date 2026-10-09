@@ -45,11 +45,14 @@ export type CameraHandle = {
 export function createScanSession({
   openCamera,
   onBarcode,
+  constraints = buildCameraConstraints(),
 }: {
   openCamera: (
     constraints: ReturnType<typeof buildCameraConstraints>,
   ) => Promise<CameraHandle>;
   onBarcode: (text: string) => void;
+  // What to ask the camera for; the barcode scanner's 1080p by default.
+  constraints?: ReturnType<typeof buildCameraConstraints>;
 }) {
   let state: ScanState = INITIAL_SCAN_STATE;
   let camera: CameraHandle | null = null;
@@ -72,7 +75,7 @@ export function createScanSession({
   const openAndScan = async () => {
     setState({ ...state, status: 'starting' });
     try {
-      camera = await openCamera(buildCameraConstraints());
+      camera = await openCamera(constraints);
     } catch (error) {
       if (stopped) return;
       const name =
