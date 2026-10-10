@@ -148,6 +148,8 @@ Harness reads before and after (the label's truth: 415.932 kcal, 83.651, 11.60,
 First-scan download, for reference: worker 0.11 MB, one engine build about
 3.9 MB before HTTP compression, and 4.6 MB of language data.
 
+**Nutrient-per-column tables (v0.2.18):** The reader pairs the first value row with distinct nutrient headings. Basis text, Arabic-Indic copies, and footer prose cannot supply a cell value. This is covered by layout tests and still needs a real-label check with zero wrong values marked "read".
+
 ## Physical-phone matrix (outstanding)
 
 **Devices**
@@ -161,6 +163,7 @@ First-scan download, for reference: worker 0.11 MB, one engine build about
 
 **Cases (run on each device and record the result)**
 
+- A label with one column per nutrient: compare every reading and its review box with the photo
 - Camera capture
 - In-app label camera: opens with the permission prompt
 - In-app label camera: the resolution it actually delivers (log or inspect

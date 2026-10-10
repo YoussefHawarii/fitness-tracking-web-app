@@ -321,7 +321,11 @@ function scriptOf(tokens: readonly Token[]): Script | undefined {
 // [بروتين][21][جم]. A number between an English and an Arabic word belongs
 // to neither run and keeps its place. Tokens inside one word keep their
 // order ("٢١جم" stays [21][جم]).
+const rowTokens = new WeakMap<Row, Token[]>();
+
 function tokenize(row: Row): Token[] {
+  const cached = rowTokens.get(row);
+  if (cached) return cached;
   const words = row.words.map(tokensOfWord).filter((t) => t.length > 0);
   const own = words.map(scriptOf);
   const resolved = own.map((script, i) => {
@@ -346,7 +350,9 @@ function tokenize(row: Row): Token[] {
     ordered.push(...words.slice(i, j).reverse());
     i = j;
   }
-  return ordered.flat();
+  const tokens = ordered.flat();
+  rowTokens.set(row, tokens);
+  return tokens;
 }
 
 // ---------------------------------------------------------------------------
@@ -594,6 +600,7 @@ function besideNumber(number: OcrWord, unit: OcrWord): boolean {
 
 interface Segment {
   keyword: Keyword;
+  keywordWords: OcrWord[];
   tokens: Token[];
   row: Row;
   arabic: boolean;
@@ -632,6 +639,7 @@ function candidatesIn(segment: Segment): Candidate[] {
   const candidates: Candidate[] = [];
   tokens.forEach((token, i) => {
     if (token.kind !== 'number' || isUnitMisread(token)) return;
+    if (isBasisNumber(segment, i)) return;
     const next = tokens[i + 1];
     if (next?.kind === 'percent') return;
     const unit = unitAt(tokens, i + 1);
@@ -665,7 +673,47 @@ function candidatesIn(segment: Segment): Candidate[] {
   return candidates;
 }
 
+function isBasisNumber(segment: Segment, i: number): boolean {
+  const { tokens } = segment;
+  const token = tokens[i];
+  if (token.kind !== 'number') return false;
+  const nextUnit = unitAt(tokens, i + 1)?.unit;
+  const basisUnit = nextUnit === 'g' || nextUnit === 'ml';
+  if (isWord(tokens[i - 1], PER_WORDS) && basisUnit) return true;
+  const text = normalizeLabelText(token.word.text);
+  if (/(?:\/|per|لكل|\(\s*per)\s*\d+\s*(?:g|ml|جم|غ|مل)/.test(text))
+    return true;
+  if (
+    segment.keywordWords.includes(token.word) &&
+    (/(?:\(|\/)\s*\d+\s*(?:g|ml|جم|غ|مل)/.test(text) ||
+      (token.value === 100 && per100Basis(tokens, i)))
+  ) {
+    return true;
+  }
+  const previous = segment.row.words[segment.row.words.indexOf(token.word) - 1];
+  if (
+    previous &&
+    segment.keywordWords.includes(previous) &&
+    /^\(\s*\d+\s*(?:g|ml|جم|غ|مل)\s*\)/.test(text)
+  ) {
+    return true;
+  }
+  if (
+    token.value === 100 &&
+    previous &&
+    /\/\s*$/.test(previous.text) &&
+    basisUnit
+  ) {
+    return true;
+  }
+  return false;
+}
+
+const rowSegments = new WeakMap<Row, Segment[]>();
+
 function segmentsOf(row: Row): Segment[] {
+  const cached = rowSegments.get(row);
+  if (cached) return cached;
   const tokens = tokenize(row);
   const segments: Segment[] = [];
   const leading: Token[] = [];
@@ -679,6 +727,9 @@ function segmentsOf(row: Row): Segment[] {
     if (match) {
       segments.push({
         keyword: match.keyword,
+        keywordWords: [
+          ...new Set(tokens.slice(i, i + match.length).map((t) => t.word)),
+        ],
         tokens: [],
         row,
         arabic: isArabicKeyword(match.keyword),
@@ -725,6 +776,7 @@ function segmentsOf(row: Row): Segment[] {
       english.contested = true;
     }
   }
+  rowSegments.set(row, segments);
   return segments;
 }
 
@@ -766,36 +818,97 @@ function checkedConfidence(
   };
 }
 
+const ASSUMED_GRAM_WARNING =
+  'Unit not read — assumed g from the per 100 g table. Check this value.';
+
+function unitFits(field: LabelField, unit: Unit | undefined): boolean {
+  if (field === 'caloriesPer100g') return unit === 'kcal';
+  if (field === 'sodiumMgPer100') return unit === 'mg' || unit === 'g';
+  if (QUANTITY_FIELDS.has(field)) {
+    return ['g', 'kg', 'ml', 'l', 'cl'].includes(unit ?? '');
+  }
+  return unit === 'g';
+}
+
+function noValue(
+  field: LabelField,
+  evidence?: LabelEvidence,
+  warning?: string,
+): LabelReading {
+  return {
+    field,
+    status: 'not-found',
+    warnings: warning ? [warning] : [],
+    ...(evidence && { evidence }),
+  };
+}
+
+function readCandidate(
+  field: LabelField,
+  candidate: Candidate,
+  evidence: LabelEvidence,
+  options: { fromKilojoules?: boolean; assumedGram?: boolean } = {},
+): LabelReading {
+  if (candidate.lessThan) {
+    return noValue(
+      field,
+      evidence,
+      'Printed as "less than" a value — enter it yourself if needed.',
+    );
+  }
+  if (candidate.ambiguous || candidate.value === undefined) {
+    return noValue(field, evidence, "Couldn't read this number clearly.");
+  }
+  const fromKilojoules =
+    options.fromKilojoules &&
+    field === 'caloriesPer100g' &&
+    candidate.unit === 'kj';
+  if (!fromKilojoules && !unitFits(field, candidate.unit)) {
+    return noValue(field, evidence);
+  }
+  const fromGrams = field === 'sodiumMgPer100' && candidate.unit === 'g';
+  const value = fromKilojoules
+    ? Math.round(candidate.value / 4.184)
+    : fromGrams
+      ? Number((candidate.value * 1000).toPrecision(12))
+      : candidate.value;
+  return checkedConfidence(candidate, {
+    field,
+    value,
+    unit:
+      fromKilojoules || fromGrams
+        ? fromKilojoules
+          ? 'kcal'
+          : 'mg'
+        : candidate.unit,
+    status: options.assumedGram ? 'needs-check' : 'read',
+    warnings: options.assumedGram ? [ASSUMED_GRAM_WARNING] : [],
+    evidence,
+    ...(fromKilojoules && { conversion: 'from-kj' }),
+    ...(fromGrams && { conversion: 'from-g' }),
+  });
+}
+
 function readSegment(
   field: LabelField,
   segment: Segment,
   columns: ColumnModel,
 ): LabelReading {
   const evidence = evidenceOf(segment);
-  const notFound = (warning?: string): LabelReading => ({
-    field,
-    status: 'not-found',
-    warnings: warning ? [warning] : [],
-    evidence,
-  });
+  const notFound = (warning?: string): LabelReading =>
+    noValue(field, evidence, warning);
 
   const isEnergy = field === 'caloriesPer100g';
-  const isSodium = field === 'sodiumMgPer100';
   const isQuantity = QUANTITY_FIELDS.has(field);
+  const servingWarning = servingBasisWarning(segment.tokens);
+  if (!isQuantity && servingWarning) return notFound(servingWarning);
   // A value counts as read only with its unit printed next to it (or once
   // before the segment's numbers, "Energy (kcal) 250"), and only a unit that fits
   // the field: kcal for energy, mg or g for sodium, g for the rest of the
   // table; a size needs g, kg, ml, l or cl — never a bare "oz" or "piece".
   // The one exception, grams assumed after a misread "(g)", is handled below
   // and always marked for checking.
-  const unitFits = (c: Candidate) => {
-    if (isEnergy) return c.unit === 'kcal';
-    if (isSodium) return c.unit === 'mg' || c.unit === 'g';
-    if (isQuantity) {
-      return ['g', 'kg', 'ml', 'l', 'cl'].includes(c.unit ?? '');
-    }
-    return c.unit === 'g';
-  };
+  const fits = (c: Candidate) => unitFits(field, c.unit);
 
   // In a multi-column table only numbers placed in the target column
   // count; a number that straddles two columns can't be placed at all.
@@ -813,13 +926,13 @@ function readSegment(
       column,
     };
   });
-  if (placed.some((p) => p.column === 'ambiguous' && unitFits(p.candidate))) {
+  if (placed.some((p) => p.column === 'ambiguous' && fits(p.candidate))) {
     return notFound("Couldn't tell which column this value is in.");
   }
   const candidates = placed
     .filter((p) => p.column === columns.target)
     .map((p) => p.candidate);
-  const usable = candidates.filter(unitFits);
+  const usable = candidates.filter(fits);
   if (segment.contested && usable.length > 0) {
     return notFound("Couldn't tell which nutrient this value belongs to.");
   }
@@ -836,7 +949,9 @@ function readSegment(
       return notFound('Printed as “trace” — enter it yourself if needed.');
     }
     const kj = candidates.filter((c) => c.unit === 'kj');
-    if (isEnergy && kj.length === 1) return fromKilojoules(kj[0]);
+    if (isEnergy && kj.length === 1) {
+      return readCandidate(field, kj[0], evidence, { fromKilojoules: true });
+    }
     if (isEnergy && kj.length > 1) {
       return notFound('Several values on this row — check the label.');
     }
@@ -862,15 +977,8 @@ function readSegment(
         columns.target.kind === 'per100' &&
         columns.target.basis === 'PER_100_G';
       if (gramsAssumed) {
-        return checkedConfidence(candidate, {
-          field,
-          value: candidate.value,
-          unit: 'g',
-          status: 'needs-check',
-          warnings: [
-            'Unit not read — assumed g from the per 100 g table. Check this value.',
-          ],
-          evidence,
+        return readCandidate(field, { ...candidate, unit: 'g' }, evidence, {
+          assumedGram: true,
         });
       }
       return notFound("Couldn't read the unit — check this value.");
@@ -881,55 +989,7 @@ function readSegment(
     return notFound('Several values on this row — check the label.');
   }
   const [candidate] = usable;
-  if (candidate.lessThan) {
-    return notFound(
-      'Printed as "less than" a value — enter it yourself if needed.',
-    );
-  }
-  if (candidate.ambiguous || candidate.value === undefined) {
-    return notFound("Couldn't read this number clearly.");
-  }
-  if (isSodium && candidate.unit === 'g') {
-    return checkedConfidence(candidate, {
-      field,
-      value: Number((candidate.value * 1000).toPrecision(12)),
-      unit: 'mg',
-      status: 'read',
-      warnings: [],
-      evidence,
-      conversion: 'from-g',
-    });
-  }
-  return checkedConfidence(candidate, {
-    field,
-    value: candidate.value,
-    unit: candidate.unit,
-    status: 'read',
-    warnings: [],
-    evidence,
-  });
-
-  // A label printing energy only in kJ: converted (÷ 4.184, to whole kcal)
-  // and marked as converted. A kJ number is never used as kcal.
-  function fromKilojoules(c: Candidate): LabelReading {
-    if (c.lessThan) {
-      return notFound(
-        'Printed as "less than" a value — enter it yourself if needed.',
-      );
-    }
-    if (c.ambiguous || c.value === undefined) {
-      return notFound("Couldn't read this number clearly.");
-    }
-    return checkedConfidence(c, {
-      field,
-      value: Math.round(c.value / 4.184),
-      unit: 'kcal',
-      status: 'read',
-      warnings: [],
-      evidence,
-      conversion: 'from-kj',
-    });
-  }
+  return readCandidate(field, candidate, evidence);
 }
 
 // ---------------------------------------------------------------------------
@@ -953,6 +1013,7 @@ interface Column {
   script?: Script;
   // A percent heading made of nothing but a "%".
   bare?: boolean;
+  explicit?: boolean;
 }
 
 interface ColumnModel {
@@ -1094,7 +1155,13 @@ function classifyPhrase(
   const words = tokens.map((t) => t.word);
   const x0 = Math.min(...words.map((w) => w.bbox.x0));
   const x1 = Math.max(...words.map((w) => w.bbox.x1));
-  const extent = { x0, x1, center: (x0 + x1) / 2, script: scriptOf(tokens) };
+  const extent = {
+    x0,
+    x1,
+    center: (x0 + x1) / 2,
+    script: scriptOf(tokens),
+    explicit: tokens.some((t) => t.kind === 'number' || isWord(t, PER_WORDS)),
+  };
   if (isPercentPhrase(tokens, allowBarePercent)) {
     return { kind: 'percent', ...extent };
   }
@@ -1187,7 +1254,7 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
       (s) =>
         s.keyword.field &&
         !QUANTITY_FIELDS.has(s.keyword.field) &&
-        s.tokens.some((t) => t.kind === 'number'),
+        candidatesIn(s).length > 0,
     );
   const firstValueRow = rows.find(isValueRow);
   if (!firstValueRow) return undefined;
@@ -1203,7 +1270,11 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
     .map((row) => ({ row, phrases: headerPhrases(tokenize(row)) }))
     .filter((h) => h.phrases.length > 0);
   const inTable = headingRows.filter((h) => h.row.y0 >= firstValueRow.y0);
-  if (inTable.some((h) => h.phrases.some((c) => c.kind !== 'percent'))) {
+  if (
+    inTable.some((h) =>
+      h.phrases.some((c) => c.kind !== 'percent' && c.explicit),
+    )
+  ) {
     return undefined;
   }
   const aboveTable = headingRows.filter((h) => h.row.y0 < firstValueRow.y0);
@@ -1418,8 +1489,573 @@ function withQuantityChecks(
 
 const SINGLE_COLUMN: Column = { kind: 'per100', x0: 0, x1: 0, center: 0 };
 
+const NO_PER_100_MESSAGE =
+  "Couldn't find a single per 100 g or per 100 ml column — enter per-100 values manually.";
+
+function unresolvedResult(
+  readings: LabelReading[] = LABEL_FIELDS.map((field) => noValue(field)),
+): LabelScanResult {
+  return {
+    outcome: 'no-per-100-column',
+    readings,
+    warnings: [NO_PER_100_MESSAGE],
+  };
+}
+
+function successfulResult(
+  readings: LabelReading[],
+  basisSuggestion: NutritionBasis | undefined,
+  tableWords: readonly OcrWord[],
+): LabelScanResult {
+  const checked = withPlausibilityChecks(
+    readings,
+    basisSuggestion ?? 'PER_100_G',
+  );
+  const macrosRead = checked.filter(
+    (reading) =>
+      REQUIRED_MACROS.has(reading.field) && reading.status === 'read',
+  ).length;
+  const confidence =
+    tableWords.reduce((sum, word) => sum + word.confidence, 0) /
+    Math.max(1, tableWords.length);
+  const weakScan = macrosRead < 2 || confidence < MIN_TABLE_CONFIDENCE;
+  return {
+    outcome: 'ok',
+    basisSuggestion,
+    readings: checked,
+    warnings: weakScan ? [WEAK_SCAN_MESSAGE] : [],
+    ...(weakScan && { weakScan }),
+  };
+}
+
+interface TransposedHeading {
+  field?: LabelField;
+  segment: Segment;
+  box: BBox;
+  center: number;
+  arabic?: Segment;
+  ambiguous?: boolean;
+}
+
+function wordsBox(words: readonly OcrWord[]): BBox {
+  const boxes = words.map((word) => word.bbox);
+  return {
+    x0: Math.min(...boxes.map((box) => box.x0)),
+    y0: Math.min(...boxes.map((box) => box.y0)),
+    x1: Math.max(...boxes.map((box) => box.x1)),
+    y1: Math.max(...boxes.map((box) => box.y1)),
+  };
+}
+
+function keywordBox(segment: Segment): BBox {
+  return wordsBox(segment.keywordWords);
+}
+
+function headingBox(segment: Segment): BBox {
+  const words = new Set(segment.keywordWords);
+  segment.tokens.forEach((token, i) => {
+    if (token.kind !== 'number' || !isBasisNumber(segment, i)) return;
+    words.add(token.word);
+    const before = segment.tokens[i - 1];
+    if (isWord(before, PER_WORDS)) words.add(before.word);
+    const after = segment.tokens[i + 1];
+    if (after && unitAt(segment.tokens, i + 1)) words.add(after.word);
+    const previous =
+      segment.row.words[segment.row.words.indexOf(token.word) - 1];
+    if (previous && /\/\s*$/.test(previous.text)) words.add(previous);
+  });
+  return wordsBox([...words]);
+}
+
+function headingBasis(segment: Segment): NutritionBasis | undefined {
+  return segment.tokens.reduce<NutritionBasis | undefined>(
+    (basis, _, i) => basis ?? per100Basis(segment.tokens, i),
+    undefined,
+  );
+}
+
+function headingUnit(segment: Segment): Unit | undefined | 'ambiguous' {
+  const units = new Set<Unit>();
+  segment.tokens.forEach((_, i) => {
+    const unit = unitAt(segment.tokens, i)?.unit;
+    const before = segment.tokens[i - 1];
+    if (unit && !(before?.kind === 'number' && isBasisNumber(segment, i - 1))) {
+      units.add(unit);
+    }
+  });
+  if (
+    segment.keyword.field === 'caloriesPer100g' &&
+    segment.keyword.tokens.includes('سعرات')
+  ) {
+    units.add('kcal');
+  }
+  return units.size > 1 ? 'ambiguous' : [...units][0];
+}
+
+function arabicPhraseBox(segment: Segment, peers: readonly Segment[]): BBox {
+  const box = keywordBox(segment);
+  const next = Math.min(
+    ...peers
+      .filter((peer) => peer !== segment && keywordBox(peer).x0 > box.x0)
+      .map((peer) => keywordBox(peer).x0),
+  );
+  const qualifiers = segment.row.words.filter((word) => {
+    if (word.bbox.x0 < box.x1 || word.bbox.x1 > next) return false;
+    if (peers.some((peer) => peer.keywordWords.includes(word))) return false;
+    const tokens = tokensOfWord(word);
+    return !tokens.some((_, i) => unitAt(tokens, i));
+  });
+  return wordsBox([...segment.keywordWords, ...qualifiers]);
+}
+
+function arabicUnitWords(
+  heading: TransposedHeading,
+  headings: readonly TransposedHeading[],
+): OcrWord[] {
+  if (!heading.arabic) return [];
+  const peers = headings
+    .map((candidate) => ({
+      heading: candidate,
+      segment:
+        candidate.arabic ??
+        (candidate.segment.arabic ? candidate.segment : undefined),
+    }))
+    .filter(
+      (
+        candidate,
+      ): candidate is { heading: TransposedHeading; segment: Segment } =>
+        candidate.segment?.row === heading.arabic?.row,
+    );
+  const peerSegments = peers.map((peer) => peer.segment);
+  return heading.arabic.row.words.filter((word) => {
+    const tokens = tokensOfWord(word);
+    if (!tokens.some((_, i) => unitAt(tokens, i))) return false;
+    const ranked = peers.map((peer) => {
+      const box = arabicPhraseBox(peer.segment, peerSegments);
+      const overlap = Math.max(
+        0,
+        Math.min(box.x1, word.bbox.x1) - Math.max(box.x0, word.bbox.x0),
+      );
+      const gap = Math.max(box.x0 - word.bbox.x1, word.bbox.x0 - box.x1, 0);
+      return { peer, overlap, gap };
+    });
+    const largestOverlap = Math.max(...ranked.map((item) => item.overlap));
+    const closestGap = Math.min(...ranked.map((item) => item.gap));
+    const owners = ranked.filter((item) =>
+      largestOverlap > 0
+        ? item.overlap === largestOverlap
+        : item.gap === closestGap,
+    );
+    return owners.length === 1 && owners[0].peer.heading === heading;
+  });
+}
+
+function arabicBandUnit(
+  heading: TransposedHeading,
+  headings: readonly TransposedHeading[],
+): Unit | undefined | 'ambiguous' {
+  if (!heading.arabic) return undefined;
+  const units = new Set<Unit>();
+  for (const word of arabicUnitWords(heading, headings)) {
+    const tokens = tokensOfWord(word);
+    tokens.forEach((_, i) => {
+      const unit = unitAt(tokens, i)?.unit;
+      const basisNumber = tokens[i - 1];
+      if (
+        unit &&
+        !(
+          basisNumber?.kind === 'number' &&
+          /(?:\/|per|لكل)\s*\d+/.test(normalizeLabelText(word.text))
+        )
+      ) {
+        units.add(unit);
+      }
+    });
+  }
+  return units.size > 1 ? 'ambiguous' : [...units][0];
+}
+
+function transposedHeadings(
+  rows: readonly Row[],
+  start: number,
+  height: number,
+) {
+  const isNutrient = (segment: Segment) =>
+    !(segment.keyword.field && QUANTITY_FIELDS.has(segment.keyword.field));
+  if (!segmentsOf(rows[start]).some(isNutrient)) {
+    return [];
+  }
+  const source = [rows[start]];
+  const next = rows[start + 1];
+  if (next && next.y0 - rows[start].y1 <= height) source.push(next);
+  if (
+    source.some((row) => segmentsOf(row).some((s) => candidatesIn(s).length))
+  ) {
+    return [];
+  }
+  const primary = segmentsOf(rows[start]).filter(isNutrient);
+  const selected = [...primary];
+  for (const segment of source
+    .slice(1)
+    .flatMap(segmentsOf)
+    .filter(isNutrient)) {
+    const box = keywordBox(segment);
+    const overlaps = primary.some((main) => {
+      const other = keywordBox(main);
+      const overlap = Math.min(box.x1, other.x1) - Math.max(box.x0, other.x0);
+      return overlap >= Math.min(box.x1 - box.x0, other.x1 - other.x0) / 2;
+    });
+    if (!overlaps && !segment.arabic) {
+      selected.push(segment);
+    }
+  }
+  const headings = selected
+    .map((segment): TransposedHeading => {
+      const box = keywordBox(segment);
+      return {
+        field: segment.keyword.field,
+        segment,
+        box,
+        center: centreX(box),
+      };
+    })
+    .sort((a, b) => a.center - b.center);
+  if (headings.length < 2) return [];
+  if (
+    new Set(headings.map((h) => h.field ?? h.segment.keyword.tokens.join(' ')))
+      .size !== headings.length ||
+    headings.some((h, i) => i > 0 && h.box.x0 < headings[i - 1].box.x1)
+  ) {
+    return [];
+  }
+  const title = rows[start - 1];
+  const titlePer100 =
+    title &&
+    rows[start].y0 - title.y1 <= 2 * height &&
+    headerPhrases(tokenize(title)).some((phrase) => phrase.kind === 'per100');
+  const ownEvidence = headings.filter(
+    (heading) => headingBasis(heading.segment) || headingUnit(heading.segment),
+  ).length;
+  if (ownEvidence < 2 && !titlePer100) return [];
+  return headings;
+}
+
+type TransposedPlacement =
+  number | 'outside' | { between: readonly [number, number] };
+
+function placeInTransposedBand(
+  box: BBox,
+  columns: ColumnModel,
+  typicalGap: number,
+): TransposedPlacement {
+  const { columns: bands } = columns;
+  if (
+    box.x0 < bands[0].center - typicalGap / 2 ||
+    box.x1 > bands[bands.length - 1].center + typicalGap / 2
+  ) {
+    return 'outside';
+  }
+  const width = Math.max(1, box.x1 - box.x0);
+  for (let i = 0; i < bands.length - 1; i += 1) {
+    const boundary = (bands[i].center + bands[i + 1].center) / 2;
+    if (boundary - box.x0 > width / 4 && box.x1 - boundary > width / 4) {
+      return { between: [i, i + 1] };
+    }
+  }
+  const column = placeInColumn(box, columns);
+  return column === 'ambiguous' ? 'outside' : bands.indexOf(column);
+}
+
+function servingBasisWarning(tokens: readonly Token[]): string | undefined {
+  if (tokens.some((token) => isWord(token, SERVING_WORDS))) {
+    return 'This row is per serving — enter per-100 values manually.';
+  }
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token.kind !== 'number' || token.value === 100) continue;
+    const unit = unitAt(tokens, i + 1)?.unit;
+    if (!unit || !['g', 'ml', 'kg', 'l', 'cl'].includes(unit)) continue;
+    const attachedBasis = /(?:\/|\()\s*(?:per\s*)?\d+\s*(?:g|ml|جم|غ|مل)/.test(
+      normalizeLabelText(token.word.text),
+    );
+    if (isWord(tokens[i - 1], PER_WORDS) || attachedBasis) {
+      return `This row is per ${token.value} ${unit} — enter per-100 values manually.`;
+    }
+  }
+  return undefined;
+}
+
+const BOUND_WORDS = new Set(['less', 'than', 'اقل', 'من']);
+
+function isProseWord(word: OcrWord): boolean {
+  if (/\d|[٠-٩۰-۹]/.test(word.text)) return false;
+  const normalized = normalizeLabelText(word.text);
+  return /[a-zء-ي]/.test(normalized) && !BOUND_WORDS.has(normalized);
+}
+
+function transposedPass(rows: readonly Row[]): LabelScanResult | undefined {
+  if (rows.length < 3) return undefined;
+  const height = median(
+    rows.flatMap((row) => row.words.map((w) => w.bbox.y1 - w.bbox.y0)),
+  );
+  const first = rows.findIndex(
+    (_, i) => transposedHeadings(rows, i, height).length >= 2,
+  );
+  if (first < 0) return undefined;
+  const headings = transposedHeadings(rows, first, height);
+  const headingEnd = Math.max(...headings.map((h) => h.segment.row.y1));
+  const valueIndex = rows.findIndex(
+    (row) =>
+      row.y0 >= headingEnd + height / 2 &&
+      row.words.some((word) => /\d|[٠-٩۰-۹]/.test(word.text)),
+  );
+  if (valueIndex < 0) return undefined;
+  const valueRow = rows[valueIndex];
+  const subheadingRows = rows
+    .slice(first, valueIndex)
+    .filter((row) =>
+      segmentsOf(row).some(
+        (segment) => segment.arabic && segment.keyword.field,
+      ),
+    );
+  const lastHeadingEnd = Math.max(
+    headingEnd,
+    ...subheadingRows.map((row) => row.y1),
+  );
+  // A distant prose number is not the next line of table cells.
+  if (valueRow.y0 - lastHeadingEnd > 2.5 * height) return undefined;
+  if (
+    valueRow.words.some(isProseWord) ||
+    rows.some(
+      (row, i) =>
+        i > first && i < valueIndex && row.y0 >= lastHeadingEnd + height / 2,
+    )
+  ) {
+    return undefined;
+  }
+
+  const blank = (field: LabelField): LabelReading => noValue(field);
+  const unresolved = () => unresolvedResult();
+  const titleRows = rows
+    .slice(0, first)
+    .filter((row) => rows[first].y0 - row.y1 <= 3 * height);
+  const servingWarning = [...titleRows, ...rows.slice(first, valueIndex)]
+    .map((row) => servingBasisWarning(tokenize(row)))
+    .find((warning) => warning !== undefined);
+  if (servingWarning) {
+    return unresolvedResult(
+      LABEL_FIELDS.map((field) => noValue(field, undefined, servingWarning)),
+    );
+  }
+  for (const row of rows.slice(valueIndex + 1)) {
+    if (row.words.some(isProseWord)) {
+      break;
+    }
+    if (row.words.some((word) => /\d|[٠-٩۰-۹]/.test(word.text))) {
+      return unresolved();
+    }
+  }
+  if (
+    rows.some(
+      (_, i) =>
+        i > valueIndex && transposedHeadings(rows, i, height).length >= 2,
+    )
+  ) {
+    return unresolved();
+  }
+
+  const titleBases = new Set(
+    titleRows
+      .flatMap((row) => headerPhrases(tokenize(row)))
+      .filter((column) => column.kind === 'per100')
+      .map((column) => column.basis),
+  );
+  if (titleBases.size > 1) return unresolved();
+  const titleBasis = [...titleBases][0];
+  const headingBases = new Set(
+    headings.map((heading) => headingBasis(heading.segment)).filter(Boolean),
+  );
+  if (!titleBasis && headingBases.size !== 1) return unresolved();
+  const basis = titleBasis ?? [...headingBases][0];
+  if (!basis) return unresolved();
+  const westernCells = valueRow.words.filter(
+    (word) => /\d/.test(word.text) && !/[٠-٩۰-۹]/.test(word.text),
+  );
+  if (westernCells.length !== headings.length) return unresolved();
+
+  const arabic = rows
+    .slice(first, valueIndex)
+    .flatMap(segmentsOf)
+    .filter(
+      (segment) =>
+        segment.arabic &&
+        segment.keyword.field &&
+        !headings.some((heading) => heading.segment === segment),
+    );
+  let unmatchedArabic = false;
+  for (const segment of arabic) {
+    const box = keywordBox(segment);
+    const matches = headings.filter((heading) => {
+      const overlap =
+        Math.min(box.x1, heading.box.x1) - Math.max(box.x0, heading.box.x0);
+      return (
+        overlap >=
+        Math.min(box.x1 - box.x0, heading.box.x1 - heading.box.x0) / 2
+      );
+    });
+    if (matches.length > 1)
+      matches.forEach((heading) => (heading.ambiguous = true));
+    if (matches.length === 0) unmatchedArabic = true;
+    if (matches.length === 1) {
+      const heading = matches[0];
+      if (heading.arabic || segment.keyword.field !== heading.field) {
+        heading.ambiguous = true;
+      } else {
+        heading.arabic = segment;
+      }
+    }
+  }
+  if (unmatchedArabic) return unresolved();
+
+  const columns: Column[] = headings.map((heading) => ({
+    kind: 'per100',
+    center: heading.center,
+    x0: heading.box.x0,
+    x1: heading.box.x1,
+  }));
+  const model: ColumnModel = { columns, target: columns[0] };
+  const typicalGap = median(
+    columns.slice(1).map((column, i) => column.center - columns[i].center),
+  );
+  const headingSpans = headings.map((heading) => {
+    const english = headingBox(heading.segment);
+    const arabic = heading.arabic && keywordBox(heading.arabic);
+    return arabic && arabic.x1 - arabic.x0 > english.x1 - english.x0
+      ? arabic
+      : english;
+  });
+  const cells: OcrWord[][] = headings.map(() => []);
+  const straddled = new Set<number>();
+  for (const word of valueRow.words) {
+    if (/[٠-٩۰-۹]/.test(word.text)) continue;
+    const placement = placeInTransposedBand(word.bbox, model, typicalGap);
+    if (typeof placement === 'number') cells[placement].push(word);
+    if (typeof placement === 'object' && /\d/.test(word.text)) {
+      placement.between.forEach((index) => straddled.add(index));
+    }
+  }
+
+  const readings = LABEL_FIELDS.map((field): LabelReading => {
+    const index = headings.findIndex((heading) => heading.field === field);
+    if (index < 0) return blank(field);
+    const heading = headings[index];
+    const cellWords = cells[index];
+    const evidence: LabelEvidence = {
+      rowText: valueRow.words.map((word) => word.text).join(' '),
+      bbox: unionBox([...heading.segment.keywordWords, ...cellWords]),
+    };
+    if (straddled.has(index)) {
+      return noValue(
+        field,
+        evidence,
+        "Couldn't tell which column this value is in.",
+      );
+    }
+    if (heading.ambiguous) return noValue(field, evidence);
+    const ownBasis = headingBasis(heading.segment);
+    if (ownBasis && ownBasis !== basis) return noValue(field, evidence);
+    const englishUnit = heading.segment.arabic
+      ? arabicBandUnit({ ...heading, arabic: heading.segment }, headings)
+      : headingUnit(heading.segment);
+    const arabicUnit = heading.segment.arabic
+      ? undefined
+      : arabicBandUnit(heading, headings);
+    if (
+      englishUnit === 'ambiguous' ||
+      arabicUnit === 'ambiguous' ||
+      (englishUnit && arabicUnit && englishUnit !== arabicUnit)
+    ) {
+      return noValue(field, evidence);
+    }
+    let unit = englishUnit || arabicUnit;
+    const assumedGram =
+      !unit &&
+      GRAM_NUTRIENTS.has(field) &&
+      basis === 'PER_100_G' &&
+      ownBasis === 'PER_100_G';
+    if (assumedGram) unit = 'g';
+    if (!unitFits(field, unit)) return noValue(field, evidence);
+
+    const westernNumberWords = cellWords.filter((word) => /\d/.test(word.text));
+    if (westernNumberWords.length === 0) return noValue(field, evidence);
+    const headingSpan = headingSpans[index];
+    const leftBoundary =
+      index === 0
+        ? -Infinity
+        : (headingSpans[index - 1].x1 + headingSpan.x0) / 2;
+    const rightBoundary =
+      index === headings.length - 1
+        ? Infinity
+        : (headingSpan.x1 + headingSpans[index + 1].x0) / 2;
+    const allowedLeft = Math.max(headingSpan.x0 - typicalGap / 4, leftBoundary);
+    const allowedRight = Math.min(
+      headingSpan.x1 + typicalGap / 4,
+      rightBoundary,
+    );
+    if (
+      westernNumberWords.some((word) => {
+        const center = centreX(word.bbox);
+        return center < allowedLeft || center > allowedRight;
+      })
+    ) {
+      return noValue(
+        field,
+        evidence,
+        "Couldn't tell which nutrient this value belongs to.",
+      );
+    }
+    if (westernNumberWords.length > 1) {
+      return noValue(
+        field,
+        evidence,
+        'Several values on this row — check the label.',
+      );
+    }
+    const cellRow: Row = { words: cellWords, y0: valueRow.y0, y1: valueRow.y1 };
+    const cellSegment: Segment = {
+      keyword: heading.segment.keyword,
+      keywordWords: [],
+      tokens: tokenize(cellRow),
+      row: cellRow,
+      arabic: false,
+    };
+    const candidates = candidatesIn(cellSegment);
+    if (candidates.length === 0) return noValue(field, evidence);
+    if (candidates.length > 1) {
+      return noValue(
+        field,
+        evidence,
+        'Several values on this row — check the label.',
+      );
+    }
+    const candidate = candidates[0];
+    if (candidate.unit && candidate.unit !== unit)
+      return noValue(field, evidence);
+    return readCandidate(field, { ...candidate, unit }, evidence, {
+      assumedGram,
+    });
+  });
+  const tableWords = [
+    ...headings.flatMap((heading) => heading.segment.row.words),
+    ...valueRow.words,
+  ];
+  return successfulResult(readings, basis, tableWords);
+}
+
 export function readLabel(layout: OcrLayout): LabelScanResult {
   const rows = groupRows(inReadingSpace(layout.words));
+  const transposed = transposedPass(rows);
+  if (transposed) return transposed;
   const model = columnModel(rows);
   // Without a usable header the values are still read as one column so
   // they can be shown for reference; the outcome keeps them out of the form.
@@ -1489,13 +2125,7 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
   );
 
   if (!model) {
-    return {
-      outcome: 'no-per-100-column',
-      readings,
-      warnings: [
-        "Couldn't find a single per 100 g or per 100 ml column — enter per-100 values manually.",
-      ],
-    };
+    return unresolvedResult(readings);
   }
   if (model.target.kind === 'serving') {
     return {
@@ -1507,10 +2137,6 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
     };
   }
 
-  const checked = withPlausibilityChecks(
-    readings,
-    model.target.basis ?? 'PER_100_G',
-  );
   // Only the nutrient rows count: clear size statements must not lift a
   // poorly recognised table above the threshold.
   const tableWords = rows
@@ -1520,20 +2146,7 @@ export function readLabel(layout: OcrLayout): LabelScanResult {
       ),
     )
     .flatMap((row) => row.words);
-  const averageConfidence =
-    tableWords.reduce((sum, w) => sum + w.confidence, 0) /
-    Math.max(1, tableWords.length);
-  const macrosRead = checked.filter(
-    (r) => REQUIRED_MACROS.has(r.field) && r.status === 'read',
-  ).length;
-  const weakScan = macrosRead < 2 || averageConfidence < MIN_TABLE_CONFIDENCE;
-  return {
-    outcome: 'ok',
-    basisSuggestion: model.target.basis,
-    readings: checked,
-    warnings: weakScan ? [WEAK_SCAN_MESSAGE] : [],
-    ...(weakScan && { weakScan }),
-  };
+  return successfulResult(readings, model.target.basis, tableWords);
 }
 
 // ---------------------------------------------------------------------------
