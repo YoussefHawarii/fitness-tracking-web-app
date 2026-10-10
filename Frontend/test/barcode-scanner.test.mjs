@@ -62,6 +62,19 @@ test('camera request prefers the rear camera at 1080p without demanding it', asy
   assert.deepEqual(constraints.video.height, { ideal: 1080 });
 });
 
+test('camera request can ask for another resolution, still as ideal values', async () => {
+  const { buildCameraConstraints } = await load(
+    `${FEATURE}/camera-capabilities.ts`,
+  );
+
+  const constraints = buildCameraConstraints({ width: 3840, height: 2160 });
+
+  assert.equal(constraints.audio, false);
+  assert.deepEqual(constraints.video.facingMode, { ideal: 'environment' });
+  assert.deepEqual(constraints.video.width, { ideal: 3840 });
+  assert.deepEqual(constraints.video.height, { ideal: 2160 });
+});
+
 test('zoom and torch are offered only when the camera reports them', async () => {
   const { detectCameraFeatures, chooseZoom } = await load(
     `${FEATURE}/camera-capabilities.ts`,
@@ -311,6 +324,33 @@ test('overlapping start attempts open only one camera', async () => {
 
   assert.equal(camera.device.opens, 1);
   assert.equal(session.getState().status, 'scanning');
+});
+
+test('a session asks the camera for 1080p unless given other constraints', async () => {
+  const { createScanSession } = await load(`${FEATURE}/scan-session.ts`);
+  const { buildCameraConstraints } = await load(
+    `${FEATURE}/camera-capabilities.ts`,
+  );
+
+  const barcodeCamera = fakeCamera();
+  await createScanSession({
+    openCamera: barcodeCamera.openCamera,
+    onBarcode: () => {},
+  }).start();
+  assert.deepEqual(barcodeCamera.device.requested, buildCameraConstraints());
+  assert.deepEqual(barcodeCamera.device.requested.video.width, { ideal: 1920 });
+
+  const labelCamera = fakeCamera();
+  const constraints = buildCameraConstraints({ width: 3840, height: 2160 });
+  const session = createScanSession({
+    openCamera: labelCamera.openCamera,
+    onBarcode: () => {},
+    constraints,
+  });
+  await session.start();
+  assert.equal(session.getState().status, 'scanning');
+  assert.deepEqual(labelCamera.device.requested, constraints);
+  assert.deepEqual(labelCamera.device.requested.video.height, { ideal: 2160 });
 });
 
 test('confirming a barcode releases the camera exactly once', async () => {

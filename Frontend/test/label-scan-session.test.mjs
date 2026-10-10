@@ -7,7 +7,8 @@ const test = (name, fn) => baseTest(name, { timeout: 5000 }, fn);
 
 // Label-scan session seam: the scanning lifecycle driven with a fake OCR
 // engine — loading and progress, load failure and retry, the crop step
-// (read a region or the whole photo, with one sparse fallback pass), cancel
+// (read a region cut from the original photo, or the whole photo, with one
+// sparse fallback pass), a photo already framed by the label camera, cancel
 // and retake mid-run, stale results, one reused worker, and releasing the
 // worker and the photo. Tesseract never runs here.
 
@@ -79,9 +80,11 @@ function fakeDependencies() {
   const shown = [];
   const released = [];
   const prepared = [];
+  const crops = [];
   return {
     engines,
     prepared,
+    crops,
     recognitions,
     shown,
     released,
@@ -104,7 +107,11 @@ function fakeDependencies() {
         engines.push({ load, engine, onProgress });
         return load.promise.then(() => engine);
       },
-      prepareImage: async (photo) => {
+      prepareImage: async (photo, crop) => {
+        if (crop) {
+          crops.push({ photo, crop });
+          return `crop:${photo}`;
+        }
         prepared.push(photo);
         if (photo === 'heic') throw new prepareModule.LabelImageDecodeError();
         return `prepared:${photo}`;
@@ -433,16 +440,22 @@ test('choosing a photo shows it for cropping and runs no recognition yet', async
   assert.deepEqual(fake.released, []);
 });
 
-test('reading a region passes it to the engine and reviews that result', async () => {
+test('reading a region cuts it from the original photo and reads that crop as one block', async () => {
   const { fake, session } = await readySession();
   await session.scan('a');
-  const region = { left: 100, top: 50, width: 400, height: 300 };
+  // The shown photo is 1000 x 600; the region is given in its pixels.
+  const region = { left: 100, top: 60, width: 400, height: 300 };
   const reading = session.readRegion(region);
-  await flush();
   assert.equal(session.view().scan.kind, 'recognizing');
+  await flush();
+  // Cut from the original photo ('a'), not from the scaled-down copy, as
+  // fractions so it means the same area at the original's resolution.
+  assert.deepEqual(fake.crops, [
+    { photo: 'a', crop: { left: 0.1, top: 0.1, width: 0.4, height: 0.5 } },
+  ]);
   assert.equal(fake.recognitions.length, 1);
-  assert.equal(fake.recognitions[0].image, 'prepared:a');
-  assert.deepEqual(fake.recognitions[0].options, { region });
+  assert.equal(fake.recognitions[0].image, 'crop:a');
+  assert.deepEqual(fake.recognitions[0].options, { layout: 'block' });
 
   fake.recognitions[0].resolve(LAYOUT);
   await reading;
@@ -453,13 +466,118 @@ test('reading a region passes it to the engine and reviews that result', async (
     scan.result.readings.find((r) => r.field === 'proteinPer100g').value,
     21,
   );
-  // The review shows the photo already shown for cropping.
-  assert.deepEqual(scan.image, {
-    url: 'blob:prepared:a:0',
-    width: 1000,
-    height: 600,
+  // The review shows the crop that was read (the evidence boxes are in its
+  // pixels), and the photo shown for cropping is released.
+  assert.equal(scan.image.url, 'blob:crop:a:1');
+  assert.deepEqual(fake.shown, ['blob:prepared:a:0', 'blob:crop:a:1']);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+
+  session.cancel();
+  assert.deepEqual(fake.released, ['blob:prepared:a:0', 'blob:crop:a:1']);
+});
+
+test('a crop replaced while it is being cut is released and never read', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const gate = deferred();
+  const prepare = fake.deps.prepareImage;
+  fake.deps.prepareImage = async (photo, crop) => {
+    if (crop) await gate.promise;
+    return prepare(photo, crop);
+  };
+  const reading = session.readRegion({
+    left: 0,
+    top: 0,
+    width: 500,
+    height: 300,
   });
-  assert.deepEqual(fake.shown, ['blob:prepared:a:0']);
+  await flush();
+  await session.scan('b');
+  gate.resolve();
+  await reading;
+  await flush();
+  assert.equal(fake.recognitions.length, 0);
+  assert.deepEqual(session.view().scan, {
+    kind: 'cropping',
+    image: { url: 'blob:prepared:b:1', width: 1000, height: 600 },
+  });
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+});
+
+test('a crop that cannot be cut shows an error and releases the photo', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  fake.deps.prepareImage = async () => {
+    throw new Error('out of memory');
+  };
+  await session.readRegion({ left: 0, top: 0, width: 500, height: 300 });
+  assert.deepEqual(session.view().scan, {
+    kind: 'error',
+    message: sessionModule.IMAGE_FAILED_MESSAGE,
+  });
+  assert.equal(fake.recognitions.length, 0);
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+});
+
+test('a framed camera photo is read at once as one block, with no crop step', async () => {
+  const { fake, session } = await readySession();
+  const kinds = [];
+  session.subscribe(() => kinds.push(session.view().scan.kind));
+  const reading = session.scanFramed('framed');
+  await flush();
+  assert.equal(session.view().scan.kind, 'recognizing');
+  assert.deepEqual(fake.prepared, ['framed']);
+  assert.deepEqual(fake.crops, []);
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(fake.recognitions[0].image, 'prepared:framed');
+  assert.deepEqual(fake.recognitions[0].options, { layout: 'block' });
+
+  fake.recognitions[0].resolve(LAYOUT);
+  await reading;
+  const { scan } = session.view();
+  assert.equal(scan.kind, 'review');
+  assert.equal(scan.image.url, 'blob:prepared:framed:0');
+  assert.deepEqual(fieldsRead(scan.result), ['proteinPer100g']);
+  assert.ok(!kinds.includes('cropping'));
+});
+
+test('a framed photo with no per-100 column gets the sparse fallback pass', async () => {
+  const { fake, session } = await readySession();
+  const reading = session.scanFramed('framed');
+  await flush();
+  await failFirstPass(fake);
+  assert.equal(fake.recognitions.length, 2);
+  assert.deepEqual(fake.recognitions[1].options, { layout: 'sparse' });
+  fake.recognitions[1].resolve(LAYOUT);
+  await reading;
+  assert.equal(session.view().scan.result.outcome, 'ok');
+});
+
+test('a framed photo replaces a scan in progress and is released on cancel', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.scanFramed('framed');
+  await flush();
+  assert.deepEqual(fake.released, ['blob:prepared:a:0']);
+  session.cancel();
+  fake.recognitions[0].resolve(LAYOUT);
+  await reading;
+  await flush();
+  assert.equal(session.view().open, false);
+  assert.deepEqual(fake.released, [
+    'blob:prepared:a:0',
+    'blob:prepared:framed:1',
+  ]);
+});
+
+test('an undecodable framed photo shows the format error', async () => {
+  const { fake, session } = await readySession();
+  await session.scanFramed('heic');
+  assert.deepEqual(session.view().scan, {
+    kind: 'error',
+    message: sessionModule.IMAGE_FORMAT_MESSAGE,
+  });
+  assert.equal(fake.recognitions.length, 0);
 });
 
 test('reading the whole photo with no per-100 column runs one sparse pass and uses it', async () => {
@@ -615,7 +733,7 @@ test('a photo can be cropped while the engine loads, and a region read waits for
   await flush();
   assert.equal(fake.engines.length, 1);
   assert.equal(fake.recognitions.length, 1);
-  assert.deepEqual(fake.recognitions[0].options, { region });
+  assert.deepEqual(fake.recognitions[0].options, { layout: 'block' });
   fake.recognitions[0].resolve(LAYOUT);
   await reading;
   assert.equal(session.view().scan.kind, 'review');
@@ -686,4 +804,25 @@ test('dispose during cropping releases the photo once', async () => {
   await flush();
   assert.deepEqual(fake.released, ['blob:prepared:a:0']);
   assert.equal(fake.engines[0].engine.terminated, 1);
+});
+
+test('a crop given as fractions maps to the same area of a larger original', () => {
+  // The crop step shows a 1500 x 2000 copy; the original is 3024 x 4032.
+  const crop = { left: 0.18, top: 0.45, width: 0.43, height: 0.36 };
+  assert.deepEqual(prepareModule.cropInPixels(3024, 4032, crop), {
+    x: 544,
+    y: 1814,
+    width: 1300,
+    height: 1452,
+  });
+  // Kept inside the photo and at least one pixel, however it is rounded.
+  assert.deepEqual(
+    prepareModule.cropInPixels(100, 100, {
+      left: 0.99,
+      top: 1,
+      width: 0.5,
+      height: 0,
+    }),
+    { x: 99, y: 99, width: 1, height: 1 },
+  );
 });

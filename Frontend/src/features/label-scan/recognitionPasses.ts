@@ -46,6 +46,30 @@ function sameInk(a: BBox, b: BBox): boolean {
 
 export const hasDigit = (text: string): boolean => DIGIT.test(text);
 
+// Arabic unit and basis words a heading's number is printed against.
+const ARABIC_UNIT_WORDS = new Set([
+  'جم',
+  'جرام',
+  'جرامات',
+  'غ',
+  'غم',
+  'غرام',
+  'غرامات',
+  'مل',
+  'ملل',
+  'مليلتر',
+  'ملليلتر',
+  'ملغ',
+  'ملغم',
+  'مجم',
+  'ملجم',
+  'مغ',
+  'كجم',
+  'كغ',
+  'لتر',
+  'كيلو',
+]);
+
 // Below this confidence an Arabic-pass word is treated as noise: the Arabic
 // model reads English text as Arabic-looking gibberish at 0-40%, while
 // real Arabic words score ~85-96%.
@@ -71,7 +95,16 @@ export function mergeRecognitionPasses(
 
   const kept: OcrWord[] = [];
   for (const word of arabic.filter((w) => ARABIC_LETTER.test(w.text))) {
-    const rivals = english.filter((e) => sameInk(e.bbox, word.bbox));
+    // An Arabic unit word ("جم") never displaces an English "100" on its
+    // ink: the Arabic model reads the "100" of "لكل 100 جم" as part of its
+    // own word at higher confidence, and dropping the number loses the
+    // per-100 heading. Anything else still contests by confidence, so digit
+    // junk read on Arabic text (a "جم" misread as "2" in a value row) is
+    // removed as before.
+    const unitWord = ARABIC_UNIT_WORDS.has(word.text.replace(/[^ء-ي]/g, ''));
+    const rivals = english.filter(
+      (e) => sameInk(e.bbox, word.bbox) && !(unitWord && e.text === '100'),
+    );
     if (rivals.every((e) => e.confidence < word.confidence)) {
       english = english.filter((e) => !rivals.includes(e));
       kept.push(word);
@@ -114,8 +147,50 @@ export function numberCrop(
   };
 }
 
+// A lone digit in brackets, "(2)": how a row label's "(g)" is often misread.
+// It is never a value.
+export const isBracketedDigit = (text: string): boolean =>
+  /^[([{]\s*\d\s*[)\]}]$/.test(text.trim());
+
+// Letters a number's own word may carry: the unit printed against it.
+const NUMBER_UNIT_LETTERS = new Set([
+  'g',
+  'gm',
+  'gms',
+  'gr',
+  'gram',
+  'grams',
+  'mg',
+  'mcg',
+  'ug',
+  'µg',
+  'kg',
+  'kcal',
+  'kcals',
+  'cal',
+  'cals',
+  'kj',
+  'kilojoules',
+  'ml',
+  'cl',
+  'l',
+]);
+
+// Whether a word that holds digits reads as a number: not a bracketed single
+// digit ("(2)", the "(g)" of a row label misread as a digit) and with no
+// letters but a unit ("39M" is not a number). A word failing this is never
+// confirmed, so it can't pass as a value however well the re-read agrees.
+function looksLikeNumber(text: string): boolean {
+  if (isBracketedDigit(text)) return false;
+  const letters = text.match(/[a-zA-Zµ]+/g) ?? [];
+  return letters.every((l) => NUMBER_UNIT_LETTERS.has(l.toLowerCase()));
+}
+
+// The digits of every number in a text, with the decimal mark normalised: the
+// reader takes "." and "," alike as the decimal point of a number, so a point
+// read as a comma (78,76 for 78.76) is the same reading, not a different one.
 function digitsOf(text: string): string {
-  return (text.match(/\d+(?:[.,]\d+)*/g) ?? []).join('|');
+  return (text.match(/\d+(?:[.,]\d+)*/g) ?? []).join('|').replace(/,/g, '.');
 }
 
 // Applies an English re-read of a number's crop. A number is verified only
@@ -132,6 +207,7 @@ export function verifyNumberWord(
 ): OcrWord {
   const unverified: OcrWord = { ...word, numberCheck: 'unverified' };
   if (ARABIC_INDIC_DIGIT.test(word.text)) return unverified;
+  if (!looksLikeNumber(word.text)) return unverified;
   const overlapping = cropWords
     .map(clean)
     .filter((w) => w.text && overlapArea(w.bbox, word.bbox) > 0)

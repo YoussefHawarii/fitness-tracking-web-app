@@ -11,3 +11,21 @@ So a scan runs one worker through an English page pass, an Arabic page pass (Ara
 - **Trust the page pass, gate on Tesseract's confidence** — rejected: the truncated and decimal-dropped numbers above were reported at 90%+.
 - **Trust the crop re-read alone** — rejected: it also dropped decimals ("125g" for "12.5 g").
 - **Upscale crops before re-reading** — tried and rejected: it made readings worse, including a confident wrong value.
+
+## Later measurement: a cleaned copy of the photo
+
+A photographed table with grid lines round every cell, a white-on-dark title bar, glossy foil and a few degrees of tilt read almost nothing from the photo as taken (3 to 7 of 10 row labels, no values), and no better binarised or upscaled. Every pass now reads a cleaned copy made on the device from the photo (`labelCleanup.ts`): straightened by the tilt of its grid lines, the title bar turned dark-on-light, the grid lines erased, the lighting evened out. On that label the same engine then read every row label and most values. The copy is read as sparse text, because a table read as one block runs its cells together.
+
+The agreement rule is unchanged: a number is read only when the page reading and the re-read agree digit for digit. Two details follow from the cleaned copy and don't loosen it:
+
+- The re-read is now of the number's own ink, cropped tight (a box that reaches over the next row or the unit beside it made the single-line read drop decimal points) and enlarged to about 65 px tall. The earlier finding that upscaled crops read worse was made on crops of the photo itself; on the cleaned copy a moderate enlargement keeps decimal points, and a large one (90 px) misreads digits, so the size is a measured middle.
+- A point read as a comma by one reading ("78,76" and "78.76") agrees, since the reader takes either as the decimal point. A whole number with a leading zero ("02", the "0.2" a glare spot ate the point of) is never read.
+
+If the copy can't be made, the photo itself is read as before.
+
+## Later measurement: a unit read as a bracketed digit
+
+On a bilingual table the row label's "(g)" is often read as "(2)" or "()". The number beside it still agreed digit for digit, but with no unit the reader left it blank without a word of explanation. Two changes follow, and neither relaxes the agreement rule:
+
+- A word that is a lone digit in brackets ("(2)") is never verified, is never taken as a value, and a row with a number but no readable unit now says so.
+- One unit is assumed, always flagged: grams, marked "needs check" ("Unit not read — assumed g from the per 100 g table"). The guards, all required: the table is headed per 100 g; the nutrient is protein, carbs, sugars, fat or fiber (never energy, sodium or anything that could print mg or kJ); the number passed both readings and every value check; a bracketed scrap ("(2)", "()") sits where the "(g)" was printed; and no recognised or unrecognised unit word is beside the number. A number with no unit and no such scrap stays blank.

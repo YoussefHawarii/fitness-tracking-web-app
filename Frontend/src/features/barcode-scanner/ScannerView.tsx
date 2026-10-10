@@ -1,6 +1,7 @@
 import type { Ref } from 'react';
 import { SecondaryButton } from '../../components/ui/Button';
 import { SCAN_SLOT } from './scan-region';
+import { cameraProblemMessage } from './camera-messages';
 import type { ScanStatus, TorchState } from './scan-session';
 
 interface Props {
@@ -19,20 +20,7 @@ export function ScannerView({
   onRetry,
 }: Props) {
   if (status !== 'starting' && status !== 'scanning' && status !== 'decoded') {
-    const message =
-      status === 'permission-denied'
-        ? 'Camera permission was denied. Allow camera access in your browser settings and try again.'
-        : status === 'unavailable'
-          ? 'No camera is available. Check that a camera is connected and accessible.'
-          : status === 'error'
-            ? 'The camera could not start. Please try again.'
-            : status === 'camera-busy'
-              ? 'The camera is being used by another app. Close it and try again.'
-              : status === 'unsupported'
-                ? 'The camera needs a secure (https) page in a supported browser.'
-                : status === 'interrupted'
-                  ? 'The camera stopped, for example because the screen locked or another app took it. Try again to resume scanning.'
-                  : null;
+    const message = cameraProblemMessage(status);
     return message ? (
       <div className="p-4 text-body text-warn">
         <p>{message}</p>

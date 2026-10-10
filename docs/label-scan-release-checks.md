@@ -33,6 +33,9 @@ memory, cellular download time, or the CSP with real third-party sign-in.
    - On clear labels, at least 80% of calories, protein, carbs and fat are
      read from a per-100 column on the label's own basis.
 
+The fixture page reads whole photos only, so it does not exercise the label
+camera or region reads. Those are checked on the phones, below.
+
 The shipped app has no OCR export or debug path. The page lives outside
 `src/`, and the production build only bundles the app's own `index.html`.
 
@@ -64,6 +67,39 @@ Expect recall on real labels to fall short of the 80% target. Measure it
 with real fixtures before release. Tuning against rendered labels would not
 show whether the real target is met.
 
+**Bilingual cookie table, one numeric column (v0.2.16):** a photographed
+table with an English label on the left, Arabic on the right and one value
+column read as `no-per-100-column`, so every value was "for reference only".
+Five changes, none of which loosens the agreement rule (ADR 0010):
+
+- F1, merge: an Arabic unit word ("جم") no longer removes a purely numeric
+  English-pass word on its ink. It had taken the "100" of the per-100 heading
+  with it. Any other Arabic word still contests by confidence, so digit junk
+  read on Arabic text is removed as before.
+- F2, headings: a bare "%" heads a percent column only on a row that has
+  another value heading ("Per 100 g   %"); alone on its row it is noise. A stray
+  "%" above the table had overlapped the per-100 heading and left the table
+  unresolved. "daily", "reference" and "intake" count only as a pair ("daily
+  value", "reference intake") or beside a "%". Per-100 and per-serving
+  detection is untouched.
+- V, verification: a word that is a lone digit in brackets ("(2)", a "(g)" misread)
+  or holds letters that are not a unit ("39M") is never verified, even when both
+  readings agree.
+- A, warning: a row whose number has no readable unit now says "Couldn't read
+  the unit — check this value." instead of staying blank with no explanation.
+- B, assumed grams: only on a per 100 g table, only for protein, carbs, sugars,
+  fat and fiber, and only when a bracketed scrap ("(2)", "()") sits where the
+  "(g)" was printed and nothing else could be the unit, a verified number is
+  filled as grams and marked "needs check" ("Unit not read — assumed g from the
+  per 100 g table"). Energy, sodium and every other table stay blank. A number
+  with no unit and no scrap before it also stays blank. This is the one place
+  a unit is assumed, so it is always flagged; a number whose own word carries a
+  misread "g" ("16.29") is still caught by the digit-agreement rule as before.
+
+Unchanged: a page reading with a dropped decimal point still disagrees with
+its crop ("651" vs "6.51" stays unverified), a whole number with a leading
+zero ("02") is never read, `MIN_NUMBER_CONFIDENCE`, and the cleanup ink threshold.
+
 **Default vs fast language data:** keep the default `4.0.0_best_int` data.
 
 - The packaged sets are `4.0.0_best_int` (eng 2.95 MB + ara 1.66 MB gzipped)
@@ -92,6 +128,20 @@ First-scan download, for reference: worker 0.11 MB, one engine build about
 **Cases (run on each device and record the result)**
 
 - Camera capture
+- In-app label camera: opens with the permission prompt
+- In-app label camera: the resolution it actually delivers (log or inspect
+  the captured photo's size)
+- In-app label camera: 2x zoom and continuous focus on Android
+- In-app label camera: on iPhone Safari there is no zoom control (the frame
+  stays at 1x, so move closer), focus is automatic (no tap-to-focus in the
+  web viewfinder) and the resolution is often about 1080p; passes if the
+  table inside the frame is sharp and readable
+- In-app label camera: flashlight turns on and off
+- In-app label camera: the tall and wide frames match what is captured
+- In-app label camera: a captured photo is read immediately, with no crop
+  step
+- In-app label camera: with camera permission denied, "Take photo" and
+  "Choose photo" are offered and work
 - Gallery pick
 - HEIC photo
 - Rotated or EXIF-oriented photo
@@ -123,6 +173,8 @@ First-scan download, for reference: worker 0.11 MB, one engine build about
 - [ ] Per-serving-only labels never fill per-100 fields
 - [ ] First-scan download within about 15 s on 4G
 - [ ] No tab crash or reload on either iPhone across 5 consecutive scans
+- [ ] No tab crash or reload on either iPhone across 5 consecutive in-app
+      label camera scans (full-resolution crops use more memory)
 - [ ] Clean-profile network inspection on every device. The only requests
       during capture, scan, cancel and apply are same-origin OCR asset
       requests. The only request carrying product data is the create-product

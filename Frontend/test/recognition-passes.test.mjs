@@ -63,6 +63,75 @@ test('an Arabic-pass number is added only where nothing else was read', () => {
   assert.deepEqual(merged.map((w) => w.text).sort(), ['21', '40']);
 });
 
+test('a digit read survives an Arabic letter word on the same ink', () => {
+  // The Arabic model reads the "100" of a "لكل 100 جم" heading as part of its
+  // own word at a higher confidence; the English "100" must not be dropped.
+  const merged = passes.mergeRecognitionPasses(
+    [word('100', 695, 934, 55, 52)],
+    [word('جم', 695, 934, 18, 95)],
+  );
+  assert.deepEqual(merged.map((w) => w.text).sort(), ['100', 'جم'].sort());
+});
+
+test('low-confidence digit junk on an Arabic nutrient name is still removed', () => {
+  const merged = passes.mergeRecognitionPasses(
+    [word('4', 978, 186, 20, 40)],
+    [word('السكريات', 978, 186, 85, 92)],
+  );
+  assert.deepEqual(
+    merged.map((w) => w.text),
+    ['السكريات'],
+  );
+});
+
+test('digit junk on an Arabic unit word in a value row is still removed', () => {
+  const merged = passes.mergeRecognitionPasses(
+    [word('2', 700, 400, 18, 55)],
+    [word('جم', 700, 400, 18, 92)],
+  );
+  assert.deepEqual(
+    merged.map((w) => w.text),
+    ['جم'],
+  );
+});
+
+test('a bracketed single digit is never verified, even when both readings agree', () => {
+  // "(g)" misread as "(2)" by the page pass and the re-read alike.
+  const page = { ...word('(2)', 481, 1004, 24, 89), recognizedBy: 'english' };
+  const result = passes.verifyNumberWord(page, [
+    word('(2)', 481, 1004, 24, 90),
+  ]);
+  assert.equal(result.numberCheck, 'unverified');
+});
+
+test('a number word with letters other than a unit is never verified', () => {
+  const bad = { ...word('39M', 481, 187, 50, 80), recognizedBy: 'english' };
+  assert.equal(
+    passes.verifyNumberWord(bad, [word('39M', 481, 187, 50, 90)]).numberCheck,
+    'unverified',
+  );
+  for (const text of [
+    '83.651',
+    '21g',
+    '78.76mg',
+    '352kcal',
+    '42%',
+    '21gms',
+    '21grams',
+    '250cals',
+    '250kcals',
+    '5µg',
+    '(5',
+  ]) {
+    const page = { ...word(text, 481, 187, 60, 80), recognizedBy: 'english' };
+    assert.equal(
+      passes.verifyNumberWord(page, [word(text, 481, 187, 60, 90)]).numberCheck,
+      'verified',
+      text,
+    );
+  }
+});
+
 test('directional marks Tesseract wraps around numbers are removed', () => {
   const merged = passes.mergeRecognitionPasses(
     [],

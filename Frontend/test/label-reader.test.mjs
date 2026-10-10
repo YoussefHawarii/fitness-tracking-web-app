@@ -1598,3 +1598,192 @@ test('a table recognised with low confidence overall is a weak scan', () => {
   const result = reader.readLabel({ words });
   assert.equal(result.weakScan, true);
 });
+
+// --- Stray "%" noise (F2) ----------------------------------------------
+
+test('stray "%" noise above the table does not block the per 100 g column', () => {
+  const result = read(
+    row(10, ['%', 175]),
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('a "% DV" or "% Daily Value" column is still a percent column', () => {
+  const headings = [
+    [
+      ['%', 560],
+      ['DV', 575],
+    ],
+    [
+      ['%', 560],
+      ['Daily', 575],
+      ['Value', 625],
+    ],
+  ];
+  for (const percent of headings) {
+    const result = read(
+      row(40, ['per', 400], ['100', 435], ['g', 470], ...percent),
+      // The percent column's number carries a "g" the way a misread would.
+      row(
+        120,
+        ['Protein', 10],
+        ['21', 420],
+        ['g', 445],
+        ['9', 570],
+        ['g', 590],
+      ),
+    );
+    assert.equal(result.outcome, 'ok', percent[1][0]);
+    assert.equal(reading(result, 'proteinPer100g').value, 21, percent[1][0]);
+  }
+});
+
+// --- A unit that could not be read (A, B) ------------------------------
+
+const withUnitWord = (unitWord, numberCheck) => [
+  ...row(160, ['Total', 10], ['carbohydrates', 60], [unitWord, 200]),
+  {
+    ...row(160, ['83.651', 240])[0],
+    ...(numberCheck && { numberCheck }),
+  },
+];
+
+test('a "(g)" misread as "(2)" on a per 100 g table is assumed grams and flagged', () => {
+  const result = read(PER_100_G_HEADER, withUnitWord('(2)'));
+  const carbs = reading(result, 'carbsPer100g');
+  assert.equal(carbs.value, 83.651);
+  assert.equal(carbs.unit, 'g');
+  assert.equal(carbs.status, 'needs-check');
+  assert.match(carbs.warnings[0], /assumed g/);
+});
+
+test('an unreadable unit is never assumed off a per 100 g table', () => {
+  const perServing = row(
+    40,
+    ['per', 160],
+    ['serving', 195],
+    ['(30', 270],
+    ['g)', 305],
+  );
+  const perMl = row(40, ['per', 120], ['100', 160], ['ml', 200]);
+  for (const header of [perServing, perMl]) {
+    const carbs = reading(read(header, withUnitWord('(2)')), 'carbsPer100g');
+    assert.equal(carbs.value, undefined);
+    assert.equal(carbs.status, 'not-found');
+    assert.match(carbs.warnings[0], /unit/);
+  }
+});
+
+test('an unreadable unit is never assumed for sodium', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(120, ['Sodium', 10], ['(2)', 100], ['78.76', 140]),
+  );
+  const sodium = reading(result, 'sodiumMgPer100');
+  assert.equal(sodium.value, undefined);
+  assert.equal(sodium.status, 'not-found');
+  assert.match(sodium.warnings[0], /unit/);
+});
+
+test('an unverified number is not given an assumed unit', () => {
+  const result = read(PER_100_G_HEADER, withUnitWord('(2)', 'unverified'));
+  const carbs = reading(result, 'carbsPer100g');
+  assert.equal(carbs.value, undefined);
+  assert.equal(carbs.status, 'not-found');
+});
+
+test('a number with no unit printed at all warns instead of vanishing', () => {
+  const result = read(PER_100_G_HEADER, row(120, ['Protein', 10], ['21', 160]));
+  const protein = reading(result, 'proteinPer100g');
+  assert.equal(protein.value, undefined);
+  assert.match(protein.warnings[0], /unit/);
+});
+
+test('an unrecognised unit word beside a gram nutrient is not assumed to be grams', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['(2)', 100], ['21', 160], ['mcg', 195]),
+  );
+  const protein = reading(result, 'proteinPer100g');
+  assert.equal(protein.value, undefined);
+});
+
+// --- Percent columns headed by a bare "%" or other abbreviations --------
+
+test('a column headed only "%" or "%RDA" never supplies a per-100 value', () => {
+  const headings = [
+    [['%', 565]],
+    [['%RDA', 565]],
+    [['%RDI', 565]],
+    [
+      ['%', 565],
+      ['DI', 580],
+    ],
+  ];
+  for (const percent of headings) {
+    const header = row(40, ['Per', 400], ['100', 435], ['g', 470], ...percent);
+    // The per-100 number was lost; only the percent number is left.
+    const lost = read(
+      header,
+      row(120, ['Protein', 10], ['(g)', 90], ['13', 570]),
+    );
+    assert.equal(
+      reading(lost, 'proteinPer100g').value,
+      undefined,
+      percent[0][0],
+    );
+    const both = read(
+      header,
+      row(120, ['Protein', 10], ['(g)', 90], ['6.5', 420], ['13', 570]),
+    );
+    assert.equal(reading(both, 'proteinPer100g').value, 6.5, percent[0][0]);
+  }
+});
+
+test('"daily" and "reference" in ordinary text do not head a percent column', () => {
+  const result = read(
+    row(10, ['Your', 10], ['daily', 70], ['snack', 130], ['reference', 200]),
+    PER_100_G_HEADER,
+    row(120, ['Protein', 10], ['21', 160], ['g', 190]),
+  );
+  assert.equal(result.outcome, 'ok');
+  assert.equal(reading(result, 'proteinPer100g').value, 21);
+});
+
+test('a bracket that holds a real number with its unit is still read', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(120, ['Sugars', 10], ['(5', 100], ['g)', 130]),
+  );
+  assert.equal(reading(result, 'sugarPer100g').value, 5);
+});
+
+test('"Fat (2) g 12" reads 12, never the bracketed 2', () => {
+  const result = read(
+    PER_100_G_HEADER,
+    row(120, ['Fat', 10], ['(2)', 60], ['g', 100], ['12', 130]),
+  );
+  assert.equal(reading(result, 'fatPer100g').value, 12);
+});
+
+test('a lone "%" row that overlaps no other heading is a real column', () => {
+  const result = read(
+    row(10, ['%', 565]),
+    row(40, ['Per', 300], ['100', 335], ['g', 370]),
+    row(120, ['Protein', 10], ['(g)', 90], ['13', 570]),
+  );
+  assert.equal(reading(result, 'proteinPer100g').value, undefined);
+});
+
+test('a "%" under the right edge of a per 100 heading keeps the table unresolved', () => {
+  const result = read(
+    row(40, ['Per', 300], ['100', 335], ['grams', 370]),
+    row(70, ['%', 405]),
+    row(120, ['Protein', 10], ['(g)', 90], ['13', 410]),
+  );
+  // Unresolved: the 13 is shown for reference and never fills a field.
+  assert.equal(result.outcome, 'no-per-100-column');
+});

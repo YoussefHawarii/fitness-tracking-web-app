@@ -1,4 +1,9 @@
-import { useEffect, useState, useSyncExternalStore } from 'react';
+import {
+  useEffect,
+  useState,
+  useSyncExternalStore,
+  type ComponentType,
+} from 'react';
 import { PrimaryButton, SecondaryButton } from '../../components/ui/Button';
 import type { LabelFormUpdate } from '../add-product/extractionFormValues';
 import {
@@ -15,6 +20,7 @@ import {
   type LabelScanSession,
 } from './labelScanSession';
 import { CropStep } from './CropStep';
+import { LabelCamera, type LabelCameraProps } from './LabelCamera';
 import { LabelReview } from './LabelReview';
 import { createTesseractEngine } from './ocrEngine';
 import { prepareLabelImage } from './prepareImage';
@@ -53,6 +59,8 @@ interface Props {
   ) => string;
   // The scanning session; the browser's Tesseract session by default.
   createSession?: () => LabelScanSession;
+  // The framed label camera; the browser camera by default.
+  Camera?: ComponentType<LabelCameraProps>;
 }
 
 // The user's choices for one review: which readings are selected, and the
@@ -68,6 +76,7 @@ export function LabelScanPanel({
   preview,
   onApply,
   createSession = createBrowserSession,
+  Camera = LabelCamera,
 }: Props) {
   const [session] = useState(createSession);
   const view = useSyncExternalStore(
@@ -76,16 +85,32 @@ export function LabelScanPanel({
     session.view,
   );
   const [choice, setChoice] = useState<ReviewChoice | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  // The open camera is showing the picture. Until it does (still starting,
+  // or showing a problem) the photo buttons are the way forward.
+  const [cameraLive, setCameraLive] = useState(false);
 
   // The worker and the photo are released when the form goes away
   // (including after the product is created).
   useEffect(() => () => session.dispose(), [session]);
 
+  function openCamera() {
+    setCameraLive(false);
+    setCameraOpen(true);
+  }
+
+  function closeCamera() {
+    setCameraOpen(false);
+    setCameraLive(false);
+  }
+
   function onFileChosen(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     // Reset so choosing the same photo again still fires a change.
     e.target.value = '';
-    if (file) void session.scan(file);
+    if (!file) return;
+    closeCamera();
+    void session.scan(file);
   }
 
   if (!view.open) {
@@ -102,6 +127,8 @@ export function LabelScanPanel({
 
   const { scan, progress } = view;
   const busy = scan.kind === 'preparing' || scan.kind === 'recognizing';
+  // A photo was already taken, so the buttons offer another one.
+  const rescanning = scan.kind === 'review' || scan.kind === 'cropping';
   const percent = progress ? Math.round(progress.progress * 100) : null;
   const progressText =
     view.engine === 'loading'
@@ -132,31 +159,44 @@ export function LabelScanPanel({
       <p className="text-label normal-case tracking-normal text-text-muted">
         {LABEL_SCAN_PRIVACY_NOTE}
       </p>
-      <div className="flex flex-wrap gap-2">
-        <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-          {scan.kind === 'review' || scan.kind === 'cropping'
-            ? 'Retake photo'
-            : 'Take photo'}
-          <input
-            type="file"
-            accept="image/*"
-            capture="environment"
-            className="sr-only"
-            onChange={onFileChosen}
-          />
-        </label>
-        <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
-          {scan.kind === 'review' || scan.kind === 'cropping'
-            ? 'Choose another photo'
-            : 'Choose photo'}
-          <input
-            type="file"
-            accept="image/*"
-            className="sr-only"
-            onChange={onFileChosen}
-          />
-        </label>
-      </div>
+      {cameraOpen && (
+        <Camera
+          onCapture={(photo) => {
+            closeCamera();
+            void session.scanFramed(photo);
+          }}
+          onClose={closeCamera}
+          onLiveChange={setCameraLive}
+        />
+      )}
+      {(!cameraOpen || !cameraLive) && (
+        <div className="flex flex-wrap gap-2">
+          {!cameraOpen && (
+            <PrimaryButton type="button" onClick={openCamera}>
+              {rescanning ? 'Scan again with camera' : 'Scan with camera'}
+            </PrimaryButton>
+          )}
+          <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
+            {rescanning ? 'Retake photo' : 'Take photo'}
+            <input
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="sr-only"
+              onChange={onFileChosen}
+            />
+          </label>
+          <label className="spot-btn inline-flex cursor-pointer items-center justify-center rounded-xl border border-border bg-surface-raised px-5 py-2.5 text-label normal-case text-text">
+            {rescanning ? 'Choose another photo' : 'Choose photo'}
+            <input
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              onChange={onFileChosen}
+            />
+          </label>
+        </div>
+      )}
 
       {progressText && (
         <p className="text-body text-text-muted" role="status">
@@ -181,7 +221,7 @@ export function LabelScanPanel({
         <p className="text-body text-warn">{scan.message}</p>
       )}
 
-      {scan.kind === 'cropping' && (
+      {!cameraOpen && scan.kind === 'cropping' && (
         <CropStep
           key={scan.image.url}
           image={scan.image}
@@ -190,7 +230,7 @@ export function LabelScanPanel({
         />
       )}
 
-      {scan.kind === 'review' && review && (
+      {!cameraOpen && scan.kind === 'review' && review && (
         <>
           <LabelReview
             result={scan.result}
@@ -233,6 +273,7 @@ export function LabelScanPanel({
         onClick={() => {
           session.cancel();
           setChoice(null);
+          closeCamera();
         }}
         className="self-start"
       >

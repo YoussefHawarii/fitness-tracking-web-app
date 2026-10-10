@@ -1,10 +1,17 @@
-export function buildCameraConstraints() {
+// The rear camera at the given resolution (1080p unless asked otherwise),
+// as `ideal` so a camera that can't meet it still opens.
+export function buildCameraConstraints(
+  resolution: { width: number; height: number } = {
+    width: 1920,
+    height: 1080,
+  },
+) {
   return {
     audio: false,
     video: {
       facingMode: { ideal: 'environment' },
-      width: { ideal: 1920 },
-      height: { ideal: 1080 },
+      width: { ideal: resolution.width },
+      height: { ideal: resolution.height },
     },
   };
 }
