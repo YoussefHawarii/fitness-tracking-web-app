@@ -1,5 +1,6 @@
 import type { NutritionBasis } from '../../services/foodService';
 import type { BBox, OcrLayout, OcrWord } from './ocrLayout';
+import { MASS_UNITS, MILLIGRAM_UNITS, QUANTITY_UNITS } from './labelUnits';
 import { isBracketedDigit } from './recognitionPasses';
 
 // The Label reader: a pure function from a Label scan's word layout to
@@ -101,6 +102,30 @@ interface Row {
   y1: number;
 }
 
+// Words read from a straightened copy carry two boxes: where they sit on the
+// photo and where they sat in the copy, whose rows are level. The reader works
+// in the copy's coordinates — rows, columns and units are placed there, so a
+// value far to the right of its label can't slide onto the next row of a
+// tilted photo — and reports evidence on the photo. The photo box of such a
+// word is kept here, keyed by the word the reader works with.
+const photoBoxes = new WeakMap<OcrWord, BBox>();
+
+// Every word of a read comes from one copy, so all have a copy box or none do;
+// if a mix ever arrives, the boxes are of two spaces and not comparable, so the
+// photo boxes are used for all.
+function inReadingSpace(words: readonly OcrWord[]): OcrWord[] {
+  if (!words.every((word) => word.layoutBox)) return [...words];
+  return words.map((word) => {
+    const reading: OcrWord = {
+      ...word,
+      bbox: word.layoutBox as BBox,
+      layoutBox: undefined,
+    };
+    photoBoxes.set(reading, word.bbox);
+    return reading;
+  });
+}
+
 function verticalOverlapRatio(a: BBox, y0: number, y1: number): number {
   const overlap = Math.min(a.y1, y1) - Math.max(a.y0, y0);
   const smaller = Math.min(a.y1 - a.y0, y1 - y0);
@@ -140,9 +165,15 @@ function lineSlope(words: readonly OcrWord[]): number {
   return Math.abs(slope) <= 0.2 ? slope : 0;
 }
 
+// A box taller than this many typical word heights is a blob of several lines
+// or stray marks, not a word: only its middle part counts when rows are
+// matched, so its overhang can't pull in the words of the rows above and below.
+const MAX_BOX_HEIGHTS = 2;
+
 // Groups words into visual rows: a word joins the row it overlaps
-// vertically by at least half of the shorter height. Words are placed left to
-// right, each compared with the word before it in the row and moved along the
+// vertically by at least half of the shorter height (a box taller than twice
+// a typical word counts as only its middle, see above). Words are placed left
+// to right, each compared with the word before it in the row and moved along the
 // text's tilt — not with the whole row so far, which on a tilted photo grows
 // until it swallows the rows above and below. A row's y0/y1 are measured
 // level (tilt removed), so rows compare in the same terms wherever their
@@ -150,6 +181,9 @@ function lineSlope(words: readonly OcrWord[]): number {
 function groupRows(words: readonly OcrWord[]): Row[] {
   if (words.length === 0) return [];
   const slope = lineSlope(words);
+  const cap = MAX_BOX_HEIGHTS * median(words.map((w) => w.bbox.y1 - w.bbox.y0));
+  const middle = (y0: number, y1: number): [number, number] =>
+    y1 - y0 > cap ? [(y0 + y1 - cap) / 2, (y0 + y1 + cap) / 2] : [y0, y1];
   const sorted = [...words].sort((a, b) => a.bbox.x0 - b.bbox.x0);
   const rows: Array<{ words: OcrWord[]; last: BBox }> = [];
   for (const word of sorted) {
@@ -157,10 +191,12 @@ function groupRows(words: readonly OcrWord[]): Row[] {
     let bestRatio = 0.5;
     for (const row of rows) {
       const drift = slope * (centreX(word.bbox) - centreX(row.last));
+      const [y0, y1] = middle(row.last.y0 + drift, row.last.y1 + drift);
+      const [w0, w1] = middle(word.bbox.y0, word.bbox.y1);
       const ratio = verticalOverlapRatio(
-        word.bbox,
-        row.last.y0 + drift,
-        row.last.y1 + drift,
+        { ...word.bbox, y0: w0, y1: w1 },
+        y0,
+        y1,
       );
       if (ratio >= bestRatio) {
         best = row;
@@ -481,30 +517,6 @@ function keywordAt(
 // ---------------------------------------------------------------------------
 // Values
 
-const MASS_UNITS = new Set([
-  'g',
-  'gm',
-  'gr',
-  'grams',
-  'gram',
-  'جم',
-  'جرام',
-  'جرامات',
-  'غ',
-  'غم',
-  'غرام',
-  'غرامات',
-]);
-const MILLIGRAM_UNITS = new Set([
-  'mg',
-  'مجم',
-  'ملجم',
-  'ملغ',
-  'مغ',
-  'ملغم',
-  'مليجرام',
-  'ملليجرام',
-]);
 const KCAL_UNITS = new Set([
   'kcal',
   'سعر',
@@ -515,22 +527,6 @@ const KCAL_UNITS = new Set([
   'كيلوكالوري',
 ]);
 const KJ_UNITS = new Set(['kj', 'كيلوجول', 'كجول']);
-// Units only a serving or package size is read in.
-const QUANTITY_UNITS: Record<string, Unit> = {
-  kg: 'kg',
-  كجم: 'kg',
-  كغ: 'kg',
-  ml: 'ml',
-  مل: 'ml',
-  ملل: 'ml',
-  مليلتر: 'ml',
-  ملليلتر: 'ml',
-  l: 'l',
-  ltr: 'l',
-  لتر: 'l',
-  cl: 'cl',
-};
-
 type Unit = 'g' | 'mg' | 'kcal' | 'kj' | 'kg' | 'ml' | 'l' | 'cl';
 
 // The unit starting at token i, and how many tokens it spans: Arabic
@@ -733,11 +729,12 @@ function segmentsOf(row: Row): Segment[] {
 }
 
 function unionBox(words: readonly OcrWord[]): BBox {
+  const boxes = words.map((w) => photoBoxes.get(w) ?? w.bbox);
   return {
-    x0: Math.min(...words.map((w) => w.bbox.x0)),
-    y0: Math.min(...words.map((w) => w.bbox.y0)),
-    x1: Math.max(...words.map((w) => w.bbox.x1)),
-    y1: Math.max(...words.map((w) => w.bbox.y1)),
+    x0: Math.min(...boxes.map((b) => b.x0)),
+    y0: Math.min(...boxes.map((b) => b.y0)),
+    x1: Math.max(...boxes.map((b) => b.x1)),
+    y1: Math.max(...boxes.map((b) => b.y1)),
   };
 }
 
@@ -1422,7 +1419,7 @@ function withQuantityChecks(
 const SINGLE_COLUMN: Column = { kind: 'per100', x0: 0, x1: 0, center: 0 };
 
 export function readLabel(layout: OcrLayout): LabelScanResult {
-  const rows = groupRows(layout.words);
+  const rows = groupRows(inReadingSpace(layout.words));
   const model = columnModel(rows);
   // Without a usable header the values are still read as one column so
   // they can be shown for reference; the outcome keeps them out of the form.

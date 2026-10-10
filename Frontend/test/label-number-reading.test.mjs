@@ -96,3 +96,53 @@ test('readings that differ in a digit or lose the point still do not agree', () 
     'unverified',
   );
 });
+
+// An energy figure read one digit off ("415.033" for a printed 415.932) is
+// inside the 10 kcal the energy check allows against the kJ figure, so only
+// the two-readings rule can stop it (ADR 0010).
+function energyTable(energyWord) {
+  return {
+    words: [
+      word('per', 100, 10),
+      word('100', 140, 10),
+      word('g', 180, 10),
+      word('Energy', 10, 50),
+      word('(kcal)', 80, 50),
+      { ...word('415.033', 160, 50), ...energyWord },
+      word('kcal', 230, 50),
+      word('1740', 280, 50),
+      word('kJ', 330, 50),
+    ],
+  };
+}
+
+test('an energy figure whose re-read disagrees on a digit is not read', () => {
+  const page = word('415.033', 160, 50);
+  const disagreed = passes.verifyNumberWord(page, [word('415.932', 160, 50)]);
+  assert.equal(disagreed.numberCheck, 'unverified');
+
+  const result = reader.readLabel(
+    energyTable({ numberCheck: disagreed.numberCheck }),
+  );
+  const energy = result.readings.find((r) => r.field === 'caloriesPer100g');
+  assert.notEqual(energy.status, 'read');
+  assert.equal(energy.value, undefined);
+});
+
+// This documents the limit of the rule, not a desired outcome: if both
+// readings share the same wrong digits they agree and the figure is read. Only
+// the independence of the two readings (the re-read cut from the copy before
+// grid-line removal, and no re-read where the erasure touched the ink) makes
+// that unlikely.
+test('the same energy figure is read when both readings agree', () => {
+  const page = word('415.033', 160, 50);
+  const agreed = passes.verifyNumberWord(page, [word('415.033', 160, 50)]);
+  assert.equal(agreed.numberCheck, 'verified');
+
+  const result = reader.readLabel(
+    energyTable({ numberCheck: agreed.numberCheck }),
+  );
+  const energy = result.readings.find((r) => r.field === 'caloriesPer100g');
+  assert.equal(energy.status, 'read');
+  assert.equal(energy.value, 415.033);
+});

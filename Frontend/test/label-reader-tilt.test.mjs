@@ -141,3 +141,72 @@ test('a single word, and no words, do not break row grouping', () => {
     }),
   );
 });
+
+// Words read from a straightened copy: the photo box (what the review shows)
+// is tilted, the copy box (what the reader groups rows by) is level.
+function copyRow(y, slope, ...items) {
+  return row(y, slope, ...items).map((word, i) => ({
+    ...word,
+    layoutBox: {
+      x0: items[i][1],
+      y0: y,
+      x1: items[i][1] + items[i][0].length * CHAR_WIDTH,
+      y1: y + 20,
+    },
+  }));
+}
+
+test('a value far to the right of its label stays on its row of a tilted photo, by the copy boxes', () => {
+  // Value columns 700 px from the labels, rows 36 px apart, on a photo
+  // tilted by 0.08: the value of a row sits 56 px lower than its label on the
+  // photo, a row and a half. Few neighbouring words, so the tilt can't be
+  // measured from the photo boxes alone.
+  const slope = 0.08;
+  const words = [
+    ...copyRow(10, slope, ['per', 300], ['100', 340], ['g', 380]),
+    ...copyRow(46, slope, ['Protein', 10], ['21', 700], ['g', 730]),
+    ...copyRow(82, slope, ['Fat', 10], ['12', 700], ['g', 730]),
+    ...copyRow(118, slope, ['Fiber', 10], ['3', 700], ['g', 730]),
+  ];
+  const result = reader.readLabel({ words });
+  assert.equal(result.outcome, 'ok');
+  const read = (field) => result.readings.find((r) => r.field === field);
+  assert.equal(read('proteinPer100g').value, 21);
+  assert.equal(read('fatPer100g').value, 12);
+  assert.equal(read('fiberPer100g').value, 3);
+  // The evidence boxes are on the photo, where the words are drawn there.
+  const evidence = read('proteinPer100g').evidence;
+  assert.equal(evidence.rowText, 'Protein 21 g');
+  assert.equal(evidence.bbox.x0, 700);
+  assert.equal(evidence.bbox.x1, 730 + 10);
+  assert.equal(evidence.bbox.y0, 46 + Math.round(700 * slope));
+  assert.equal(evidence.bbox.y1, 46 + Math.round(730 * slope) + 20);
+});
+
+// A word at [x, y0, y1] of any height.
+const tall = (text, x, y0, y1) => ({
+  text,
+  bbox: { x0: x, y0, x1: x + text.length * CHAR_WIDTH, y1 },
+  confidence: 95,
+});
+
+test('a tall box does not pull the next, closely spaced row into its row', () => {
+  // The "(kcal)" box reaches 15 px above and 30 px below its row (stray
+  // marks round the word), down over the next row, which starts to its
+  // right. Rows are 36 px apart.
+  const words = [
+    ...row(10, 0, ['per', 200], ['100', 240], ['g', 280]),
+    tall('Energy', 10, 46, 66),
+    tall('(kcal)', 90, 31, 96),
+    tall('352', 400, 46, 66),
+    tall('kcal', 440, 46, 66),
+    tall('Protein', 150, 82, 102),
+    tall('21', 400, 82, 102),
+    tall('g', 430, 82, 102),
+  ];
+  const result = reader.readLabel({ words });
+  const read = (field) => result.readings.find((r) => r.field === field);
+  assert.equal(read('caloriesPer100g').value, 352);
+  assert.equal(read('proteinPer100g').value, 21);
+  assert.equal(read('proteinPer100g').evidence.rowText, 'Protein 21 g');
+});

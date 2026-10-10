@@ -1,3 +1,4 @@
+import { ARABIC_UNIT_WORDS } from './labelUnits';
 import type { BBox, OcrWord } from './ocrLayout';
 
 // Combining Tesseract's recognition passes into one trustworthy layout.
@@ -45,30 +46,6 @@ function sameInk(a: BBox, b: BBox): boolean {
 }
 
 export const hasDigit = (text: string): boolean => DIGIT.test(text);
-
-// Arabic unit and basis words a heading's number is printed against.
-const ARABIC_UNIT_WORDS = new Set([
-  'جم',
-  'جرام',
-  'جرامات',
-  'غ',
-  'غم',
-  'غرام',
-  'غرامات',
-  'مل',
-  'ملل',
-  'مليلتر',
-  'ملليلتر',
-  'ملغ',
-  'ملغم',
-  'مجم',
-  'ملجم',
-  'مغ',
-  'كجم',
-  'كغ',
-  'لتر',
-  'كيلو',
-]);
 
 // Below this confidence an Arabic-pass word is treated as noise: the Arabic
 // model reads English text as Arabic-looking gibberish at 0-40%, while

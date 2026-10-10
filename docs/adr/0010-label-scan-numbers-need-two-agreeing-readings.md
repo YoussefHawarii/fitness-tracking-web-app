@@ -21,7 +21,9 @@ The agreement rule is unchanged: a number is read only when the page reading and
 - The re-read is now of the number's own ink, cropped tight (a box that reaches over the next row or the unit beside it made the single-line read drop decimal points) and enlarged to about 65 px tall. The earlier finding that upscaled crops read worse was made on crops of the photo itself; on the cleaned copy a moderate enlargement keeps decimal points, and a large one (90 px) misreads digits, so the size is a measured middle.
 - A point read as a comma by one reading ("78,76" and "78.76") agrees, since the reader takes either as the decimal point. A whole number with a leading zero ("02", the "0.2" a glare spot ate the point of) is never read.
 
-If the copy can't be made, the photo itself is read as before.
+The copy is used only on a photo that has a table grid; a photo with no grid, or one whose copy can't be made, is read as before. The re-read is cut from the copy as it was before its grid lines were erased, and a number whose ink the erasure touched is never read, because two readings of one cut digit prove nothing.
+
+These settings (copy only on gridded photos, sparse mode, about 65 px re-read, the pre-erasure re-read, the cleanup in a worker) were measured on renderings of one photographed table and still need the #39 real-label gate (`docs/label-scan-release-checks.md`); the release gate is unchanged: zero wrong values marked "read".
 
 ## Later measurement: a unit read as a bracketed digit
 

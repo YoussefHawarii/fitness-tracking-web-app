@@ -19,6 +19,14 @@ export function setWords(next) {
   words = next ?? defaultWords();
 }
 
+// What a number's re-read (single-line mode) sees, as one word covering the
+// whole crop. Without it a re-read returns the same words as every other
+// recognition. Called with no argument, restores that.
+let rereadText;
+export function setRereadText(next) {
+  rereadText = next;
+}
+
 export async function createWorker(langs, oem, options) {
   calls.push({ type: 'createWorker', langs, oem, options });
   options.logger?.({ status: 'loading tesseract core', progress: 0.5 });
@@ -43,15 +51,19 @@ export async function createWorker(langs, oem, options) {
     async recognize(image, options) {
       calls.push({ type: 'recognize', image, options, language, pageSegMode });
       options?.logger?.({ status: 'recognizing text', progress: 1 });
+      const seen =
+        pageSegMode === '7' && rereadText !== undefined
+          ? [
+              {
+                text: rereadText,
+                confidence: 95,
+                bbox: { x0: 0, y0: 0, x1: 100000, y1: 100000 },
+              },
+            ]
+          : words.map((w) => structuredClone(w));
       return {
         data: {
-          blocks: [
-            {
-              paragraphs: [
-                { lines: [{ words: words.map((w) => structuredClone(w)) }] },
-              ],
-            },
-          ],
+          blocks: [{ paragraphs: [{ lines: [{ words: seen }] }] }],
         },
       };
     },

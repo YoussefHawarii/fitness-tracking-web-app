@@ -28,6 +28,88 @@ const gray = (width: number, height: number, fill = 255): GrayImage => ({
   data: new Uint8Array(width * height).fill(fill),
 });
 
+// The bilinear sample of a grayscale array at (sx, sy), which the caller keeps
+// inside the image (at least 1.001 px from its right and bottom edges). The
+// +0.5 rounds when the result is stored into a byte array.
+function bilinear(
+  d: Uint8Array | Uint8ClampedArray,
+  w: number,
+  sx: number,
+  sy: number,
+): number {
+  const x0 = sx | 0;
+  const y0 = sy | 0;
+  const fx = sx - x0;
+  const fy = sy - y0;
+  const i = y0 * w + x0;
+  return (
+    d[i] * (1 - fx) * (1 - fy) +
+    d[i + 1] * fx * (1 - fy) +
+    d[i + w] * (1 - fx) * fy +
+    d[i + w + 1] * fx * fy +
+    0.5
+  );
+}
+
+// A summed-area table of a w × h array, (w + 1) wide: the sum of any
+// rectangle of it is then four lookups (`windowSum`).
+function summedArea(
+  data: Uint8Array | Uint8ClampedArray,
+  w: number,
+  h: number,
+): Uint32Array {
+  const stride = w + 1;
+  const sums = new Uint32Array(stride * (h + 1));
+  for (let y = 0; y < h; y += 1) {
+    let row = 0;
+    for (let x = 0; x < w; x += 1) {
+      row += data[y * w + x];
+      sums[(y + 1) * stride + x + 1] = sums[y * stride + x + 1] + row;
+    }
+  }
+  return sums;
+}
+
+// The sum of the cells in [x0, x1) × [y0, y1) of a summed-area table.
+function windowSum(
+  sums: Uint32Array,
+  w: number,
+  x0: number,
+  y0: number,
+  x1: number,
+  y1: number,
+): number {
+  const stride = w + 1;
+  return (
+    sums[y1 * stride + x1] -
+    sums[y0 * stride + x1] -
+    sums[y1 * stride + x0] +
+    sums[y0 * stride + x0]
+  );
+}
+
+// The smallest box that holds every point.
+function boundsOf(points: ReadonlyArray<readonly [number, number]>): BBox {
+  let x0 = Infinity;
+  let y0 = Infinity;
+  let x1 = -Infinity;
+  let y1 = -Infinity;
+  for (const [x, y] of points) {
+    x0 = Math.min(x0, x);
+    y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x);
+    y1 = Math.max(y1, y);
+  }
+  return { x0, y0, x1, y1 };
+}
+
+export interface Rect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 // ---------------------------------------------------------------------------
 // Tilt
 
@@ -85,16 +167,61 @@ function lineAlignment(
   return sum;
 }
 
+// Fewer long-line ridge pixels than this are too few to measure a tilt from;
+// the tilt is then measured from every ridge pixel.
+const MIN_LINE_RIDGE_PIXELS = 300;
+
+// The ridge pixels that lie on long, nearly level runs — a table's grid and
+// rules — leaving out the short strokes of text, which a few degrees of
+// perspective or a curved pack can turn another way than the lines. Found on
+// a coarser copy of the picture on large photos, as removeGridLines does.
+function lineRidgePixels(
+  ridges: { xs: number[]; ys: number[] },
+  width: number,
+  height: number,
+): { xs: number[]; ys: number[] } {
+  const longSide = Math.max(width, height);
+  const f = longSide > 1000 ? 2 : 1;
+  const cw = Math.ceil(width / f);
+  const ch = Math.ceil(height / f);
+  const cellOf = (i: number) =>
+    Math.floor(ridges.ys[i] / f) * cw + Math.floor(ridges.xs[i] / f);
+  const coarse = new Uint8Array(cw * ch);
+  for (let i = 0; i < ridges.xs.length; i += 1) coarse[cellOf(i)] = 1;
+  const onLine = new Uint8Array(cw * ch);
+  const minLength = Math.max(40, Math.round(longSide * 0.12)) / f;
+  const limit = Math.tan((MAX_TILT * Math.PI) / 180) + 0.01;
+  // A run tolerates drifting a cell sideways, so the slopes tried are close
+  // enough that a line at any angle stays within that over its length.
+  const near = widen(coarse, cw, ch, 'row');
+  for (const slope of slopesUpTo(limit, 2 / minLength)) {
+    markLines(coarse, near, cw, ch, 'row', slope, minLength, onLine);
+  }
+  const xs: number[] = [];
+  const ys: number[] = [];
+  for (let i = 0; i < ridges.xs.length; i += 1) {
+    if (onLine[cellOf(i)] === 1) {
+      xs.push(ridges.xs[i]);
+      ys.push(ridges.ys[i]);
+    }
+  }
+  return { xs, ys };
+}
+
 // The clockwise angle, in degrees, at which the table's horizontal lines
 // run (positive = lines descend to the right), or 0 when it is small or can't
 // be measured reliably. Measured from the thin horizontal strokes, which on
 // a table are mostly its grid lines — the dark body of a title bar and
 // vertical lines don't take part — and not from all dark pixels, which also
-// follow a skewed backdrop.
+// follow a skewed backdrop. Where the picture has enough long level runs,
+// only those vote: the text between the lines is much more ink than the
+// lines, and what angle it points at is not what the table's does.
 export function estimateTilt(img: GrayImage): number {
-  const { xs, ys } = ridgePixels(img);
-  if (xs.length < 50) return 0;
   const { width, height } = img;
+  const all = ridgePixels(img);
+  if (all.xs.length < 50) return 0;
+  const lines = lineRidgePixels(all, width, height);
+  const { xs, ys } = lines.xs.length >= MIN_LINE_RIDGE_PIXELS ? lines : all;
   let best = 0;
   let bestScore = -1;
   let total = 0;
@@ -169,25 +296,19 @@ export function transformFor(
 // A box in the copy → the smallest box on the photo that holds it.
 export function boxToPhoto(box: BBox, t: Transform): BBox {
   const f = frame(t);
-  let x0 = Infinity;
-  let y0 = Infinity;
-  let x1 = -Infinity;
-  let y1 = -Infinity;
-  for (const [u, v] of [
+  const corners: Array<[number, number]> = [
     [box.x0, box.y0],
     [box.x1, box.y0],
     [box.x0, box.y1],
     [box.x1, box.y1],
-  ]) {
-    const du = (u - f.cx) / t.scale;
-    const dv = (v - f.cy) / t.scale;
-    const x = f.sx + du * f.cos - dv * f.sin;
-    const y = f.sy + du * f.sin + dv * f.cos;
-    x0 = Math.min(x0, x);
-    y0 = Math.min(y0, y);
-    x1 = Math.max(x1, x);
-    y1 = Math.max(y1, y);
-  }
+  ];
+  const { x0, y0, x1, y1 } = boundsOf(
+    corners.map(([u, v]) => {
+      const du = (u - f.cx) / t.scale;
+      const dv = (v - f.cy) / t.scale;
+      return [f.sx + du * f.cos - dv * f.sin, f.sy + du * f.sin + dv * f.cos];
+    }),
+  );
   return {
     x0: Math.round(Math.max(0, x0)),
     y0: Math.round(Math.max(0, y0)),
@@ -197,30 +318,24 @@ export function boxToPhoto(box: BBox, t: Transform): BBox {
 }
 
 // A rectangle on the photo → the smallest rectangle in the copy that holds it.
-export function rectangleToCopy(
-  rect: { left: number; top: number; width: number; height: number },
-  t: Transform,
-): { left: number; top: number; width: number; height: number } {
+export function rectangleToCopy(rect: Rect, t: Transform): Rect {
   const f = frame(t);
-  let x0 = Infinity;
-  let y0 = Infinity;
-  let x1 = -Infinity;
-  let y1 = -Infinity;
-  for (const [px, py] of [
+  const corners: Array<[number, number]> = [
     [rect.left, rect.top],
     [rect.left + rect.width, rect.top],
     [rect.left, rect.top + rect.height],
     [rect.left + rect.width, rect.top + rect.height],
-  ]) {
-    const dx = px - f.sx;
-    const dy = py - f.sy;
-    const u = f.cx + (dx * f.cos + dy * f.sin) * t.scale;
-    const v = f.cy + (-dx * f.sin + dy * f.cos) * t.scale;
-    x0 = Math.min(x0, u);
-    y0 = Math.min(y0, v);
-    x1 = Math.max(x1, u);
-    y1 = Math.max(y1, v);
-  }
+  ];
+  const { x0, y0, x1, y1 } = boundsOf(
+    corners.map(([px, py]) => {
+      const dx = px - f.sx;
+      const dy = py - f.sy;
+      return [
+        f.cx + (dx * f.cos + dy * f.sin) * t.scale,
+        f.cy + (-dx * f.sin + dy * f.cos) * t.scale,
+      ];
+    }),
+  );
   const left = Math.max(0, Math.floor(x0));
   const top = Math.max(0, Math.floor(y0));
   return {
@@ -253,17 +368,7 @@ export function resample(img: GrayImage, t: Transform): GrayImage {
         maxY,
         Math.max(0, f.sy + du * f.sin + dv * f.cos - 0.5),
       );
-      const x0 = sx | 0;
-      const y0 = sy | 0;
-      const fx = sx - x0;
-      const fy = sy - y0;
-      const i = y0 * w + x0;
-      out.data[v * t.copy.width + u] =
-        d[i] * (1 - fx) * (1 - fy) +
-        d[i + 1] * fx * (1 - fy) +
-        d[i + w] * (1 - fx) * fy +
-        d[i + w + 1] * fx * fy +
-        0.5;
+      out.data[v * t.copy.width + u] = bilinear(d, w, sx, sy);
     }
   }
   return out;
@@ -345,15 +450,7 @@ function morph(
   radius: number,
   every: boolean,
 ): Uint8Array {
-  const stride = gw + 1;
-  const sums = new Uint32Array(stride * (gh + 1));
-  for (let y = 0; y < gh; y += 1) {
-    let row = 0;
-    for (let x = 0; x < gw; x += 1) {
-      row += cells[y * gw + x];
-      sums[(y + 1) * stride + x + 1] = sums[y * stride + x + 1] + row;
-    }
-  }
+  const sums = summedArea(cells, gw, gh);
   const out = new Uint8Array(gw * gh);
   for (let y = 0; y < gh; y += 1) {
     const y0 = Math.max(0, y - radius);
@@ -361,11 +458,7 @@ function morph(
     for (let x = 0; x < gw; x += 1) {
       const x0 = Math.max(0, x - radius);
       const x1 = Math.min(gw, x + radius + 1);
-      const set =
-        sums[y1 * stride + x1] -
-        sums[y0 * stride + x1] -
-        sums[y1 * stride + x0] +
-        sums[y0 * stride + x0];
+      const set = windowSum(sums, gw, x0, y0, x1, y1);
       out[y * gw + x] = every
         ? set === (x1 - x0) * (y1 - y0)
           ? 1
@@ -499,15 +592,7 @@ export function invertDarkBands(img: GrayImage): GrayImage {
 // Local mean over a box, via a summed-area table.
 function boxMeans(img: GrayImage, window: number): Float32Array {
   const { width: w, height: h, data: d } = img;
-  const stride = w + 1;
-  const sums = new Uint32Array(stride * (h + 1));
-  for (let y = 0; y < h; y += 1) {
-    let row = 0;
-    for (let x = 0; x < w; x += 1) {
-      row += d[y * w + x];
-      sums[(y + 1) * stride + x + 1] = sums[y * stride + x + 1] + row;
-    }
-  }
+  const sums = summedArea(d, w, h);
   const r = window >> 1;
   const means = new Float32Array(w * h);
   for (let y = 0; y < h; y += 1) {
@@ -517,14 +602,31 @@ function boxMeans(img: GrayImage, window: number): Float32Array {
       const x0 = Math.max(0, x - r);
       const x1 = Math.min(w, x + r + 1);
       means[y * w + x] =
-        (sums[y1 * stride + x1] -
-          sums[y0 * stride + x1] -
-          sums[y1 * stride + x0] +
-          sums[y0 * stride + x0]) /
-        ((x1 - x0) * (y1 - y0));
+        windowSum(sums, w, x0, y0, x1, y1) / ((x1 - x0) * (y1 - y0));
     }
   }
   return means;
+}
+
+// The pixels that are set or have a set neighbour on either side across the
+// scanned direction (above or below for rows, left or right for columns): where
+// a run being followed may step a pixel sideways.
+function widen(
+  dark: Uint8Array,
+  w: number,
+  h: number,
+  along: 'row' | 'column',
+): Uint8Array {
+  const near = Uint8Array.from(dark);
+  const step = along === 'row' ? w : 1;
+  const count = along === 'row' ? h : w;
+  for (let i = 0; i < dark.length; i += 1) {
+    if (dark[i] === 0) continue;
+    const line = along === 'row' ? Math.floor(i / w) : i % w;
+    if (line > 0) near[i - step] = 1;
+    if (line < count - 1) near[i + step] = 1;
+  }
+  return near;
 }
 
 // Marks the pixels of dark lines at least `minLength` long that run at the
@@ -535,6 +637,7 @@ function boxMeans(img: GrayImage, window: number): Float32Array {
 // columns for vertical ones.
 function markLines(
   dark: Uint8Array,
+  near: Uint8Array,
   w: number,
   h: number,
   along: 'row' | 'column',
@@ -553,12 +656,7 @@ function markLines(
       let on = false;
       if (pos < length) {
         const line = first + Math.round(pos * slope);
-        if (line >= 0 && line < lines) {
-          on =
-            dark[at(line, pos)] === 1 ||
-            (line > 0 && dark[at(line - 1, pos)] === 1) ||
-            (line < lines - 1 && dark[at(line + 1, pos)] === 1);
-        }
+        on = line >= 0 && line < lines && near[at(line, pos)] === 1;
       }
       if (on) {
         if (start < 0) start = pos;
@@ -584,10 +682,23 @@ function slopesUpTo(limit: number, step: number): number[] {
   return Array.from({ length: 2 * n + 1 }, (_, i) => (i - n) * step);
 }
 
+// What erasing a table's grid left behind: the picture without the lines, the
+// pixels that were painted over (1 where a line was, in the picture's own
+// geometry; empty when no line was found), and how many there were.
+export interface GridErasure {
+  image: GrayImage;
+  erased: Uint8Array;
+  painted: number;
+}
+
 // Erases long thin dark lines (a table's grid) by filling their pixels from
 // the nearest pixels beside them. Text strokes are never long enough to be
 // taken for a line.
 export function removeGridLines(img: GrayImage): GrayImage {
+  return eraseGridLines(img).image;
+}
+
+export function eraseGridLines(img: GrayImage): GridErasure {
   const { width: w, height: h, data: d } = img;
   const longSide = Math.max(w, h);
   const means = boxMeans(img, Math.max(15, Math.round(longSide / 40) | 1));
@@ -621,11 +732,22 @@ export function removeGridLines(img: GrayImage): GrayImage {
   // cell and usually the whole table.
   const minLength = Math.max(40, Math.round(longSide * 0.15)) / f;
   const coarseMask = new Uint8Array(cw * ch);
+  const nearRows = widen(coarse, cw, ch, 'row');
   for (const slope of slopesUpTo(0.06, 0.03 * f)) {
-    markLines(coarse, cw, ch, 'row', slope, minLength, coarseMask);
+    markLines(coarse, nearRows, cw, ch, 'row', slope, minLength, coarseMask);
   }
+  const nearColumns = widen(coarse, cw, ch, 'column');
   for (const slope of slopesUpTo(0.09, 0.03 * f)) {
-    markLines(coarse, cw, ch, 'column', slope, minLength, coarseMask);
+    markLines(
+      coarse,
+      nearColumns,
+      cw,
+      ch,
+      'column',
+      slope,
+      minLength,
+      coarseMask,
+    );
   }
 
   // The line pixels, grown by a pixel over the lines' soft edges.
@@ -654,7 +776,9 @@ export function removeGridLines(img: GrayImage): GrayImage {
       }
     }
   }
-  if (painted.length === 0) return img;
+  if (painted.length === 0) {
+    return { image: img, erased: new Uint8Array(0), painted: 0 };
+  }
 
   // Each line pixel becomes the average of the nearest untouched pixels
   // above, below, left and right of it, nearer ones counting more.
@@ -684,7 +808,7 @@ export function removeGridLines(img: GrayImage): GrayImage {
     }
     out.data[i] = weight > 0 ? Math.round(sum / weight) : 255;
   }
-  return out;
+  return { image: out, erased: mask, painted: painted.length };
 }
 
 // ---------------------------------------------------------------------------
@@ -721,11 +845,16 @@ const INK = 117;
 // right from a crop of the digits alone). Ink within a gap of 0.7 character
 // heights is kept with it, so a box that held only part of a number (the last
 // digits of one the Arabic pass cut short) still gets the whole of it.
-// Undefined when no ink is found in the box.
+// Undefined when no ink is found in the box. `ink` is the box of the ink
+// itself, without the margin the crop adds round it.
+export interface NumberCrop extends Rect {
+  ink: BBox;
+}
+
 export function numberInkCrop(
   img: GrayImage,
   box: BBox,
-): { left: number; top: number; width: number; height: number } | undefined {
+): NumberCrop | undefined {
   const { width: w, height: h, data: d } = img;
   const bx0 = Math.max(0, Math.floor(box.x0));
   const bx1 = Math.min(w, Math.ceil(box.x1));
@@ -796,7 +925,41 @@ export function numberInkCrop(
   const top = Math.max(0, Math.round(band.y0 - 0.3 * textHeight));
   const right = Math.min(w, Math.round(best[1] + 1 + 0.35 * textHeight));
   const bottom = Math.min(h, Math.round(band.y1 + 1 + 0.3 * textHeight));
-  return { left, top, width: right - left, height: bottom - top };
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top,
+    ink: { x0: best[0], y0: band.y0, x1: best[1] + 1, y1: band.y1 + 1 },
+  };
+}
+
+// Whether grid-line removal painted over pixels at or beside a number's ink:
+// within 2 px (or a tenth of its height) above and below, and out to the
+// 0.7-height gap numberInkCrop joins digits across on either side. A digit
+// that touched a cell border was cut by the erasure — and one cut away whole
+// (the second stem of a right-aligned "11" beside a vertical border) leaves
+// a shorter number that every reading sees the same way — so two readings of
+// it prove nothing.
+export function touchesErasedLine(
+  erased: Uint8Array,
+  width: number,
+  height: number,
+  ink: BBox,
+): boolean {
+  if (erased.length === 0) return false;
+  const pad = Math.max(2, Math.round(0.1 * (ink.y1 - ink.y0)));
+  const side = Math.max(pad, Math.round(0.7 * (ink.y1 - ink.y0)));
+  const x0 = Math.max(0, Math.floor(ink.x0) - side);
+  const x1 = Math.min(width, Math.ceil(ink.x1) + side);
+  const y0 = Math.max(0, Math.floor(ink.y0) - pad);
+  const y1 = Math.min(height, Math.ceil(ink.y1) + pad);
+  for (let y = y0; y < y1; y += 1) {
+    for (let x = x0; x < x1; x += 1) {
+      if (erased[y * width + x] === 1) return true;
+    }
+  }
+  return false;
 }
 
 // How much a number's crop is enlarged for its re-read: to characters about
@@ -812,7 +975,7 @@ export function rereadScale(cropHeight: number): number {
 // A rectangle of the cleaned copy, enlarged (bilinear).
 export function enlargeCrop(
   img: GrayImage,
-  rect: { left: number; top: number; width: number; height: number },
+  rect: Rect,
   factor: number,
 ): GrayImage {
   const { width: w, height: h, data: d } = img;
@@ -824,22 +987,12 @@ export function enlargeCrop(
       h - 1.001,
       Math.max(0, rect.top + (v + 0.5) / factor - 0.5),
     );
-    const y0 = sy | 0;
-    const fy = sy - y0;
     for (let u = 0; u < width; u += 1) {
       const sx = Math.min(
         w - 1.001,
         Math.max(0, rect.left + (u + 0.5) / factor - 0.5),
       );
-      const x0 = sx | 0;
-      const fx = sx - x0;
-      const i = y0 * w + x0;
-      out.data[v * width + u] =
-        d[i] * (1 - fx) * (1 - fy) +
-        d[i + 1] * fx * (1 - fy) +
-        d[i + w] * (1 - fx) * fy +
-        d[i + w + 1] * fx * fy +
-        0.5;
+      out.data[v * width + u] = bilinear(d, w, sx, sy);
     }
   }
   return out;
@@ -849,9 +1002,28 @@ export function enlargeCrop(
 // The whole preparation
 
 export interface CleanedLabel {
+  // The copy the page passes read: straightened, grid lines erased, lighting
+  // evened out.
   image: GrayImage;
+  // The same straightened copy with its grid lines still in: what a number is
+  // re-read from, so a digit the erasure cut is seen whole the second time.
+  // Same size and geometry as `image`.
+  reread: GrayImage;
+  // The pixels of `image` the grid-line erasure painted over (empty when
+  // there was no grid).
+  erased: Uint8Array;
   transform: Transform;
+  // Whether the photo has a grid worth erasing. Without one the other steps
+  // gain nothing that was measured, and a picture is better read as it is;
+  // `image` and `reread` are then only the straightened picture.
+  hasGrid: boolean;
 }
+
+// A grid is present when the lines found, as painted pixels, add up to at
+// least this many long sides of the photo. Measured, a bordered table of
+// about ten rows paints 90 to 200; a lone rule or a shadow edge paints about
+// 4 (one long side, a few pixels thick).
+const MIN_GRID_PAINT = 12;
 
 // How much larger than the photo the cleaned copy is made: small tables are
 // enlarged so characters reach a size the recogniser reads well, never
@@ -860,15 +1032,59 @@ export function workingScale(width: number, height: number): number {
   return Math.min(2, Math.max(1, 1400 / Math.max(width, height)));
 }
 
-export function cleanForRecognition(photo: GrayImage): CleanedLabel {
-  const tilt = estimateTilt(photo);
+// The buffers of a cleaned copy, for handing it between threads without a copy.
+// `image` and `reread` are one array when there is no grid.
+export function transferablesOf(cleaned: CleanedLabel): ArrayBuffer[] {
+  const buffers = [
+    cleaned.image.data.buffer,
+    cleaned.reread.data.buffer,
+    cleaned.erased.buffer,
+  ] as ArrayBuffer[];
+  return buffers.filter((buffer, i) => buffers.indexOf(buffer) === i);
+}
+
+function cropGray(img: GrayImage, rect: Rect): GrayImage {
+  const left = Math.max(0, Math.min(img.width - 1, Math.floor(rect.left)));
+  const top = Math.max(0, Math.min(img.height - 1, Math.floor(rect.top)));
+  const width = Math.max(1, Math.min(img.width - left, Math.ceil(rect.width)));
+  const height = Math.max(
+    1,
+    Math.min(img.height - top, Math.ceil(rect.height)),
+  );
+  const out = gray(width, height);
+  for (let y = 0; y < height; y += 1) {
+    const from = (top + y) * img.width + left;
+    out.data.set(img.data.subarray(from, from + width), y * width);
+  }
+  return out;
+}
+
+// `region` is the part of the photo (its pixels) the user chose to read: the
+// tilt is measured from it alone, since the rest of the photo can tilt
+// differently from the table.
+export function cleanForRecognition(
+  photo: GrayImage,
+  region?: Rect,
+): CleanedLabel {
+  const tilt = estimateTilt(region ? cropGray(photo, region) : photo);
   const transform = transformFor(
     photo.width,
     photo.height,
     tilt,
     workingScale(photo.width, photo.height),
   );
-  const straight = resample(photo, transform);
-  const image = flatField(removeGridLines(invertDarkBands(straight)));
-  return { image, transform };
+  const straight = invertDarkBands(resample(photo, transform));
+  const { image: lineless, erased, painted } = eraseGridLines(straight);
+  const hasGrid =
+    painted >= MIN_GRID_PAINT * Math.max(straight.width, straight.height);
+  if (!hasGrid) {
+    return { image: straight, reread: straight, erased, transform, hasGrid };
+  }
+  return {
+    image: flatField(lineless),
+    reread: flatField(straight),
+    erased,
+    transform,
+    hasGrid,
+  };
 }

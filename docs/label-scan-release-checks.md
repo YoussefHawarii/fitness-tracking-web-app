@@ -100,6 +100,40 @@ Unchanged: a page reading with a dropped decimal point still disagrees with
 its crop ("651" vs "6.51" stays unverified), a whole number with a leading
 zero ("02") is never read, `MIN_NUMBER_CONFIDENCE`, and the cleanup ink threshold.
 
+**Cleaned copy, independent re-read, worker (v0.2.17):** the settings below
+were measured on four renderings (0.5x to 3x) of one photographed, tilted,
+gridded bilingual cookie table, not on real labels, and still need the #39
+real-label gate. None loosens the agreement rule (ADR 0010).
+
+- The cleaned copy is used only on a photo with a table grid (the lines
+  erased add up to at least 12 long sides of the photo; the measured table
+  paints 90 to 200, a lone rule about 4). A photo with no grid is read as it
+  was before the copy existed: the prepared photo, in the page mode asked for.
+- The copy is read as sparse text (PSM 11), so a photo already read that way
+  gets no second, identical "sparse fallback" pass. The fallback remains for
+  the other modes (a gridless whole photo or camera frame).
+- A number is re-read at about 65 px character height (50 and 90 were worse),
+  from a crop of the straightened copy taken before its grid lines were erased,
+  so the two readings do not share the erasure's damage. A number whose ink the
+  erasure touched (within 2 px or a tenth of its height) is not re-read and is
+  never read. Harness: no reads lost on any of the four renderings.
+- The tilt is measured from long level line segments when there are enough,
+  and from the region alone when the user chose one. Rows are grouped in the
+  copy's straightened coordinates; the review still shows photo boxes.
+- The cleanup runs in a Web Worker (the buffer is transferred, the worker is
+  discarded after one job); where one cannot start it runs on the main thread.
+  Nothing leaves the device (ADR 0008).
+
+Harness reads before and after (the label's truth: 415.932 kcal, 83.651, 11.60,
+6.51, 6.232 g), with no wrong value marked "read" in either:
+
+| Rendering | Read before       | Read after        |
+| --------- | ----------------- | ----------------- |
+| 0.5x      | 0 (1 needs-check) | 1                 |
+| 1x        | 3                 | 3                 |
+| 2x        | 3 (1 needs-check) | 3 (1 needs-check) |
+| 3x        | 4                 | 4                 |
+
 **Default vs fast language data:** keep the default `4.0.0_best_int` data.
 
 - The packaged sets are `4.0.0_best_int` (eng 2.95 MB + ara 1.66 MB gzipped)

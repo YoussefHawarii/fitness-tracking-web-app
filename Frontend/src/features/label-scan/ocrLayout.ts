@@ -12,7 +12,12 @@ export interface BBox {
 
 export interface OcrWord {
   text: string;
+  // Where the word sits on the photo.
   bbox: BBox;
+  // Where it sat in the straightened copy it was read from, when it was read
+  // from one. The reader groups rows and columns by this: on the copy the
+  // table's rows are level, on the photo they run at its tilt.
+  layoutBox?: BBox;
   // 0-100, as reported by Tesseract.
   confidence: number;
   // For words containing digits: whether an independent re-read of the
@@ -24,6 +29,9 @@ export interface OcrWord {
 
 export interface OcrLayout {
   words: OcrWord[];
+  // The photo was read as sparse text, so reading it again that way would
+  // repeat the pass.
+  sparse?: boolean;
 }
 
 // Minimal structural view of Tesseract.js's `blocks` output (since v6 it
