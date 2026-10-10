@@ -610,6 +610,35 @@ test('reading the whole photo with no per-100 column runs one sparse pass and us
   assert.deepEqual(fake.shown, ['blob:prepared:a:0']);
 });
 
+test('a photo the engine already read as sparse text gets no fallback pass', async () => {
+  const { fake, session } = await readySession();
+  await session.scan('a');
+  const reading = session.readWholePhoto();
+  await flush();
+  fake.recognitions[0].resolve({ ...NO_HEADER, sparse: true });
+  await reading;
+  await flush();
+  await flush();
+
+  // The same pass again would only repeat it and double the wait.
+  assert.equal(fake.recognitions.length, 1);
+  const { scan } = session.view();
+  assert.equal(scan.kind, 'review');
+  assert.equal(scan.result.outcome, 'no-per-100-column');
+});
+
+test('a framed photo read as sparse text gets no fallback pass either', async () => {
+  const { fake, session } = await readySession();
+  const reading = session.scanFramed('framed');
+  await flush();
+  fake.recognitions[0].resolve({ ...NO_HEADER, sparse: true });
+  await reading;
+  await flush();
+  await flush();
+  assert.equal(fake.recognitions.length, 1);
+  assert.equal(session.view().scan.kind, 'review');
+});
+
 test('when the sparse pass finds no per-100 column either, the first result is kept', async () => {
   const { fake, session } = await readySession();
   await session.scan('a');

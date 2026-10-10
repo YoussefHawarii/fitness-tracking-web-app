@@ -386,3 +386,162 @@ test('a number crop is enlarged for its re-read: to about 65 px of height, never
   assert.equal(at(big, 14, 14), 0);
   assert.equal(at(big, 2, 2), PAPER);
 });
+
+// -----------------------------------------------------------------------
+// Tilt from the lines, not the text
+
+// Rows of level text ink: `rows` lines of `count` glyphs, 28 px apart.
+function textBlock(img, x, y, rows, count) {
+  for (let r = 0; r < rows; r += 1) glyphs(img, x, y + r * 28, count);
+}
+
+test('the tilt follows the table lines when level text is far more ink than the lines', () => {
+  // A grid tilted 3° with a field of level text (as lettering on a curved or
+  // skewed pack can be) in every cell: the text is far more ink than the
+  // lines, and it is level.
+  const img = table(900, 600, 3);
+  textBlock(img, 10, 6, 20, 55);
+  const estimate = cleanup.estimateTilt(img);
+  assert.ok(Math.abs(estimate - 3) <= 0.5, '3° estimated as ' + estimate);
+});
+
+test('with no long lines, the tilt is still measured from the text strokes', () => {
+  // Lines of text tilted 4° and no grid: nothing long enough to vote alone, so
+  // every stroke votes as before.
+  const img = image(600, 420);
+  const slope = Math.tan((4 * Math.PI) / 180);
+  for (let r = 0; r < 12; r += 1) {
+    for (let i = 0; i < 30; i += 1) {
+      const x = 20 + i * 16;
+      glyphs(img, x, Math.round(20 + r * 32 + (x - 300) * slope), 1);
+    }
+  }
+  const estimate = cleanup.estimateTilt(img);
+  assert.ok(Math.abs(estimate - 4) <= 0.75, '4° estimated as ' + estimate);
+});
+
+// -----------------------------------------------------------------------
+// The grid, and what its erasure touched
+
+test('a picture is said to have a grid only when it has many long lines', () => {
+  const gridded = table(700, 480, 0);
+  glyphs(gridded, 90, 40, 6);
+  assert.equal(cleanup.cleanForRecognition(gridded).hasGrid, true);
+
+  // Text only, a page with one rule across it, and a plain page: no grid.
+  const text = image(700, 480);
+  for (let r = 0; r < 8; r += 1) glyphs(text, 40, 30 + r * 50, 20);
+  assert.equal(cleanup.cleanForRecognition(text).hasGrid, false);
+  const rule = image(700, 480);
+  line(rule, 20, 240, 680, 240, 3, INK);
+  assert.equal(cleanup.cleanForRecognition(rule).hasGrid, false);
+  assert.equal(cleanup.cleanForRecognition(image(700, 480)).hasGrid, false);
+});
+
+test('the cleaned copy keeps a pre-erasure twin and says which pixels the erasure painted', () => {
+  const img = table(700, 480, 0);
+  glyphs(img, 90, 40, 6);
+  const cleaned = cleanup.cleanForRecognition(img);
+  const { image: erasedCopy, reread, erased, transform } = cleaned;
+  assert.equal(reread.width, erasedCopy.width);
+  assert.equal(reread.height, erasedCopy.height);
+  assert.equal(erased.length, erasedCopy.width * erasedCopy.height);
+
+  // A line pixel: dark in the twin, paper in the copy, and marked as painted.
+  const [px, py] = (() => {
+    const p = cleanup.rectangleToCopy(
+      { left: 300, top: 30, width: 1, height: 1 },
+      transform,
+    );
+    return [p.left, p.top + 1];
+  })();
+  const i = py * erasedCopy.width + px;
+  assert.ok(
+    reread.data[i] < 117,
+    'the twin still has the line (' + reread.data[i] + ')',
+  );
+  assert.ok(
+    erasedCopy.data[i] > 150,
+    'the copy has not (' + erasedCopy.data[i] + ')',
+  );
+  assert.equal(erased[i], 1);
+
+  // Without a grid the two are one picture and nothing is marked.
+  const plain = cleanup.cleanForRecognition(image(300, 200));
+  assert.strictEqual(plain.reread, plain.image);
+  assert.equal(plain.erased.length, 0);
+});
+
+test('ink the erasure painted over or sat beside is flagged, ink clear of any line is not', () => {
+  // A digit that sits on a table line: the line is erased across its foot.
+  const img = table(700, 480, 0);
+  glyphs(img, 90, 20, 2); // ends at y 40, a line at y 30-32 cuts through it
+  glyphs(img, 400, 76, 2); // y 76-96, lines at 30 and 90: the second cuts it
+  glyphs(img, 400, 130, 2); // y 130-150, lines at 90 and 150: clear of 90, near 150
+  glyphs(img, 250, 100, 1); // y 100-120: lines at 90 and 150, clear of both
+  const { image: copy, erased, transform } = cleanup.cleanForRecognition(img);
+  const flagged = (x, y, w, h) => {
+    const box = cleanup.rectangleToCopy(
+      { left: x, top: y, width: w, height: h },
+      transform,
+    );
+    const crop = cleanup.numberInkCrop(copy, {
+      x0: box.left,
+      y0: box.top,
+      x1: box.left + box.width,
+      y1: box.top + box.height,
+    });
+    assert.ok(crop, 'no ink at ' + x + ',' + y);
+    return cleanup.touchesErasedLine(erased, copy.width, copy.height, crop.ink);
+  };
+  assert.equal(flagged(90, 20, 28, 20), true, 'a line cuts the digits');
+  assert.equal(flagged(400, 76, 28, 20), true, 'a line cuts the digits (2)');
+  assert.equal(flagged(250, 100, 12, 20), false, 'clear of both lines');
+  // No grid, no erasure, nothing flagged.
+  assert.equal(
+    cleanup.touchesErasedLine(new Uint8Array(0), 10, 10, {
+      x0: 1,
+      y0: 1,
+      x1: 5,
+      y1: 5,
+    }),
+    false,
+  );
+});
+
+test('the tilt of a region is measured from the region alone', () => {
+  // The left of the picture is a level grid, the right a grid tilted 3.5°.
+  const img = image(1000, 420);
+  const left = table(480, 420, 0);
+  const right = table(480, 420, 3.5);
+  for (let y = 0; y < 420; y += 1) {
+    for (let x = 0; x < 480; x += 1) {
+      img.data[y * 1000 + x] = left.data[y * 480 + x];
+      img.data[y * 1000 + 520 + x] = right.data[y * 480 + x];
+    }
+  }
+  const regionTilt = cleanup.cleanForRecognition(img, {
+    left: 520,
+    top: 0,
+    width: 480,
+    height: 420,
+  }).transform.tilt;
+  assert.ok(Math.abs(regionTilt - 3.5) <= 0.5, 'region tilt ' + regionTilt);
+  const levelTilt = cleanup.cleanForRecognition(img, {
+    left: 0,
+    top: 0,
+    width: 480,
+    height: 420,
+  }).transform.tilt;
+  assert.equal(levelTilt, 0);
+});
+
+test('a cleaned copy hands its buffers over once each', () => {
+  const grid = cleanup.cleanForRecognition(table(700, 480, 0));
+  const buffers = cleanup.transferablesOf(grid);
+  assert.equal(new Set(buffers).size, buffers.length);
+  assert.equal(buffers.length, 3);
+  // Without a grid the copy and its twin are one array.
+  const plain = cleanup.cleanForRecognition(image(300, 200));
+  assert.equal(cleanup.transferablesOf(plain).length, 2);
+});

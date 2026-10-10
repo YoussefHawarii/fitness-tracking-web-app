@@ -8,7 +8,7 @@ import type { CropRectangle } from './recognitionPasses';
 // closing it — loading the on-device engine (with progress and retry),
 // preparing each photo and showing it for cropping, reading a region of it
 // (cut from the original photo, at its full detail) or the whole photo (with
-// one automatic fallback pass), reading a photo already framed by the label
+// one sparse-text fallback pass), reading a photo already framed by the label
 // camera straight away, discarding results
 // of a cancelled or replaced run, reusing one worker for every retake, and
 // releasing the worker and the photo. It holds no React state and talks to the
@@ -90,9 +90,10 @@ export interface LabelScanSession {
   // pixels, as a single block of text. Does nothing unless a photo is
   // being cropped.
   readRegion(region: CropRectangle): Promise<void>;
-  // Reads the whole photo being cropped. If no per 100 column is found,
-  // one more pass for scattered text is tried and used if it finds one.
-  // Does nothing unless a photo is being cropped.
+  // Reads the whole photo being cropped. If no per 100 column is found and
+  // the photo was not already read as scattered text, one more pass for it is
+  // tried and used if it finds one. Does nothing unless a photo is being
+  // cropped.
   readWholePhoto(): Promise<void>;
   // Reads a photo the label camera already cut to its frame: no crop step,
   // read as one block of text, with the same fallback pass as the whole
@@ -252,7 +253,13 @@ export function createLabelScanSession(
       const layout = await recognize(ocr, options);
       if (layout === STALE || thisRun !== run) return;
       let result = readLabel(layout);
-      if (fallback && result.outcome === 'no-per-100-column') {
+      // A layout the engine already read as sparse text would only be read
+      // the same way again, so the fallback is for the other modes.
+      if (
+        fallback &&
+        !layout.sparse &&
+        result.outcome === 'no-per-100-column'
+      ) {
         const sparse = await recognize(ocr, { layout: 'sparse' });
         if (sparse === STALE || thisRun !== run) return;
         const retried = readLabel(sparse);
