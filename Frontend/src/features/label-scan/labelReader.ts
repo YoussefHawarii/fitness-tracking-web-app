@@ -1,5 +1,6 @@
 import type { NutritionBasis } from '../../services/foodService';
 import type { BBox, OcrLayout, OcrWord } from './ocrLayout';
+import { isBracketedDigit } from './recognitionPasses';
 
 // The Label reader: a pure function from a Label scan's word layout to
 // Label readings (CONTEXT.md). It associates numbers with nutrients by
@@ -568,6 +569,10 @@ interface Candidate {
   word: OcrWord;
   // The word its unit was printed in, when it is a separate word.
   unitWord?: OcrWord;
+  // The unit read for it is gone: nothing before it or beside it names one,
+  // no other word right after it could be an unrecognised unit, and the word
+  // just before it is a bracketed scrap where a "(g)" was printed ("(2)", "()").
+  unitMisread?: boolean;
 }
 
 // Whether a unit word was printed right beside a number: the same word
@@ -601,19 +606,36 @@ interface Segment {
   contested?: boolean;
 }
 
+// The "(g)" after a row label read as a lone bracketed digit ("(2)"): not a
+// value, and not a unit either.
+function isUnitMisread(token: Token): boolean {
+  return token.kind === 'number' && isBracketedDigit(token.word.text);
+}
+
+// Whether the word just before a number is what a misread "(g)" leaves: a
+// bracket with at most one letter or digit in it.
+function bracketScrapBefore(row: Row, word: OcrWord): boolean {
+  const before = row.words[row.words.indexOf(word) - 1];
+  if (!before || before.text.length > 4 || !/[()[\]{}]/.test(before.text)) {
+    return false;
+  }
+  return before.text.replace(/[^\p{L}\p{N}]/gu, '').length <= 1;
+}
+
 function candidatesIn(segment: Segment): Candidate[] {
   const { tokens } = segment;
   // A unit printed before any number ("Energy (kcal) 250") applies to the
   // segment's bare numbers.
   let defaultUnit: Unit | undefined;
   for (let i = 0; i < tokens.length; i += 1) {
+    if (isUnitMisread(tokens[i])) continue;
     if (tokens[i].kind === 'number') break;
     defaultUnit ??= unitAt(tokens, i)?.unit;
   }
 
   const candidates: Candidate[] = [];
   tokens.forEach((token, i) => {
-    if (token.kind !== 'number') return;
+    if (token.kind !== 'number' || isUnitMisread(token)) return;
     const next = tokens[i + 1];
     if (next?.kind === 'percent') return;
     const unit = unitAt(tokens, i + 1);
@@ -637,6 +659,11 @@ function candidatesIn(segment: Segment): Candidate[] {
         (before[0] === 'اقل' && before[1] === 'من'),
       word: token.word,
       ...(attached && unitWord !== token.word && { unitWord }),
+      unitMisread:
+        defaultUnit === undefined &&
+        unit === undefined &&
+        !(next?.kind === 'word' && besideNumber(token.word, next.word)) &&
+        bracketScrapBefore(segment.row, token.word),
     });
   });
   return candidates;
@@ -758,10 +785,12 @@ function readSegment(
   const isEnergy = field === 'caloriesPer100g';
   const isSodium = field === 'sodiumMgPer100';
   const isQuantity = QUANTITY_FIELDS.has(field);
-  // A value counts only with its unit printed next to it (or once before
-  // the segment's numbers, "Energy (kcal) 250"), and only a unit that fits
+  // A value counts as read only with its unit printed next to it (or once
+  // before the segment's numbers, "Energy (kcal) 250"), and only a unit that fits
   // the field: kcal for energy, mg or g for sodium, g for the rest of the
   // table; a size needs g, kg, ml, l or cl — never a bare "oz" or "piece".
+  // The one exception, grams assumed after a misread "(g)", is handled below
+  // and always marked for checking.
   const unitFits = (c: Candidate) => {
     if (isEnergy) return c.unit === 'kcal';
     if (isSodium) return c.unit === 'mg' || c.unit === 'g';
@@ -813,6 +842,41 @@ function readSegment(
     if (isEnergy && kj.length === 1) return fromKilojoules(kj[0]);
     if (isEnergy && kj.length > 1) {
       return notFound('Several values on this row — check the label.');
+    }
+    // A number with no unit read is never dropped silently. When the unit
+    // was printed but misread ("(g)" read as "(2)"), a gram nutrient's lone
+    // number on a per 100 g table is taken as grams — flagged, since the unit
+    // is assumed — but only a number that passed every other check; no other
+    // unit is ever assumed, and a number with no unit printed stays empty.
+    const unitless = candidates.filter(
+      (c) =>
+        c.unit === undefined &&
+        c.value !== undefined &&
+        !c.ambiguous &&
+        !c.lessThan,
+    );
+    if (unitless.length === 1) {
+      const [candidate] = unitless;
+      const gramsAssumed =
+        candidate.unitMisread &&
+        !isQuantity &&
+        !segment.contested &&
+        GRAM_NUTRIENTS.has(field) &&
+        columns.target.kind === 'per100' &&
+        columns.target.basis === 'PER_100_G';
+      if (gramsAssumed) {
+        return checkedConfidence(candidate, {
+          field,
+          value: candidate.value,
+          unit: 'g',
+          status: 'needs-check',
+          warnings: [
+            'Unit not read — assumed g from the per 100 g table. Check this value.',
+          ],
+          evidence,
+        });
+      }
+      return notFound("Couldn't read the unit — check this value.");
     }
     return notFound();
   }
@@ -890,6 +954,8 @@ interface Column {
   center: number;
   // The language the heading is written in.
   script?: Script;
+  // A percent heading made of nothing but a "%".
+  bare?: boolean;
 }
 
 interface ColumnModel {
@@ -953,9 +1019,46 @@ const PERCENT_WORDS = new Set([
   'dv',
   'nrv',
   'gda',
+  'rda',
+  'rdi',
   'اليوميه',
   'المرجعيه',
+  'اليومي',
+  'المرجعي',
+  'الاحتياج',
 ]);
+// Ordinary words that name a percent column only as a pair ("daily value",
+// "reference intake") or beside a "%": alone they are just text.
+const SOFT_PERCENT_WORDS = new Set(['daily', 'reference', 'intake', 'di']);
+const SOFT_PERCENT_PAIRS = new Set([
+  'daily value',
+  'daily intake',
+  'daily reference',
+  'reference intake',
+  'reference value',
+]);
+
+function softPairAt(tokens: readonly Token[], i: number): boolean {
+  const [a, b] = [tokens[i], tokens[i + 1]];
+  return (
+    a?.kind === 'word' &&
+    b?.kind === 'word' &&
+    SOFT_PERCENT_PAIRS.has(`${a.text} ${b.text}`)
+  );
+}
+
+// Whether a phrase names a percent column. A bare "%" does so only when
+// allowed: a stray "%" read from a pattern or logo above the table must not
+// head a column that overlaps the real one.
+function isPercentPhrase(tokens: readonly Token[], allowBare: boolean) {
+  const percentSign = tokens.some((t) => t.kind === 'percent');
+  return (
+    tokens.some((t) => isWord(t, PERCENT_WORDS)) ||
+    tokens.some((_, i) => softPairAt(tokens, i)) ||
+    (percentSign && tokens.some((t) => isWord(t, SOFT_PERCENT_WORDS))) ||
+    (percentSign && allowBare)
+  );
+}
 const TABLE_TITLE_WORDS = new Set([
   'nutrition',
   'nutritional',
@@ -984,7 +1087,10 @@ function per100Basis(
   return next?.kind === 'word' ? BASIS_UNITS[next.text] : undefined;
 }
 
-function classifyPhrase(tokens: readonly Token[]): Column | undefined {
+function classifyPhrase(
+  tokens: readonly Token[],
+  allowBarePercent: boolean,
+): Column | undefined {
   // "Serving size 30 g" / "Net weight 100 g" state a quantity; they head
   // no column.
   if (tokens.some((t) => isWord(t, NOT_A_HEADING_WORDS))) return undefined;
@@ -992,7 +1098,7 @@ function classifyPhrase(tokens: readonly Token[]): Column | undefined {
   const x0 = Math.min(...words.map((w) => w.bbox.x0));
   const x1 = Math.max(...words.map((w) => w.bbox.x1));
   const extent = { x0, x1, center: (x0 + x1) / 2, script: scriptOf(tokens) };
-  if (tokens.some((t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS))) {
+  if (isPercentPhrase(tokens, allowBarePercent)) {
     return { kind: 'percent', ...extent };
   }
   if (tokens.some((t) => isWord(t, SERVING_WORDS))) {
@@ -1022,7 +1128,10 @@ function headerPhrases(tokens: readonly Token[]): Column[] {
       (t) => isWord(t, SERVING_WORDS) || isWord(t, NOT_A_HEADING_WORDS),
     );
     const inPercent = current?.some(
-      (t) => t.kind === 'percent' || isWord(t, PERCENT_WORDS),
+      (t) =>
+        t.kind === 'percent' ||
+        isWord(t, PERCENT_WORDS) ||
+        isWord(t, SOFT_PERCENT_WORDS),
     );
     const justPer = current?.length === 1 && isWord(current[0], PER_WORDS);
     // Once a phrase holds a number, words in the other script start a
@@ -1041,13 +1150,22 @@ function headerPhrases(tokens: readonly Token[]): Column[] {
       isWord(token, PER_WORDS) ||
       (isWord(token, SERVING_WORDS) && !justPer) ||
       (per100Basis(tokens, i) !== undefined && !justPer && !inServing) ||
-      ((token.kind === 'percent' || isWord(token, PERCENT_WORDS)) &&
+      ((token.kind === 'percent' ||
+        isWord(token, PERCENT_WORDS) ||
+        softPairAt(tokens, i)) &&
         !inPercent);
     if (starts || !current) phrases.push([token]);
     else current.push(token);
   });
+  // A heading made only of a bare "%" is marked, so columnModel can drop it
+  // when it is noise (see there) and keep it when it heads a real column.
   return phrases
-    .map(classifyPhrase)
+    .map((p): Column | undefined => {
+      const strict = classifyPhrase(p, false);
+      if (strict) return strict;
+      const bare = classifyPhrase(p, true);
+      return bare && { ...bare, bare: true };
+    })
     .filter((c): c is Column => c !== undefined);
 }
 
@@ -1098,6 +1216,23 @@ function columnModel(rows: readonly Row[]): ColumnModel | undefined {
   // Each heading remembers which row it was printed on.
   let headings: HeadingColumn[] = aboveTable.flatMap((h, row) =>
     h.phrases.map((c) => ({ ...c, rows: new Set([row]) })),
+  );
+  // A bare "%" printed above another kind of heading it overlaps is noise (a
+  // stray "%" read from a pattern or logo above the table), not a column:
+  // left in, it would overlap the real heading and leave the table
+  // unresolved. One that overlaps nothing, or sits on the same row as the
+  // heading or below it, stays — then the overlap keeps the layout unresolved.
+  const rowTop = (h: HeadingColumn) => aboveTable[[...h.rows][0]].row.y0;
+  headings = headings.filter(
+    (h) =>
+      !h.bare ||
+      !headings.some(
+        (o) =>
+          o.kind !== 'percent' &&
+          h.x0 < o.x1 &&
+          o.x0 < h.x1 &&
+          rowTop(h) < rowTop(o),
+      ),
   );
 
   // Fallback: one explicit "per 100 g" inside a nutrient row ("Energy per

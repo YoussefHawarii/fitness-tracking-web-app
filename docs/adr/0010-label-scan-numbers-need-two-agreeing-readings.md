@@ -22,3 +22,10 @@ The agreement rule is unchanged: a number is read only when the page reading and
 - A point read as a comma by one reading ("78,76" and "78.76") agrees, since the reader takes either as the decimal point. A whole number with a leading zero ("02", the "0.2" a glare spot ate the point of) is never read.
 
 If the copy can't be made, the photo itself is read as before.
+
+## Later measurement: a unit read as a bracketed digit
+
+On a bilingual table the row label's "(g)" is often read as "(2)" or "()". The number beside it still agreed digit for digit, but with no unit the reader left it blank without a word of explanation. Two changes follow, and neither relaxes the agreement rule:
+
+- A word that is a lone digit in brackets ("(2)") is never verified, is never taken as a value, and a row with a number but no readable unit now says so.
+- One unit is assumed, always flagged: grams, marked "needs check" ("Unit not read — assumed g from the per 100 g table"). The guards, all required: the table is headed per 100 g; the nutrient is protein, carbs, sugars, fat or fiber (never energy, sodium or anything that could print mg or kJ); the number passed both readings and every value check; a bracketed scrap ("(2)", "()") sits where the "(g)" was printed; and no recognised or unrecognised unit word is beside the number. A number with no unit and no such scrap stays blank.
